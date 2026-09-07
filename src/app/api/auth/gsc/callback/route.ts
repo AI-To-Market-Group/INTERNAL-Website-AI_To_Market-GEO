@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { saveGSCConnection } from "@/lib/gsc-oauth-store";
 
 const CLIENT_ID     = process.env.GOOGLE_OAUTH_CLIENT_ID;
@@ -26,27 +25,13 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(abs(req, "/atelier?gsc_error=not_configured"));
   }
 
-  // Decode state
-  let userId = "";
+  // Decode state for returnTo only
   let returnTo = "/atelier";
   if (stateParam) {
     try {
       const parsed = JSON.parse(Buffer.from(stateParam, "base64url").toString("utf8"));
-      userId   = parsed.userId  ?? "";
       returnTo = parsed.returnTo ?? "/atelier";
     } catch { /* ignore */ }
-  }
-
-  // Prefer Supabase session
-  if (!userId) {
-    try {
-      const supabase = await createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) userId = user.id;
-    } catch { /* no session */ }
-  }
-  if (!userId) {
-    return NextResponse.redirect(abs(req, "/atelier?gsc_error=unauthenticated"));
   }
 
   // Exchange code for tokens
@@ -101,7 +86,6 @@ export async function GET(req: NextRequest) {
   }
 
   await saveGSCConnection({
-    userId,
     siteUrl,
     accessToken:  tokens.access_token,
     refreshToken: tokens.refresh_token,

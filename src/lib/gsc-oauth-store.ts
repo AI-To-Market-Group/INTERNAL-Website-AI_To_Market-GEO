@@ -14,6 +14,9 @@ export interface GSCConnection {
   tokenExpiry: number;
 }
 
+// Org-level key — one shared GSC connection for all users
+const ORG_KEY = "org";
+
 const connections = new Map<string, GSCConnection & { accessToken: string; refreshToken: string }>();
 
 function getKey(): Buffer | null {
@@ -49,7 +52,6 @@ function decrypt(value: string): string {
 }
 
 export async function saveGSCConnection(input: {
-  userId: string;
   siteUrl: string;
   accessToken: string;
   refreshToken: string;
@@ -58,8 +60,8 @@ export async function saveGSCConnection(input: {
   const encAccess  = encrypt(input.accessToken);
   const encRefresh = encrypt(input.refreshToken);
 
-  connections.set(input.userId, {
-    userId: input.userId,
+  connections.set(ORG_KEY, {
+    userId: ORG_KEY,
     siteUrl: input.siteUrl,
     accessToken: encAccess,
     refreshToken: encRefresh,
@@ -69,7 +71,7 @@ export async function saveGSCConnection(input: {
   if (isDbAvailable()) {
     try {
       await dbSaveGSCConnection({
-        userId: input.userId,
+        userId: ORG_KEY,
         siteUrl: input.siteUrl,
         accessToken: encAccess,
         refreshToken: encRefresh,
@@ -79,13 +81,13 @@ export async function saveGSCConnection(input: {
   }
 }
 
-export async function getGSCConnection(userId: string): Promise<GSCConnection | null> {
+export async function getGSCConnection(): Promise<GSCConnection | null> {
   if (isDbAvailable()) {
     try {
-      const row = await dbGetGSCConnection(userId);
+      const row = await dbGetGSCConnection(ORG_KEY);
       if (row) {
         return {
-          userId: row.user_id,
+          userId: ORG_KEY,
           siteUrl: row.site_url,
           accessToken: decrypt(row.access_token),
           refreshToken: decrypt(row.refresh_token),
@@ -95,7 +97,7 @@ export async function getGSCConnection(userId: string): Promise<GSCConnection | 
     } catch { /* fallback to memory */ }
   }
 
-  const rec = connections.get(userId);
+  const rec = connections.get(ORG_KEY);
   if (!rec) return null;
   return { ...rec, accessToken: decrypt(rec.accessToken), refreshToken: decrypt(rec.refreshToken) };
 }
@@ -124,14 +126,14 @@ export async function refreshGSCTokenIfNeeded(conn: GSCConnection): Promise<GSCC
   const newToken  = json.access_token;
 
   const encAccess = encrypt(newToken);
-  connections.set(conn.userId, {
-    ...connections.get(conn.userId)!,
+  connections.set(ORG_KEY, {
+    ...connections.get(ORG_KEY)!,
     accessToken: encAccess,
     tokenExpiry: newExpiry,
   });
 
   if (isDbAvailable()) {
-    try { await dbUpdateGSCAccessToken(conn.userId, encAccess, newExpiry); } catch { /* ignore */ }
+    try { await dbUpdateGSCAccessToken(ORG_KEY, encAccess, newExpiry); } catch { /* ignore */ }
   }
 
   return { ...conn, accessToken: newToken, tokenExpiry: newExpiry };
