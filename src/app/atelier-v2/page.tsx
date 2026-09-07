@@ -64,7 +64,9 @@ interface V2CardCache {
   geoScore: { score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number } | null;
   qualityFlags: { section?: string; type: string; message: string }[];
   brandVoiceStatus: { status: string; residuals?: { paragraphIndex: number; violations: { type: string; match: string }[] }[] } | null;
+  seoPageTitle: string;
   seoTitle: string;
+  seoSlug: string;
   seoMetaDesc: string;
   seoTags: string[];
   articleFinalised?: boolean;
@@ -1466,7 +1468,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [qualityFlags, setQualityFlags] = useState<{ section?: string; type: string; message: string }[]>([]);
   const [brandVoiceStatus, setBrandVoiceStatus] = useState<{ status: string; residuals?: { paragraphIndex: number; violations: { type: string; match: string }[] }[] } | null>(null);
   // ── SEO panel state ────────────────────────────────────────────────────────
-  const [seoTitle, setSeoTitle] = useState("");
+  const [seoPageTitle, setSeoPageTitle] = useState("");  // editable article title for SEO "Title" field
+  const [seoTitle, setSeoTitle] = useState("");          // LLM-generated SEO title ≤60 chars
+  const [seoSlug, setSeoSlug] = useState("");            // server-generated slug
   const [seoMetaDesc, setSeoMetaDesc] = useState("");
   const [seoTags, setSeoTags] = useState<string[]>([]);
   const [articleFinalised, setArticleFinalised] = useState(false);
@@ -1498,7 +1502,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       const res = await fetch(`/api/builder-sessions/${activeCardId}/publish-draft`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ seoTitle, seoMetaDesc, seoTags }),
+        body: JSON.stringify({ seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags, seoExcerpt, seoFocusKeyword }),
       });
       const data = await res.json() as { error?: string };
       if (!res.ok) { setDraftState("error"); setDraftError(data.error ?? "Failed to save draft"); return; }
@@ -1544,7 +1548,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       geoScore: geoScore ?? null,
       qualityFlags,
       brandVoiceStatus: brandVoiceStatus ?? null,
+      seoPageTitle,
       seoTitle,
+      seoSlug,
       seoMetaDesc,
       seoTags,
       articleFinalised,
@@ -1552,7 +1558,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       seoFocusKeyword,
       savedAt: new Date().toISOString(),
     });
-  }, [activeCardId, editorStep, outline, articleTitle, articleData, geoScore, qualityFlags, brandVoiceStatus, seoTitle, seoMetaDesc, seoTags, articleFinalised, seoExcerpt, seoFocusKeyword]);
+  }, [activeCardId, editorStep, outline, articleTitle, articleData, geoScore, qualityFlags, brandVoiceStatus, seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags, articleFinalised, seoExcerpt, seoFocusKeyword]);
 
   // ── Generate outline when a card is activated ──────────────────────────────
   useEffect(() => {
@@ -1574,7 +1580,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           geoScore: geoScore ?? null,
           qualityFlags,
           brandVoiceStatus: brandVoiceStatus ?? null,
+          seoPageTitle,
           seoTitle,
+          seoSlug,
           seoMetaDesc,
           seoTags,
           articleFinalised,
@@ -1594,6 +1602,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       setBrandVoiceStatus(null);
       setArticleLoading(false);
       setArticleError(null);
+      setSeoPageTitle("");
+      setSeoTitle("");
+      setSeoSlug("");
+      setSeoMetaDesc("");
+      setSeoTags([]);
       setArticleFinalised(false);
       setSeoExcerpt("");
       setSeoFocusKeyword("");
@@ -1632,7 +1645,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         setGeoScore(cached.geoScore ?? null);
         setQualityFlags(cached.qualityFlags ?? []);
         setBrandVoiceStatus(cached.brandVoiceStatus ?? null);
+        setSeoPageTitle(cached.seoPageTitle ?? "");
         setSeoTitle(cached.seoTitle ?? "");
+        setSeoSlug(cached.seoSlug ?? "");
         setSeoMetaDesc(cached.seoMetaDesc ?? "");
         setSeoTags(cached.seoTags ?? []);
         setArticleFinalised(cached.articleFinalised ?? false);
@@ -1973,7 +1988,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         tags?: string[]; excerpt?: string; focus_keyword?: string;
       };
       if (res.ok) {
-        setSeoTitle(data.seo_title ?? data.title ?? "");
+        setSeoPageTitle(data.title ?? "");
+        setSeoTitle(data.seo_title ?? "");
+        setSeoSlug(data.slug ?? "");
         setSeoMetaDesc(data.seo_description ?? "");
         setSeoTags(data.tags ?? []);
         setSeoExcerpt(data.excerpt ?? "");
@@ -2034,11 +2051,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               if (parsed.quality_flags) setQualityFlags(parsed.quality_flags);
               if (parsed.brand_voice_status) setBrandVoiceStatus(parsed.brand_voice_status);
               const t = parsed.article.title ?? "";
-              setSeoTitle(t.slice(0, 60));
+              setSeoPageTitle(t);   // article title → SEO "Title" field
+              setSeoTitle("");      // clear until LLM generates it
+              setSeoSlug("");       // clear until LLM generates it
               setSeoMetaDesc("");
-              const slug = t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
-              void slug; // stored in seoTitle slug derives on render
-              setSeoTags(parsed.article.sections.slice(0, 4).map(s => s.type).filter((v, i, a) => a.indexOf(v) === i));
+              setSeoTags([]);
             }
           } catch { /* partial chunk, keep buffering */ }
         }
@@ -2406,7 +2423,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                     setGeoScore(cached.geoScore ?? null);
                     setQualityFlags(cached.qualityFlags ?? []);
                     setBrandVoiceStatus(cached.brandVoiceStatus ?? null);
+                    setSeoPageTitle(cached.seoPageTitle ?? "");
                     setSeoTitle(cached.seoTitle ?? "");
+                    setSeoSlug(cached.seoSlug ?? "");
                     setSeoMetaDesc(cached.seoMetaDesc ?? "");
                     setSeoTags(cached.seoTags ?? []);
                     setArticleFinalised(cached.articleFinalised ?? false);
@@ -2526,7 +2545,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         const wordCount = geoScore?.wordCount ?? 0;
         const bvStatus = brandVoiceStatus?.status ?? "clean";
         const residualCount = brandVoiceStatus?.residuals?.reduce((n, r) => n + r.violations.length, 0) ?? 0;
-        const seoSlug = seoTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
+        const seoSlugDisplay = seoSlug || seoPageTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80);
 
         return (
           <div style={{ display: "grid", gridTemplateColumns: "1fr 272px", gap: 24, alignItems: "start" }}>
@@ -2817,17 +2836,17 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                     <div>
                       <label style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)", marginBottom: 5 }}>Title</label>
                       <input
-                        value={seoTitle}
-                        onChange={e => setSeoTitle(e.target.value)}
+                        value={seoPageTitle}
+                        onChange={e => setSeoPageTitle(e.target.value)}
                         style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, fontWeight: 400, background: C.bg, color: C.dark, outline: "none" }}
                       />
                     </div>
 
-                    {/* Slug — derived, read-only */}
+                    {/* Slug — server-generated, read-only */}
                     <div>
                       <label style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)", marginBottom: 5 }}>Slug</label>
                       <div style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 11, fontWeight: 400, background: "rgba(22,61,38,.03)", color: "rgba(22,61,38,.6)", fontFamily: "monospace", wordBreak: "break-all" }}>
-                        {seoSlug || "—"}
+                        {seoSlugDisplay || "—"}
                       </div>
                     </div>
 
@@ -2921,7 +2940,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                       writeCardCache(activeCardId, {
                         editorStep, outline, articleTitle, articleData,
                         geoScore, qualityFlags, brandVoiceStatus,
-                        seoTitle, seoMetaDesc, seoTags,
+                        seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags,
+                        articleFinalised, seoExcerpt, seoFocusKeyword,
                         savedAt: new Date().toISOString(),
                       });
                       // Also persist to Supabase so restore-article always returns the latest version
