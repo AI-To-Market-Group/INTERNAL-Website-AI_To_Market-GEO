@@ -3,7 +3,6 @@ import { saveGSCConnection } from "@/lib/gsc-oauth-store";
 
 const CLIENT_ID     = process.env.GOOGLE_OAUTH_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
-const REDIRECT_URI  = process.env.GOOGLE_REDIRECT_URI_GSC;
 
 function abs(req: NextRequest, path: string) {
   return `${req.nextUrl.origin}${path}`;
@@ -21,9 +20,11 @@ export async function GET(req: NextRequest) {
   if (!code) {
     return NextResponse.redirect(abs(req, "/atelier?gsc_error=missing_code"));
   }
-  if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
+  if (!CLIENT_ID || !CLIENT_SECRET) {
     return NextResponse.redirect(abs(req, "/atelier?gsc_error=not_configured"));
   }
+
+  const REDIRECT_URI = `${req.nextUrl.origin}/api/auth/gsc/callback`;
 
   // Decode state for returnTo only
   let returnTo = "/atelier";

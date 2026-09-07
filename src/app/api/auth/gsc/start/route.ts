@@ -1,14 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-const CLIENT_ID    = process.env.GOOGLE_OAUTH_CLIENT_ID;
-const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI_GSC;
-const ADMIN_EMAIL  = "manoj@aitomarketgroup.com";
+const CLIENT_ID   = process.env.GOOGLE_OAUTH_CLIENT_ID;
+const ADMIN_EMAIL = "manoj@aitomarketgroup.com";
 
 export async function GET(req: NextRequest) {
-  if (!CLIENT_ID || !REDIRECT_URI) {
+  if (!CLIENT_ID) {
     return NextResponse.json({ error: "GSC OAuth not configured." }, { status: 500 });
   }
+
+  const REDIRECT_URI = `${req.nextUrl.origin}/api/auth/gsc/callback`;
 
   // Only the admin can initiate the org-level GSC connection
   try {
