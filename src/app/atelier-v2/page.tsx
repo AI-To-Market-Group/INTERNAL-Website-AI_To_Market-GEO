@@ -4043,24 +4043,68 @@ function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChang
             return null;
           })()}
 
-          {/* Daily chart */}
-          {data.byDay.length > 0 && (
-            <div style={{ padding: "20px 24px", background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 24 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", opacity: .55, marginBottom: 16 }}>DAILY SPEND</div>
-              <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 72 }}>
-                {data.byDay.map(d => {
-                  const pct = (d.estimatedUsd / maxDayUsd) * 100;
-                  const label = d.date.slice(5);
-                  return (
-                    <div key={d.date} title={`${label}: ${fmtUsd(d.estimatedUsd)}`} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, height: "100%", justifyContent: "flex-end" }}>
-                      <div style={{ width: "100%", height: `${Math.max(pct, 2)}%`, background: C.mid, borderRadius: "3px 3px 0 0", opacity: .75 }} />
-                      {data.byDay.length <= 10 && <div style={{ fontSize: 9, color: C.muted, lineHeight: 1 }}>{label}</div>}
-                    </div>
-                  );
-                })}
+          {/* Daily chart — full date range, zero-filled for days with no data */}
+          {(() => {
+            // Build complete day array for the selected period
+            const fullRange: { date: string; estimatedUsd: number; calls: number }[] = [];
+            const today = new Date();
+            for (let i = days - 1; i >= 0; i--) {
+              const d = new Date(today);
+              d.setDate(d.getDate() - i);
+              const dateStr = d.toISOString().slice(0, 10);
+              const found = data.byDay.find(b => b.date === dateStr);
+              fullRange.push({ date: dateStr, estimatedUsd: found?.estimatedUsd ?? 0, calls: (found as { calls?: number })?.calls ?? 0 });
+            }
+            const rangeMax = Math.max(...fullRange.map(d => d.estimatedUsd), 0.000001);
+            // Label interval: every 1d for 7d, every 5d for 30d, every 10d for 90d
+            const labelEvery = days <= 7 ? 1 : days <= 30 ? 5 : 10;
+            return (
+              <div style={{ padding: "20px 24px", background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 24 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", opacity: .55 }}>DAILY SPEND</div>
+                  <div style={{ fontSize: 11, color: C.muted }}>
+                    {fullRange.filter(d => d.estimatedUsd > 0).length} active days · peak {fmtUsd(rangeMax)}
+                  </div>
+                </div>
+                {/* Bar chart */}
+                <div style={{ display: "flex", alignItems: "flex-end", gap: days > 30 ? 2 : 3, height: 100, marginBottom: 6 }}>
+                  {fullRange.map((d, i) => {
+                    const pct = (d.estimatedUsd / rangeMax) * 100;
+                    const hasData = d.estimatedUsd > 0;
+                    const mmdd = d.date.slice(5);
+                    return (
+                      <div
+                        key={d.date}
+                        title={`${mmdd}  ${hasData ? fmtUsd(d.estimatedUsd) + " · " + d.calls + " calls" : "no usage"}`}
+                        style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", height: "100%", justifyContent: "flex-end" }}
+                      >
+                        <div style={{
+                          width: "100%",
+                          height: hasData ? `${Math.max(pct, 3)}%` : "2px",
+                          background: hasData ? C.mid : "rgba(22,61,38,.1)",
+                          borderRadius: "3px 3px 0 0",
+                          opacity: hasData ? .85 : 1,
+                          transition: "height .15s",
+                        }} />
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* Date axis labels */}
+                <div style={{ display: "flex", alignItems: "flex-start", gap: days > 30 ? 2 : 3 }}>
+                  {fullRange.map((d, i) => {
+                    const showLabel = i === 0 || i === fullRange.length - 1 || i % labelEvery === 0;
+                    const mmdd = d.date.slice(5);
+                    return (
+                      <div key={d.date} style={{ flex: 1, fontSize: 9, color: C.muted, textAlign: "center", overflow: "hidden", opacity: showLabel ? 1 : 0, userSelect: "none", lineHeight: 1.2 }}>
+                        {showLabel ? mmdd : ""}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Feature breakdown */}
           {data.byFeature.length > 0 ? (
