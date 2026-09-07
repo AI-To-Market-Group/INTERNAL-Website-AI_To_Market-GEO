@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { ok, err } from "@/lib/api-response";
 import { requireUser } from "@/lib/api-auth";
+import { checkBudget } from "@/lib/budget-guard";
 import { getSession, updateSession } from "@/lib/builder-sessions-store";
 import { chatJson } from "@/lib/openai-article";
 import { getRefinementLengthPrompt } from "@/lib/article-length-controller";
@@ -56,6 +57,11 @@ export async function POST(req: NextRequest, { params }: Params) {
   const { opportunityId } = await params;
   const { user, error } = await requireUser();
   if (error) return error;
+
+  const budget = await checkBudget(user.id);
+  if (!budget.allowed) {
+    return err(`Monthly call limit reached (${budget.count} of ${budget.budget}). Update your limit in AI Usage.`, 429, "BUDGET_EXCEEDED");
+  }
 
   // Accept draft from request body (current editor state) or fall back to session
   const body = await req.json().catch(() => ({})) as { draft?: ArticleDraft };
@@ -124,7 +130,7 @@ Return valid JSON only (no markdown):
   const userPrompt = `Article title: ${draft.title}\n\nSections to refine:\n${JSON.stringify(inputSections, null, 2)}`;
 
   try {
-    const refined = await chatJson<RefinedArticle>(system, userPrompt, "gpt-5.4");
+    const refined = await chatJson<RefinedArticle>(system, userPrompt, "gpt-5.4", { userId: user.id, feature: "article-refine" });
 
     if (!refined?.sections || refined.sections.length !== sections.length) {
       return err("Refinement failed: section count mismatch. Please try again.", 500, "REFINE_FAILED");

@@ -1,4 +1,5 @@
 import sharp from "sharp";
+import { logAiUsage } from "@/lib/ai-usage-logger";
 
 // ── Palette ───────────────────────────────────────────────────────────────────
 
@@ -139,7 +140,12 @@ ABSOLUTE RULES — any violation causes immediate rejection:
 
 // ── OpenAI call (raw fetch — same pattern as openai-article.ts) ───────────────
 
-async function callGpt4o(prompt: string, temperature: number): Promise<string> {
+const ILLUSTRATION_MODEL = "gpt-4o";
+
+async function callGpt4o(
+  prompt: string,
+  temperature: number
+): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey) throw new Error("OPENAI_API_KEY not set");
 
@@ -150,7 +156,7 @@ async function callGpt4o(prompt: string, temperature: number): Promise<string> {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: "gpt-4o",
+      model: ILLUSTRATION_MODEL,
       temperature,
       max_tokens: 3500,
       messages: [
@@ -168,8 +174,15 @@ async function callGpt4o(prompt: string, temperature: number): Promise<string> {
     throw new Error(`OpenAI error ${res.status}: ${body}`);
   }
 
-  const data = await res.json();
-  return (data.choices?.[0]?.message?.content ?? "").trim();
+  const data = (await res.json()) as {
+    choices?: { message?: { content?: string } }[];
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
+  };
+  return {
+    content: (data.choices?.[0]?.message?.content ?? "").trim(),
+    inputTokens: data.usage?.prompt_tokens ?? 0,
+    outputTokens: data.usage?.completion_tokens ?? 0,
+  };
 }
 
 // ── SVG helpers ───────────────────────────────────────────────────────────────
@@ -191,12 +204,19 @@ function ensureDimensions(svg: string): string {
 export async function generateIllustrationSvg(
   title: string,
   summary: string,
-  surface: IllustrationSurface
+  surface: IllustrationSurface,
+  userId?: string
 ): Promise<string | null> {
   const temperatures = [0.8, 0.3];
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const raw = await callGpt4o(buildPrompt(title, summary, surface), temperatures[attempt]);
+    const { content: raw, inputTokens, outputTokens } = await callGpt4o(
+      buildPrompt(title, summary, surface),
+      temperatures[attempt]
+    );
+    if (userId) {
+      logAiUsage({ userId, feature: "illustration", model: ILLUSTRATION_MODEL, inputTokens, outputTokens });
+    }
     const svg = extractSvgBlock(raw);
 
     if (!svg) {
@@ -221,9 +241,10 @@ export async function generateIllustrationSvg(
 export async function generateIllustration(
   title: string,
   summary: string,
-  surface: IllustrationSurface
+  surface: IllustrationSurface,
+  userId?: string
 ): Promise<SanityImageRef | null> {
-  const svg = await generateIllustrationSvg(title, summary, surface);
+  const svg = await generateIllustrationSvg(title, summary, surface, userId);
   if (!svg) return null;
 
   // Rasterize SVG to PNG at 2× density (→ 340×260 px output)

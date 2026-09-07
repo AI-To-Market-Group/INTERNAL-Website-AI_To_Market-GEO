@@ -2,6 +2,8 @@ import type { NextRequest } from "next/server";
 import { getSession, updateSession } from "@/lib/builder-sessions-store";
 import { chatJsonStream } from "@/lib/openai-article";
 import { requireUser } from "@/lib/api-auth";
+import { checkBudget } from "@/lib/budget-guard";
+import { err } from "@/lib/api-response";
 import { reviewArticleQuality } from "@/lib/article-quality";
 import { getGenerationLengthPrompt } from "@/lib/article-length-controller";
 import { shortenArticleToTarget, countArticleWords } from "@/lib/article-shorten-agent";
@@ -208,6 +210,11 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
 export async function POST(req: NextRequest, { params }: Params) {
   const { user, error } = await requireUser();
   if (error) return error;
+
+  const budget = await checkBudget(user.id);
+  if (!budget.allowed) {
+    return err(`Monthly call limit reached (${budget.count} of ${budget.budget}). Update your limit in AI Usage.`, 429, "BUDGET_EXCEEDED");
+  }
 
   const { opportunityId } = await params;
   const body = (await req.json()) as { outline?: OutlineSection[] };
@@ -417,7 +424,7 @@ ${getGenerationLengthPrompt(outline.length)}`;
     }
 
     return { article: response, quality_flags: qualityFlags, geo_score, brand_voice_status };
-  });
+  }, { userId: user.id, feature: "article-draft" });
 
   return new Response(stream, {
     headers: {

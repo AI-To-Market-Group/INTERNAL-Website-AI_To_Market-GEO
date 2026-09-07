@@ -5,6 +5,7 @@ import { logError } from "@/lib/logger";
 import { fetchWithRetry } from "@/lib/fetch-with-retry";
 import { dbSaveGeoRun } from "@/lib/db/geo-runs";
 import { requireUser } from "@/lib/api-auth";
+import { checkBudget } from "@/lib/budget-guard";
 import type {
   GeoBrandEntity,
   GeoCitationLevel,
@@ -500,6 +501,11 @@ function getClientIp(req: Request): string {
 export async function POST(req: Request) {
   const { user, error: authError } = await requireUser();
   if (authError) return authError;
+
+  const budget = await checkBudget(user.id);
+  if (!budget.allowed) {
+    return err(`Monthly call limit reached (${budget.count} of ${budget.budget}). Update your limit in AI Usage.`, 429, "BUDGET_EXCEEDED");
+  }
 
   try {
     const ip = getClientIp(req);

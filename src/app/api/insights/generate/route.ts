@@ -10,10 +10,15 @@ import { checkRateLimit, RATE_LIMITS } from "@/lib/rate-limit";
 import { fetchWithRetry } from "@/lib/fetch-with-retry";
 import { logError } from "@/lib/logger";
 import { requireUser } from "@/lib/api-auth";
+import { logAiUsage } from "@/lib/ai-usage-logger";
+import { checkBudget } from "@/lib/budget-guard";
 
 const MODEL = "gpt-5.4-nano";
 
-async function callOpenAI(messages: { role: string; content: string }[]) {
+async function callOpenAI(
+  messages: { role: string; content: string }[],
+  ctx?: { userId: string; feature: string }
+) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) throw new Error("OPENAI_API_KEY not configured.");
 
@@ -33,7 +38,19 @@ async function callOpenAI(messages: { role: string; content: string }[]) {
 
   const data = (await resp.json()) as {
     choices?: { message?: { content?: string } }[];
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
+
+  if (ctx && data.usage) {
+    logAiUsage({
+      userId: ctx.userId,
+      feature: ctx.feature,
+      model: MODEL,
+      inputTokens: data.usage.prompt_tokens ?? 0,
+      outputTokens: data.usage.completion_tokens ?? 0,
+    });
+  }
+
   return data.choices?.[0]?.message?.content ?? "";
 }
 
@@ -48,6 +65,11 @@ function getClientIp(req: NextRequest): string {
 export async function POST(req: NextRequest) {
   const { user, error } = await requireUser();
   if (error) return error;
+
+  const budget = await checkBudget(user.id);
+  if (!budget.allowed) {
+    return err(`Monthly call limit reached (${budget.count} of ${budget.budget}). Update your limit in AI Usage.`, 429, "BUDGET_EXCEEDED");
+  }
 
   try {
     const ip = getClientIp(req);
@@ -81,10 +103,10 @@ export async function POST(req: NextRequest) {
 
       const systemPrompt = `You are a B2B marketing writer specialised in retail and technology. Write ${formatMap[category]}`;
 
-      const content = await callOpenAI([
-        { role: "system", content: systemPrompt },
-        { role: "user", content: prompt },
-      ]);
+      const content = await callOpenAI(
+        [{ role: "system", content: systemPrompt }, { role: "user", content: prompt }],
+        { userId: user.id, feature: "content-forge/create" }
+      );
 
       const firstLine = content.split("\n").find((l) => l.trim())?.replace(/^#+\s*/, "").trim() || "New article";
       const title = `New: ${firstLine.slice(0, 100)}`;
@@ -134,17 +156,13 @@ export async function POST(req: NextRequest) {
               ? "practical angle: concrete advice for decision-makers"
               : "forward-looking angle: trends and predictions";
 
-        const content = await callOpenAI([
-          {
-            role: "system",
-            content:
-              "You are a B2B writer expert in retail tech. Write a blog article in English (~600 words) from the provided press release. Use Markdown syntax (##, ###, -, >, **bold**). Adopt a professional and engaging tone.",
-          },
-          {
-            role: "user",
-            content: `Source press release:\n\nTitle: ${sourceDoc.title}\n\n${sourceDoc.markdown}\n\nDesired angle: ${angle}`,
-          },
-        ]);
+        const content = await callOpenAI(
+          [
+            { role: "system", content: "You are a B2B writer expert in retail tech. Write a blog article in English (~600 words) from the provided press release. Use Markdown syntax (##, ###, -, >, **bold**). Adopt a professional and engaging tone." },
+            { role: "user", content: `Source press release:\n\nTitle: ${sourceDoc.title}\n\n${sourceDoc.markdown}\n\nDesired angle: ${angle}` },
+          ],
+          { userId: user.id, feature: "content-forge/blog" }
+        );
 
         const firstLine = content
           .split("\n")
@@ -200,17 +218,13 @@ export async function POST(req: NextRequest) {
               ? "inspiring and visionary"
               : "conversational with an open question";
 
-        const content = await callOpenAI([
-          {
-            role: "system",
-            content:
-              "You are a LinkedIn expert in retail tech. Write a punchy LinkedIn post in English (~150-250 words). Include bullet points, a catchy hook in the first line, and relevant hashtags at the end. No Markdown title (#), write the post directly.",
-          },
-          {
-            role: "user",
-            content: `Source blog article:\n\nTitle: ${sourceDoc.title}\n\n${sourceDoc.markdown}\n\nDesired tone: ${tone}`,
-          },
-        ]);
+        const content = await callOpenAI(
+          [
+            { role: "system", content: "You are a LinkedIn expert in retail tech. Write a punchy LinkedIn post in English (~150-250 words). Include bullet points, a catchy hook in the first line, and relevant hashtags at the end. No Markdown title (#), write the post directly." },
+            { role: "user", content: `Source blog article:\n\nTitle: ${sourceDoc.title}\n\n${sourceDoc.markdown}\n\nDesired tone: ${tone}` },
+          ],
+          { userId: user.id, feature: "content-forge/linkedin" }
+        );
 
         const firstLine = content
           .split("\n")

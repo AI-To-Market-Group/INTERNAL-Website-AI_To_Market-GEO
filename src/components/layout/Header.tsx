@@ -13,6 +13,7 @@ const NAV_LINKS = [
   { label: "AI Echo", href: "/atelier/ai-echo" },
   { label: "Authority", href: "/atelier/authority" },
   { label: "Structured Data", href: "/atelier/structured-data" },
+  { label: "AI Usage", href: "/atelier/usage" },
 ];
 
 interface HeaderProps {
@@ -68,6 +69,17 @@ export const Header = ({}: HeaderProps = {}) => {
               {label}
             </Link>
           ))}
+
+          {/* Version switcher */}
+          <Link
+            href="/atelier-v2"
+            className="flex items-center gap-1.5 rounded-full border border-[#F88379]/40 bg-[#F88379]/10 px-3 py-2 text-sm font-semibold text-[#F88379] hover:bg-[#F88379]/20 hover:border-[#F88379]/60 transition-colors"
+            title="Switch to V2 – GEO Content Desk"
+          >
+            <span>GEO Desk</span>
+            <span className="rounded text-[9px] font-bold tracking-wider bg-[#F88379] text-[#163D26] px-1.5 py-0.5 leading-none">V2</span>
+          </Link>
+
           <button
             onClick={handleLogout}
             title="Sign out"

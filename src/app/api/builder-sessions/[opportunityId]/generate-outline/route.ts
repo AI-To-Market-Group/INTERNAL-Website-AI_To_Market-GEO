@@ -176,7 +176,7 @@ STRUCTURE RULES:
       if (body.justification_signals?.length) contextLines.push(`Content gap signals: ${body.justification_signals.join("; ")}`);
       if (body.tags?.length) contextLines.push(`Target keywords: ${body.tags.join(", ")}`);
       const userPrompt = contextLines.join("\n");
-      response = await chatJson<GenerateArticleSectionsResponse>(system, userPrompt);
+      response = await chatJson<GenerateArticleSectionsResponse>(system, userPrompt, undefined, { userId: user.id, feature: "article-outline" });
       if (!response.sections?.length) {
         response = mockOutlineResponse(topicTitle);
       } else {

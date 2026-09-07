@@ -14,7 +14,7 @@ function refToCdnUrl(ref: string): string {
 }
 
 export async function POST(request: NextRequest) {
-  const { error: authError } = await requireUser();
+  const { user, error: authError } = await requireUser();
   if (authError) return authError;
 
   let title: string, summary: string, surface: IllustrationSurface;
@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
   }
 
   const cleanSummary = (summary ?? "").trim() || title.trim();
-  const imageRef = await generateIllustration(title.trim(), cleanSummary, surface);
+  const imageRef = await generateIllustration(title.trim(), cleanSummary, surface, user.id);
 
   if (!imageRef) {
     return NextResponse.json(

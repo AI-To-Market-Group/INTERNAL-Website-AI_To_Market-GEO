@@ -1,15 +1,56 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { KeywordWorkspace } from "./components/KeywordWorkspace";
 import { useSettings } from "@/hooks/useSettings";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Screen = "dashboard" | "generate" | "queue" | "editor" | "score" | "keywords" | "publish" | "analytics" | "settings";
+type Screen = "dashboard" | "generate" | "queue" | "editor" | "score" | "keywords" | "publish" | "analytics" | "settings" | "usage" | "trash";
 type FlowMode = "wizard" | "single" | "chat" | "keywords";
 type VizMode = "ring" | "bars" | "grid";
 type DataState = "normal" | "empty" | "loading";
+
+interface BriefFields {
+  client?: string;
+  prompt?: string;
+  format?: string;
+  voice?: string;
+  predictedScore?: string;
+}
+
+interface DraftCard {
+  opportunityId: string;
+  brief: BriefFields;
+  createdAt: string;
+}
+
+interface V2OutlineSection {
+  order: number;
+  type: string;
+  title: string;
+  description: string[];
+  keywords: string[];
+}
+
+interface SavedPlan {
+  opportunityId: string;
+  articleTitle: string;
+  outline: V2OutlineSection[];
+  brief: BriefFields;
+  savedAt: string;
+}
+
+const SAVED_PLANS_KEY = "v2_saved_plans";
+
+function readSavedPlans(): SavedPlan[] {
+  try { return JSON.parse(localStorage.getItem(SAVED_PLANS_KEY) ?? "[]") as SavedPlan[]; }
+  catch { return []; }
+}
+function writeSavedPlans(plans: SavedPlan[]) {
+  try { localStorage.setItem(SAVED_PLANS_KEY, JSON.stringify(plans)); }
+  catch {}
+}
 
 // ─── Palette constants ────────────────────────────────────────────────────────
 
@@ -31,6 +72,12 @@ function scoreColor(v: number) {
   return v >= 80 ? C.dark : v >= 70 ? C.mid : C.red;
 }
 
+function creditBarColor(pct: number): string {
+  if (pct >= 100) return C.red;
+  if (pct >= 80) return "#F5A623";
+  return C.salmon;
+}
+
 // ─── Nav definition ───────────────────────────────────────────────────────────
 
 const NAV_ITEMS: [Screen, string, string, string][] = [
@@ -43,6 +90,7 @@ const NAV_ITEMS: [Screen, string, string, string][] = [
   ["publish",    "Publishing",    "M10 2l5 6h-3v6H8V8H5zM4 16h12v2H4z", ""],
   ["analytics",  "Visibility",    "M3 15h3V8H3zM8 15h3V3H8zM13 15h3v-7h-3z", ""],
   ["settings",   "Brand voice",   "M10 6a4 4 0 100 8 4 4 0 000-8zM9 2h2v3H9zM9 15h2v3H9zM2 9h3v2H2zM15 9h3v2h-3z", ""],
+  ["trash",      "Trash",         "M7 3h6v2H7zM3 5h14v2H3zM5 7h10l-1 10H6L5 7z", ""],
 ];
 
 const SCREEN_HEAD: Record<Screen, [string, string, string]> = {
@@ -55,6 +103,8 @@ const SCREEN_HEAD: Record<Screen, [string, string, string]> = {
   publish:    ["DISTRIBUTION",   "Publishing and integrations",       "Where approved drafts go, and what gets injected on the way out."],
   analytics:  ["MEASUREMENT",    "Visibility tracking",               "Citations, answer share and which drafts earn them."],
   settings:   ["CONFIGURATION",  "Brand voice",                       "Every generation inherits these rules. Change them once."],
+  usage:      ["USAGE",          "AI spend & token usage",            "Token consumption and estimated cost across all features."],
+  trash:      ["TRASH",          "Deleted briefs",                    "Removed cards. Restore them to the editor or delete permanently."],
 };
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
@@ -69,12 +119,14 @@ function HamburgerIcon() {
   );
 }
 
-function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabel }: {
+function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabel, onUsageClick }: {
   screen: Screen; setScreen: (s: Screen) => void;
   collapsed: boolean; onToggle: () => void;
   creditPct: number; creditLabel: string;
+  onUsageClick: () => void;
 }) {
   const w = collapsed ? 64 : 248;
+  const [showVersionMenu, setShowVersionMenu] = useState(false);
 
   return (
     <aside style={{ width: w, flexShrink: 0, background: C.dark, color: C.white, display: "flex", flexDirection: "column", padding: collapsed ? "20px 10px" : "24px 16px", position: "sticky", top: 0, height: "100vh", transition: "width .22s ease, padding .22s ease", overflow: "hidden" }}>
@@ -92,16 +144,65 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
         )}
       </div>
 
-      {/* Workspace — hidden when collapsed */}
+      {/* Workspace / version switcher — hidden when collapsed */}
       {!collapsed && (
         <>
           <div style={{ padding: "0 8px 8px", fontSize: 10, fontWeight: 700, letterSpacing: ".14em", opacity: .5 }}>WORKSPACE</div>
-          <div style={{ display: "flex", alignItems: "center", padding: "10px 12px", marginBottom: 24, border: "1px solid rgba(255,255,255,.22)", borderRadius: 8, fontSize: 13, fontWeight: 600, whiteSpace: "nowrap" }}>
-            AI To Market
+          <div style={{ position: "relative", marginBottom: 24 }}>
+            <button
+              onClick={() => setShowVersionMenu(v => !v)}
+              style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", border: "1px solid rgba(255,255,255,.22)", borderRadius: 8, fontSize: 13, fontWeight: 600, whiteSpace: "nowrap", background: "transparent", color: C.white, cursor: "pointer" }}
+            >
+              <span>AI To Market</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".08em", padding: "2px 6px", borderRadius: 4, background: C.salmon, color: C.dark }}>V2</span>
+                <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ opacity: .6, transform: showVersionMenu ? "rotate(180deg)" : "none", transition: "transform .15s" }}>
+                  <path d="M4 6l4 4 4-4" />
+                </svg>
+              </div>
+            </button>
+
+            {showVersionMenu && (
+              <div style={{ position: "absolute", top: "calc(100% + 6px)", left: 0, right: 0, background: "#1E4D30", border: "1px solid rgba(255,255,255,.18)", borderRadius: 8, overflow: "hidden", zIndex: 50, boxShadow: "0 8px 24px rgba(0,0,0,.35)" }}>
+                {/* V2 — current */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", fontSize: 12, fontWeight: 600, color: C.white, background: "rgba(255,255,255,.08)" }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 700 }}>GEO Content Desk</div>
+                    <div style={{ fontSize: 10, fontWeight: 400, opacity: .6, marginTop: 1 }}>Current version</div>
+                  </div>
+                  <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".08em", padding: "2px 6px", borderRadius: 4, background: C.salmon, color: C.dark }}>V2</span>
+                </div>
+                {/* Divider */}
+                <div style={{ height: 1, background: "rgba(255,255,255,.1)" }} />
+                {/* V1 — switch */}
+                <button
+                  onClick={() => { window.location.href = "/atelier"; }}
+                  style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 14px", fontSize: 12, fontWeight: 600, color: "rgba(255,255,255,.75)", background: "transparent", border: "none", cursor: "pointer", textAlign: "left" }}
+                  onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,.06)")}
+                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                >
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 600 }}>Content Atelier</div>
+                    <div style={{ fontSize: 10, fontWeight: 400, opacity: .6, marginTop: 1 }}>Switch to V1</div>
+                  </div>
+                  <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".08em", padding: "2px 6px", borderRadius: 4, background: "rgba(255,255,255,.15)", color: "rgba(255,255,255,.7)" }}>V1</span>
+                </button>
+              </div>
+            )}
           </div>
         </>
       )}
-      {collapsed && <div style={{ marginBottom: 16 }} />}
+
+      {/* Collapsed: version badge only */}
+      {collapsed && (
+        <div style={{ marginBottom: 16, display: "flex", justifyContent: "center" }}>
+          <button
+            onClick={() => { window.location.href = "/atelier"; }}
+            title="Switch to V1 – Content Atelier"
+            style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".06em", padding: "3px 6px", borderRadius: 4, background: C.salmon, color: C.dark, border: "none", cursor: "pointer" }}
+          >V2</button>
+        </div>
+      )}
 
       {/* Nav */}
       <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
@@ -119,24 +220,31 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
         ))}
       </nav>
 
-      {/* Credits */}
-      <div style={{ marginTop: "auto", paddingTop: 16, borderTop: "1px solid rgba(255,255,255,.14)" }}>
+      {/* Credits — click opens AI Usage page */}
+      <button
+        onClick={onUsageClick}
+        title="View AI usage details"
+        style={{ marginTop: "auto", paddingTop: 16, borderTop: "1px solid rgba(255,255,255,.14)", width: "100%", background: "transparent", border: "none", cursor: "pointer", color: C.white, textAlign: "left", borderRadius: 8, padding: "12px 0 0" }}
+      >
         {collapsed ? (
           <div style={{ display: "flex", justifyContent: "center" }}>
             <div style={{ width: 34, height: 6, borderRadius: 4, background: "rgba(255,255,255,.18)", overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${creditPct}%`, background: C.salmon }} />
+              <div style={{ height: "100%", width: `${creditPct}%`, background: creditBarColor(creditPct) }} />
             </div>
           </div>
         ) : (
-          <>
-            <div style={{ fontSize: 11, fontWeight: 600, lineHeight: 1.5, padding: "0 12px" }}>Monthly generation credits</div>
-            <div style={{ height: 6, borderRadius: 4, background: "rgba(255,255,255,.18)", margin: "10px 12px 6px", overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${creditPct}%`, background: C.salmon }} />
+          <div style={{ borderRadius: 8, padding: "10px 12px", transition: "background .15s", background: "transparent" }}
+            onMouseEnter={e => (e.currentTarget.style.background = "rgba(255,255,255,.08)")}
+            onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+          >
+            <div style={{ fontSize: 11, fontWeight: 600, lineHeight: 1.5 }}>Monthly generation credits</div>
+            <div style={{ height: 6, borderRadius: 4, background: "rgba(255,255,255,.18)", margin: "10px 0 6px", overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${creditPct}%`, background: creditBarColor(creditPct), transition: "background .3s" }} />
             </div>
-            <div style={{ fontSize: 11, fontWeight: 400, opacity: .7, padding: "0 12px" }}>{creditLabel}</div>
-          </>
+            <div style={{ fontSize: 11, fontWeight: 400, opacity: .7 }}>{creditLabel}</div>
+          </div>
         )}
-      </div>
+      </button>
     </aside>
   );
 }
@@ -343,14 +451,93 @@ const PIPELINE_STEPS = [
   "Stage for human review, never auto publish below 75",
 ];
 
-function GenerateScreen({ onSettings, onQueue, seedKeywords }: { onSettings: () => void; onQueue: () => void; seedKeywords: string[] }) {
-  const [flow, setFlow] = useState<FlowMode>("wizard");
+function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, defaultFlow }: { onSettings: () => void; onQueue: () => void; onSessionCreated: (opportunityId: string, brief: BriefFields) => void; seedKeywords: string[]; defaultFlow?: FlowMode }) {
+  const [flow, setFlow] = useState<FlowMode>(defaultFlow ?? "wizard");
   const [step, setStep] = useState(1);
   const [promptText, setPromptText] = useState("what is generative engine optimization");
   const [adjacentOn, setAdjacentOn] = useState([0, 2]);
   const [togglesOn, setTogglesOn] = useState([0, 1, 3]);
   const [brief, setBrief] = useState("Explainer for B2B marketing leads on how answer engines pick sources, with a comparison of GEO and classic SEO and a short checklist.");
   const [chatInput, setChatInput] = useState("");
+
+  // ── Conversational chat state ────────────────────────────────────────────────
+  const [chatMessages, setChatMessages] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
+  const [chatBrief, setChatBrief] = useState<BriefFields>({});
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [readyToGenerate, setReadyToGenerate] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages, chatLoading]);
+
+  async function sendMessage(text?: string) {
+    const content = (text ?? chatInput).trim();
+    if (!content || chatLoading) return;
+    const newMessages = [...chatMessages, { role: "user" as const, content }];
+    setChatMessages(newMessages);
+    setChatInput("");
+    setChatLoading(true);
+    setChatError(null);
+    try {
+      const res = await fetch("/api/brief/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messages: newMessages }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const data = await res.json() as { reply: string; brief: BriefFields; readyToGenerate: boolean };
+      setChatMessages([...newMessages, { role: "assistant", content: data.reply }]);
+      setChatBrief(prev => ({
+        ...prev,
+        ...Object.fromEntries(Object.entries(data.brief).filter(([, v]) => v)),
+      }));
+      if (data.readyToGenerate) setReadyToGenerate(true);
+    } catch (e) {
+      setChatError(e instanceof Error ? e.message : "Failed to get a response");
+    } finally {
+      setChatLoading(false);
+    }
+  }
+
+  async function generateFromBrief() {
+    if (!readyToGenerate || generating) return;
+    setGenerating(true);
+    setChatError(null);
+    try {
+      const contentBrief = [
+        chatBrief.prompt   && `Target prompt: ${chatBrief.prompt}`,
+        chatBrief.format   && `Format: ${chatBrief.format}`,
+        chatBrief.voice    && `Voice: ${chatBrief.voice}`,
+      ].filter(Boolean).join("\n");
+
+      const res = await fetch("/api/builder-sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic_title: chatBrief.prompt ?? "GEO article",
+          opportunity_context: {
+            theme: chatBrief.client ?? undefined,
+            content_brief: contentBrief || undefined,
+          },
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const data = await res.json() as { opportunityId: string };
+      onSessionCreated(data.opportunityId, chatBrief);
+    } catch (e) {
+      setChatError(e instanceof Error ? e.message : "Failed to create session");
+      setGenerating(false);
+    }
+  }
 
   const ADJACENT_LABELS = ["is geo replacing seo", "does geo work for b2b", "who invented geo", "geo checklist", "geo tools 2026"];
   const TOGGLE_LABELS = ["Inject FAQ schema", "Add comparison table", "Require 3 citable sources", "Write answer block per section"];
@@ -364,13 +551,6 @@ function GenerateScreen({ onSettings, onQueue, seedKeywords }: { onSettings: () 
     { k: "ENTITIES",      v: "4 asserted, 1 verified against knowledge graph" },
     { k: "VOICE",         v: "AI To Market house style, declarative, short sentences" },
     { k: "COST",          v: "1 credit, roughly 4 minutes" },
-  ];
-
-  const CHAT_MESSAGES = [
-    { text: "I need something for the prompt people keep asking: what is GEO. Northline Legal is the client.", who: "u" },
-    { text: "Northline is cited 3 times for that prompt today, mostly by Perplexity, always in second position. I would open with a one sentence definition and follow with a GEO versus SEO table, which is what ChatGPT tends to quote. Shall I target 1400 words?", who: "a" },
-    { text: "Yes, and keep it non salesy.", who: "u" },
-    { text: "Understood. I will use the house voice with claim strength high and no product mentions until the final section. Predicted GEO score 82.", who: "a" },
   ];
 
   const btnStyle = (active: boolean): React.CSSProperties => ({
@@ -585,36 +765,82 @@ function GenerateScreen({ onSettings, onQueue, seedKeywords }: { onSettings: () 
       {flow === "chat" && (
         <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 32, alignItems: "start" }}>
           <section style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", minHeight: 520 }}>
-            <div style={{ flex: 1, padding: 28, display: "flex", flexDirection: "column", gap: 20 }}>
-              {CHAT_MESSAGES.map((m, i) => (
-                <div key={i} style={{ display: "flex", gap: 12, justifyContent: m.who === "u" ? "flex-end" : "flex-start" }}>
-                  <div style={{ maxWidth: "78%", padding: "14px 16px", borderRadius: 12, fontSize: 13, fontWeight: 400, lineHeight: 1.55, background: m.who === "u" ? C.dark : C.bg, color: m.who === "u" ? C.white : C.dark, border: `1px solid ${m.who === "u" ? C.dark : "rgba(22,61,38,.14)"}` }}>{m.text}</div>
+            {/* Messages */}
+            <div style={{ flex: 1, padding: 28, display: "flex", flexDirection: "column", gap: 20, overflowY: "auto", maxHeight: 420 }}>
+              {chatMessages.length === 0 && (
+                <div style={{ margin: "auto", textAlign: "center", color: C.muted, fontSize: 13, lineHeight: 1.65, maxWidth: 320, padding: "32px 0" }}>
+                  Describe the article you need — the target prompt, client name, or topic you want to own. I will ask a follow-up if I need more.
+                </div>
+              )}
+              {chatMessages.map((m, i) => (
+                <div key={i} style={{ display: "flex", gap: 12, justifyContent: m.role === "user" ? "flex-end" : "flex-start" }}>
+                  <div style={{ maxWidth: "78%", padding: "14px 16px", borderRadius: 12, fontSize: 13, fontWeight: 400, lineHeight: 1.55, background: m.role === "user" ? C.dark : C.bg, color: m.role === "user" ? C.white : C.dark, border: `1px solid ${m.role === "user" ? C.dark : "rgba(22,61,38,.14)"}` }}>{m.content}</div>
                 </div>
               ))}
+              {chatLoading && (
+                <div style={{ display: "flex", justifyContent: "flex-start" }}>
+                  <div style={{ padding: "12px 16px", borderRadius: 12, fontSize: 13, background: C.bg, border: "1px solid rgba(22,61,38,.14)", color: C.muted }}>Thinking…</div>
+                </div>
+              )}
+              {chatError && (
+                <div style={{ padding: "10px 14px", borderRadius: 8, background: "#FFF0F0", border: "1px solid rgba(249,57,67,.25)", color: C.red, fontSize: 12 }}>{chatError}</div>
+              )}
+              <div ref={chatEndRef} />
             </div>
-            <div style={{ padding: "16px 20px", borderTop: "1px solid rgba(22,61,38,.1)" }}>
+
+            {/* Input area */}
+            <div style={{ padding: "14px 20px", borderTop: "1px solid rgba(22,61,38,.1)" }}>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-                {["Show me the competing citations", "Draft it now", "Make it a comparison article"].map(label => (
-                  <button key={label} onClick={() => setChatInput(label)} style={{ padding: "7px 12px", borderRadius: 20, border: "1px solid rgba(22,61,38,.22)", fontSize: 11, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark }}>{label}</button>
+                {["Yes, go ahead", "Make it a comparison article", "Keep it under 1,000 words"].map(label => (
+                  <button key={label} onClick={() => sendMessage(label)} disabled={chatLoading} style={{ padding: "6px 12px", borderRadius: 20, border: "1px solid rgba(22,61,38,.22)", fontSize: 11, fontWeight: 600, background: "none", cursor: chatLoading ? "default" : "pointer", color: C.dark, opacity: chatLoading ? 0.5 : 1 }}>{label}</button>
                 ))}
               </div>
               <div style={{ display: "flex", gap: 10 }}>
-                <input value={chatInput} onChange={e => setChatInput(e.target.value)} placeholder="Describe the article, or paste a prompt you want to win" style={{ flex: 1, padding: "13px 14px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, fontWeight: 400, background: C.bg, color: C.dark, outline: "none" }} />
-                <button onClick={() => setChatInput("")} style={{ padding: "13px 20px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer" }}>Send</button>
+                <input
+                  value={chatInput}
+                  onChange={e => setChatInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void sendMessage(); } }}
+                  placeholder="Describe the article, or paste a prompt you want to win"
+                  disabled={chatLoading}
+                  style={{ flex: 1, padding: "13px 14px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, fontWeight: 400, background: C.bg, color: C.dark, outline: "none", opacity: chatLoading ? 0.6 : 1 }}
+                />
+                <button
+                  onClick={() => void sendMessage()}
+                  disabled={chatLoading || !chatInput.trim()}
+                  style={{ padding: "13px 20px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: chatLoading || !chatInput.trim() ? "default" : "pointer", opacity: chatLoading || !chatInput.trim() ? 0.5 : 1 }}
+                >
+                  Send
+                </button>
               </div>
             </div>
           </section>
+
+          {/* Brief sidebar */}
           <aside style={{ padding: 24, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, position: "sticky", top: 180 }}>
             <EyebrowLabel>BRIEF SO FAR</EyebrowLabel>
             <div style={{ marginTop: 18, display: "flex", flexDirection: "column", gap: 14 }}>
-              {[["CLIENT", "AI To Market", C.dark], ["PROMPT", "what is generative engine optimization", C.dark], ["FORMAT", "Definitional explainer, 1400 words", C.dark], ["VOICE", "House style, no product mentions until final section", C.dark], ["PREDICTED SCORE", "82 of 100", C.mid]].map(([k, v, color]) => (
+              {([
+                ["CLIENT",          chatBrief.client,         C.dark],
+                ["PROMPT",          chatBrief.prompt,         C.dark],
+                ["FORMAT",          chatBrief.format,         C.dark],
+                ["VOICE",           chatBrief.voice,          C.dark],
+                ["PREDICTED SCORE", chatBrief.predictedScore, C.mid],
+              ] as [string, string | undefined, string][]).map(([k, v, color]) => (
                 <div key={k} style={{ paddingBottom: 14, borderBottom: "1px solid rgba(22,61,38,.09)" }}>
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)" }}>{k}</div>
-                  <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, lineHeight: 1.45, color }}>{v}</div>
+                  <div style={{ marginTop: 6, fontSize: 12, fontWeight: 600, lineHeight: 1.45, color: v ? color : "rgba(22,61,38,.28)", fontStyle: v ? "normal" : "italic" }}>
+                    {v ?? "—"}
+                  </div>
                 </div>
               ))}
             </div>
-            <button onClick={onQueue} style={{ width: "100%", marginTop: 20, padding: 13, borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer" }}>Generate from this brief</button>
+            <button
+              onClick={() => void generateFromBrief()}
+              disabled={!readyToGenerate || generating}
+              style={{ width: "100%", marginTop: 20, padding: 13, borderRadius: 8, background: readyToGenerate ? C.dark : "rgba(22,61,38,.18)", color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: readyToGenerate && !generating ? "pointer" : "not-allowed", opacity: generating ? 0.7 : 1, transition: "background .3s" }}
+            >
+              {generating ? "Creating draft…" : readyToGenerate ? "Generate from this brief" : "Building brief…"}
+            </button>
           </aside>
         </div>
       )}
@@ -690,6 +916,89 @@ function QueueScreen({ onEditor, onGenerate }: { onEditor: () => void; onGenerat
   );
 }
 
+// ─── Draft card component ─────────────────────────────────────────────────────
+
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "Just now";
+  if (mins < 60) return `${mins}m ago`;
+  return `${Math.floor(mins / 60)}h ago`;
+}
+
+function DraftCardComponent({ card, onCreateArticle, onResume, onRemove }: {
+  card: DraftCard;
+  onCreateArticle: () => void;
+  onResume?: () => void;
+  onRemove?: () => void;
+}) {
+  const rawScore = card.brief.predictedScore ? parseInt(card.brief.predictedScore) : NaN;
+  const scoreNum = isNaN(rawScore) ? null : rawScore;
+
+  return (
+    <div style={{ padding: 24, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", minHeight: 220, position: "relative" }}>
+      {/* X remove button */}
+      {onRemove && (
+        <button
+          onClick={e => { e.stopPropagation(); onRemove(); }}
+          title="Remove"
+          style={{ position: "absolute", top: 10, right: 10, width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid rgba(249,57,67,.35)`, background: "rgba(249,57,67,.07)", color: C.red, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0 }}
+        >
+          ×
+        </button>
+      )}
+      {/* Header: badge + score */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 16, paddingRight: onRemove ? 28 : 0 }}>
+        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: C.mid, background: "rgba(24,95,0,.1)", padding: "4px 9px", borderRadius: 20 }}>READY TO BUILD</span>
+        {scoreNum !== null && (
+          <div style={{ textAlign: "right", flexShrink: 0 }}>
+            <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1, color: scoreColor(scoreNum) }}>{scoreNum}</div>
+            <div style={{ fontSize: 10, fontWeight: 600, color: C.muted, marginTop: 2 }}>/ 100</div>
+          </div>
+        )}
+      </div>
+
+      {/* Prompt (title) */}
+      <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4, color: C.dark, marginBottom: 10, flex: 1 }}>
+        {card.brief.prompt ?? "Untitled brief"}
+      </div>
+
+      {/* Format */}
+      {card.brief.format && (
+        <div style={{ fontSize: 12, fontWeight: 400, color: C.muted, marginBottom: 6 }}>{card.brief.format}</div>
+      )}
+
+      {/* Client */}
+      {card.brief.client && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+          <span style={{ fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 12, background: C.faint, color: C.dark }}>{card.brief.client}</span>
+        </div>
+      )}
+
+      {/* Timestamp */}
+      <div style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.42)", marginTop: 14, marginBottom: 16, paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.08)" }}>
+        {timeAgo(card.createdAt)}
+      </div>
+
+      {/* Actions */}
+      <div style={{ display: "flex", gap: 8 }}>
+        <button
+          onClick={onCreateArticle}
+          style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
+        >
+          Create Article
+        </button>
+        <button
+          onClick={onResume}
+          style={{ padding: "11px 14px", border: "1px solid rgba(22,61,38,.28)", borderRadius: 8, fontSize: 12, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark, whiteSpace: "nowrap" }}
+        >
+          Resume
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Editor screen ────────────────────────────────────────────────────────────
 
 const SUGGESTIONS_DATA = [
@@ -707,86 +1016,504 @@ const OUTLINE_ITEMS = [
   { label: "FAQ (thin)",                 indent: 22,  weight: "400", bg: "transparent",       color: C.red },
 ];
 
-function EditorScreen({ onScore, onPublish }: { onScore: () => void; onPublish: () => void }) {
+// ─── Outline section type config ──────────────────────────────────────────────
+
+const SECTION_TYPE_COLORS: Record<string, { bg: string; color: string }> = {
+  introduction: { bg: "rgba(22,61,38,.09)",  color: C.dark },
+  stats:        { bg: "rgba(249,57,67,.08)", color: "#B0121B" },
+  faq:          { bg: "rgba(248,131,121,.15)", color: "#8B3A2A" },
+  conclusion:   { bg: "rgba(24,95,0,.1)",    color: C.mid },
+  how_to:       { bg: "rgba(22,61,38,.06)",  color: C.dark },
+  comparison:   { bg: "rgba(22,61,38,.06)",  color: C.dark },
+  section:      { bg: "rgba(22,61,38,.05)",  color: "rgba(22,61,38,.7)" },
+};
+
+function sectionTypeStyle(type: string) {
+  return SECTION_TYPE_COLORS[type] ?? SECTION_TYPE_COLORS.section;
+}
+
+// ─── Editor screen ────────────────────────────────────────────────────────────
+
+function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void }) {
+  // ── Plan step state ────────────────────────────────────────────────────────
+  type EditorStep = "plan" | "article";
+  const [editorStep, setEditorStep] = useState<EditorStep>("plan");
+  const [outline, setOutline] = useState<V2OutlineSection[]>([]);
+  const [articleTitle, setArticleTitle] = useState("");
+  const [outlineLoading, setOutlineLoading] = useState(false);
+  const [outlineError, setOutlineError] = useState<string | null>(null);
+  const [expandedSection, setExpandedSection] = useState<number | null>(null);
+  const [editingTitles, setEditingTitles] = useState<Record<number, string>>({});
+  const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
+  const [savePulse, setSavePulse] = useState(false);
+  const prevCardIdRef = useRef<string | null>(null);
+  const preloadedPlanRef = useRef<{ outline: V2OutlineSection[]; title: string; brief: BriefFields } | null>(null);
+
+  // ── Article step state (static mockup until wired in next build) ───────────
   const [accepted, setAccepted] = useState<number[]>([]);
   const [dismissed, setDismissed] = useState<number[]>([]);
   const liveScore = 71 + accepted.length * 6;
 
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "212px 1fr 340px", gap: 28, alignItems: "start" }}>
-      {/* Outline */}
-      <aside style={{ position: "sticky", top: 180 }}>
-        <EyebrowLabel>OUTLINE</EyebrowLabel>
-        <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 14 }}>
-          {OUTLINE_ITEMS.map(o => (
-            <div key={o.label} style={{ padding: "8px 10px", borderRadius: 7, fontSize: 12, fontWeight: o.weight as never, lineHeight: 1.4, background: o.bg, paddingLeft: o.indent, color: o.color }}>{o.label}</div>
-          ))}
-        </div>
-        <div style={{ marginTop: 24, padding: 14, border: "1px solid rgba(22,61,38,.14)", borderRadius: 9 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 8 }}>Answer block coverage</div>
-          <div style={{ fontSize: 11, fontWeight: 400, lineHeight: 1.5, color: "rgba(22,61,38,.68)" }}>4 of 6 sections open with a direct, quotable answer.</div>
-        </div>
-      </aside>
+  // ── Load saved plans from localStorage on mount ────────────────────────────
+  useEffect(() => { setSavedPlans(readSavedPlans()); }, []);
 
-      {/* Document */}
-      <section style={{ padding: "44px 48px", border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
-        <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".12em", color: C.mid }}>DRAFT · V3 · AUTOSAVED</div>
-        <h2 style={{ margin: "14px 0 0", fontSize: 30, fontWeight: 700, lineHeight: 1.15, letterSpacing: "-.6px" }}>What is generative engine optimization?</h2>
-        <p style={{ margin: "20px 0 0", fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: C.dark }}>Generative engine optimization is the practice of structuring content so that answer engines quote it. Where search optimization competed for a ranked link, GEO competes for a sentence inside a generated answer.</p>
-        <div style={{ marginTop: 28 }}>
-          <h3 style={{ margin: "0 0 12px", fontSize: 17, fontWeight: 600 }}>GEO versus SEO</h3>
-          <p style={{ margin: 0, fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: C.dark }}>Both aim at discovery, but the unit of victory differs. SEO wins a position in a list. GEO wins a clause inside a synthesized answer, which means the writing has to be extractable on its own.</p>
-        </div>
-        <div style={{ marginTop: 28 }}>
-          <h3 style={{ margin: "0 0 12px", fontSize: 17, fontWeight: 600 }}>How engines pick sources</h3>
-          <p style={{ margin: 0, fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: C.dark, background: accepted.length > 0 ? "rgba(24,95,0,.06)" : "transparent", borderLeft: accepted.length > 0 ? `3px solid ${C.mid}` : "0", padding: accepted.length > 0 ? "14px 16px" : 0 }}>
-            {accepted.length > 0 ? "Retrieval favours pages that state a claim plainly, attribute it, and repeat the entity by name. In our sample of 4,100 answers, 71 percent of cited passages were under 60 words." : "Retrieval favours pages that state claims plainly. Engines tend to prefer content that is easy to quote."}
-          </p>
-        </div>
-        <div style={{ marginTop: 28 }}>
-          <h3 style={{ margin: "0 0 12px", fontSize: 17, fontWeight: 600 }}>A working checklist</h3>
-          <p style={{ margin: 0, fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: C.dark }}>Open every section with a direct answer. Attribute every number. Name the entity instead of writing it or the company. Keep paragraphs under 60 words so a passage can be lifted whole.</p>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 36, paddingTop: 24, borderTop: "1px solid rgba(22,61,38,.1)" }}>
-          <button onClick={onScore} style={{ padding: "12px 18px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer" }}>Rescore draft</button>
-          <button onClick={onPublish} style={{ padding: "12px 18px", border: "1px solid rgba(22,61,38,.28)", borderRadius: 8, fontSize: 13, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark }}>Send to WordPress</button>
-          <div style={{ marginLeft: "auto", fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.6)" }}>{accepted.length} of 3 suggestions applied</div>
-        </div>
-      </section>
+  // ── Generate outline when a card is activated ──────────────────────────────
+  useEffect(() => {
+    if (!activeCardId || prevCardIdRef.current === activeCardId) return;
+    prevCardIdRef.current = activeCardId;
 
-      {/* Live score + suggestions */}
-      <aside style={{ position: "sticky", top: 180, display: "flex", flexDirection: "column", gap: 16 }}>
-        <div style={{ padding: 20, border: `1px solid ${C.border}`, borderRadius: 12, background: C.dark, color: C.white }}>
-          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", opacity: .75 }}>LIVE GEO SCORE</div>
-            <div style={{ fontSize: 11, fontWeight: 400, opacity: .7 }}>{accepted.length ? `up ${accepted.length * 6} this session` : "no change yet"}</div>
-          </div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 12 }}>
-            <div style={{ fontSize: 40, fontWeight: 700, lineHeight: 1, letterSpacing: -1.4, color: C.salmon }}>{liveScore}</div>
-            <div style={{ fontSize: 12, fontWeight: 600, opacity: .7 }}>/ 100</div>
-          </div>
-        </div>
-        <EyebrowLabel>AI SUGGESTIONS</EyebrowLabel>
-        {SUGGESTIONS_DATA.map((sg, i) => {
-          const isAccepted = accepted.includes(i);
-          const isDismissed = dismissed.includes(i);
-          return (
-            <div key={i} style={{ padding: 18, border: `1px solid ${isAccepted ? C.mid : isDismissed ? "rgba(22,61,38,.1)" : "rgba(22,61,38,.16)"}`, borderRadius: 11, background: isAccepted ? "rgba(24,95,0,.06)" : isDismissed ? "rgba(22,61,38,.03)" : C.white }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", padding: "3px 7px", borderRadius: 5, background: "rgba(24,95,0,.12)", color: C.mid }}>{sg.kind}</span>
-                <span style={{ fontSize: 11, fontWeight: 600, color: "rgba(22,61,38,.62)" }}>{sg.impact}</span>
-              </div>
-              <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.45 }}>{sg.title}</div>
-              <div style={{ marginTop: 8, fontSize: 12, fontWeight: 400, lineHeight: 1.5, color: "rgba(22,61,38,.72)" }}>{sg.body}</div>
-              <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-                <button onClick={() => { setAccepted(prev => prev.includes(i) ? prev : [...prev, i]); setDismissed(prev => prev.filter(x => x !== i)); }} style={{ padding: "8px 13px", borderRadius: 7, background: C.dark, color: C.white, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer" }}>{isAccepted ? "Applied" : "Apply"}</button>
-                <button onClick={() => { setDismissed(prev => prev.includes(i) ? prev : [...prev, i]); setAccepted(prev => prev.filter(x => x !== i)); }} style={{ padding: "8px 13px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 7, fontSize: 11, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark }}>Dismiss</button>
+    // If resuming a saved plan — skip the API call and restore directly
+    if (preloadedPlanRef.current) {
+      const { outline: saved, title, brief: savedBrief } = preloadedPlanRef.current;
+      void savedBrief;
+      preloadedPlanRef.current = null;
+      setEditorStep("plan");
+      setOutline(saved);
+      setArticleTitle(title);
+      setEditingTitles({});
+      setExpandedSection(null);
+      setOutlineError(null);
+      setOutlineLoading(false);
+      return;
+    }
+
+    const card = draftCards?.find(c => c.opportunityId === activeCardId);
+    setEditorStep("plan");
+    setOutline([]);
+    setEditingTitles({});
+    setExpandedSection(null);
+    setOutlineError(null);
+    setOutlineLoading(true);
+
+    fetch(`/api/builder-sessions/${activeCardId}/generate-outline`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ topic_title: card?.brief?.prompt ?? "Article" }),
+    })
+      .then(r => r.ok ? r.json() as Promise<{ article_title: string; sections: V2OutlineSection[] }> : Promise.reject(r.statusText))
+      .then(data => {
+        setArticleTitle(data.article_title ?? card?.brief?.prompt ?? "Article");
+        setOutline(data.sections ?? []);
+      })
+      .catch(e => setOutlineError(String(e)))
+      .finally(() => setOutlineLoading(false));
+  }, [activeCardId, draftCards]);
+
+  // ── Save current plan ──────────────────────────────────────────────────────
+  function handleSavePlan() {
+    if (!activeCardId || outline.length === 0) return;
+    const card = draftCards?.find(c => c.opportunityId === activeCardId);
+    const finalOutline = outline.map((s, i) => ({
+      ...s,
+      title: editingTitles[i] !== undefined ? editingTitles[i] : s.title,
+    }));
+    const plan: SavedPlan = {
+      opportunityId: activeCardId,
+      articleTitle,
+      outline: finalOutline,
+      brief: card?.brief ?? {},
+      savedAt: new Date().toISOString(),
+    };
+    const existing = readSavedPlans();
+    const updated = [plan, ...existing.filter(p => p.opportunityId !== activeCardId)];
+    writeSavedPlans(updated);
+    setSavedPlans(updated);
+    setSavePulse(true);
+    setTimeout(() => setSavePulse(false), 1400);
+  }
+
+  // ── Resume a saved plan ────────────────────────────────────────────────────
+  function handleResumeSavedPlan(plan: SavedPlan) {
+    preloadedPlanRef.current = { outline: plan.outline, title: plan.articleTitle, brief: plan.brief };
+    prevCardIdRef.current = null; // allow the useEffect to fire for this id
+    onActivateCard(plan.opportunityId);
+  }
+
+  // ── Delete a saved plan ────────────────────────────────────────────────────
+  function handleDeleteSavedPlan(opportunityId: string) {
+    const updated = savedPlans.filter(p => p.opportunityId !== opportunityId);
+    writeSavedPlans(updated);
+    setSavedPlans(updated);
+  }
+
+  // ── Helper: get the (possibly edited) title for a section ─────────────────
+  function getSectionTitle(idx: number, original: string) {
+    return editingTitles[idx] !== undefined ? editingTitles[idx] : original;
+  }
+
+  // ── Card grid ──────────────────────────────────────────────────────────────
+  const showCardGrid = (draftCards?.length ?? 0) > 0 && !activeCardId;
+
+  if (showCardGrid) {
+    return (
+      <div>
+        {/* ── Saved plans section ── */}
+        {savedPlans.length > 0 && (
+          <div style={{ marginBottom: 48 }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 20 }}>
+              <div>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 8 }}>SAVED PLANS</div>
+                <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
+                  {savedPlans.length} plan{savedPlans.length !== 1 ? "s" : ""} in progress
+                </h2>
               </div>
             </div>
-          );
-        })}
-      </aside>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
+              {savedPlans.map(plan => (
+                <div key={plan.opportunityId} style={{ padding: 24, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", minHeight: 200, position: "relative" }}>
+                  {/* Remove button */}
+                  <button
+                    onClick={() => handleDeleteSavedPlan(plan.opportunityId)}
+                    title="Remove"
+                    style={{ position: "absolute", top: 10, right: 10, width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid rgba(249,57,67,.35)`, background: "rgba(249,57,67,.07)", color: C.red, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0 }}
+                  >×</button>
+
+                  {/* Header */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, paddingRight: 28 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: C.mid, background: "rgba(24,95,0,.1)", padding: "4px 9px", borderRadius: 20 }}>PLAN SAVED</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, padding: "4px 9px", borderRadius: 20, background: C.faint, color: "rgba(22,61,38,.6)" }}>{plan.outline.length} sections</span>
+                  </div>
+
+                  {/* Title */}
+                  <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4, color: C.dark, marginBottom: 10, flex: 1 }}>
+                    {plan.articleTitle || plan.brief?.prompt || "Untitled plan"}
+                  </div>
+
+                  {/* Section type chips */}
+                  <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 14 }}>
+                    {plan.outline.slice(0, 5).map((s, i) => {
+                      const ts = sectionTypeStyle(s.type);
+                      return (
+                        <span key={i} style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".06em", padding: "2px 6px", borderRadius: 4, background: ts.bg, color: ts.color, textTransform: "uppercase" }}>
+                          {s.type}
+                        </span>
+                      );
+                    })}
+                    {plan.outline.length > 5 && (
+                      <span style={{ fontSize: 9, fontWeight: 600, padding: "2px 6px", borderRadius: 4, background: C.faint, color: "rgba(22,61,38,.5)" }}>+{plan.outline.length - 5}</span>
+                    )}
+                  </div>
+
+                  {/* Timestamp */}
+                  <div style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.42)", marginBottom: 16, paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.08)" }}>
+                    {timeAgo(plan.savedAt)}
+                  </div>
+
+                  {/* Resume button */}
+                  <button
+                    onClick={() => handleResumeSavedPlan(plan)}
+                    style={{ width: "100%", padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
+                  >
+                    Resume plan
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ── All opportunities section ── */}
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 28 }}>
+          <div>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 8 }}>ALL OPPORTUNITIES</div>
+            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
+              {draftCards!.length} brief{draftCards!.length !== 1 ? "s" : ""} ready to build
+            </h2>
+          </div>
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
+          {draftCards!.map(card => (
+            <DraftCardComponent
+              key={card.opportunityId}
+              card={card}
+              onCreateArticle={() => onActivateCard(card.opportunityId)}
+              onResume={onResumeChat}
+              onRemove={() => onTrashCard?.(card.opportunityId)}
+            />
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Back button (shared between plan and article steps) ───────────────────
+  const BackBtn = ({ label, onClick }: { label: string; onClick: () => void }) => (
+    <button
+      onClick={onClick}
+      style={{ display: "inline-flex", alignItems: "center", gap: 8, marginBottom: 28, padding: "8px 14px", border: "1px solid rgba(22,61,38,.22)", borderRadius: 8, fontSize: 12, fontWeight: 600, background: C.white, color: C.dark, cursor: "pointer" }}
+    >
+      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M10 12L6 8l4-4" />
+      </svg>
+      {label}
+    </button>
+  );
+
+  // ── Step breadcrumb ────────────────────────────────────────────────────────
+  const StepBar = ({ current }: { current: 1 | 2 }) => (
+    <div style={{ display: "flex", alignItems: "center", gap: 0, marginBottom: 32 }}>
+      {([
+        [1, "Plan"],
+        [2, "Article"],
+      ] as [number, string][]).map(([n, label], i) => {
+        const active = current === n;
+        const done = current > n;
+        return (
+          <div key={n} style={{ display: "flex", alignItems: "center" }}>
+            {i > 0 && <div style={{ width: 32, height: 1, background: done ? C.mid : "rgba(22,61,38,.2)", margin: "0 12px" }} />}
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <div style={{ width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, background: active ? C.dark : done ? C.mid : "rgba(22,61,38,.1)", color: active || done ? C.white : "rgba(22,61,38,.4)" }}>
+                {done ? "✓" : n}
+              </div>
+              <span style={{ fontSize: 12, fontWeight: active ? 700 : 500, color: active ? C.dark : done ? C.mid : "rgba(22,61,38,.4)" }}>{label}</span>
+            </div>
+          </div>
+        );
+      })}
     </div>
+  );
+
+  // ── PLAN STEP ─────────────────────────────────────────────────────────────
+  if (editorStep === "plan") {
+    const activeCard = draftCards?.find(c => c.opportunityId === activeCardId);
+
+    return (
+      <div style={{ maxWidth: 820 }}>
+        <BackBtn label="All opportunities" onClick={onBackToCards} />
+        <StepBar current={1} />
+
+        {/* Header */}
+        <div style={{ marginBottom: 32 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 10 }}>ARTICLE PLAN</div>
+          <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700, lineHeight: 1.2, letterSpacing: "-.4px" }}>
+            {outlineLoading ? "Generating outline…" : (articleTitle || activeCard?.brief?.prompt || "Article plan")}
+          </h2>
+          {activeCard?.brief?.client && (
+            <div style={{ marginTop: 8, fontSize: 12, color: "rgba(22,61,38,.6)", fontWeight: 500 }}>
+              Client: {activeCard.brief.client}
+              {activeCard.brief.format && <span style={{ marginLeft: 12 }}>{activeCard.brief.format}</span>}
+            </div>
+          )}
+        </div>
+
+        {/* Loading skeletons */}
+        {outlineLoading && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {[1,2,3,4,5].map(i => (
+              <div key={i} style={{ height: 72, borderRadius: 10, background: "rgba(22,61,38,.06)", animation: "pulse 1.4s ease-in-out infinite", animationDelay: `${i * 0.1}s` }} />
+            ))}
+            <div style={{ marginTop: 8, fontSize: 12, color: "rgba(22,61,38,.5)", fontWeight: 500 }}>
+              Building a GEO-optimised plan for this topic…
+            </div>
+          </div>
+        )}
+
+        {/* Error state */}
+        {outlineError && !outlineLoading && (
+          <div style={{ padding: "20px 24px", border: `1px solid rgba(249,57,67,.3)`, borderRadius: 10, background: "rgba(249,57,67,.04)", color: C.red, fontSize: 13 }}>
+            <div style={{ fontWeight: 700, marginBottom: 4 }}>Could not generate outline</div>
+            <div style={{ fontWeight: 400, opacity: .8 }}>{outlineError}</div>
+            <button
+              onClick={() => { prevCardIdRef.current = null; setOutlineError(null); }}
+              style={{ marginTop: 14, padding: "8px 14px", borderRadius: 7, background: C.red, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+
+        {/* Outline sections */}
+        {!outlineLoading && outline.length > 0 && (
+          <>
+            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+              {outline.map((section, idx) => {
+                const typeStyle = sectionTypeStyle(section.type);
+                const isExpanded = expandedSection === idx;
+                const editedTitle = getSectionTitle(idx, section.title);
+
+                return (
+                  <div
+                    key={idx}
+                    style={{ border: `1px solid ${isExpanded ? "rgba(22,61,38,.22)" : C.border}`, borderRadius: 10, background: isExpanded ? C.white : "rgba(255,255,255,.7)", transition: "all .15s" }}
+                  >
+                    {/* Section header row */}
+                    <div
+                      style={{ display: "flex", alignItems: "center", gap: 14, padding: "16px 18px", cursor: "pointer" }}
+                      onClick={() => setExpandedSection(isExpanded ? null : idx)}
+                    >
+                      <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(22,61,38,.08)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "rgba(22,61,38,.55)", flexShrink: 0 }}>
+                        {String(idx + 1).padStart(2, "0")}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        {isExpanded ? (
+                          <input
+                            value={editedTitle}
+                            onChange={e => setEditingTitles(prev => ({ ...prev, [idx]: e.target.value }))}
+                            onClick={e => e.stopPropagation()}
+                            style={{ width: "100%", fontSize: 14, fontWeight: 600, color: C.dark, border: "none", background: "transparent", outline: "none", padding: 0 }}
+                          />
+                        ) : (
+                          <div style={{ fontSize: 14, fontWeight: 600, color: C.dark, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            {editedTitle}
+                          </div>
+                        )}
+                      </div>
+                      <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", padding: "3px 8px", borderRadius: 5, background: typeStyle.bg, color: typeStyle.color, textTransform: "uppercase", flexShrink: 0 }}>
+                        {section.type}
+                      </span>
+                      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, opacity: .45, transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform .15s" }}>
+                        <path d="M4 6l4 4 4-4" />
+                      </svg>
+                    </div>
+
+                    {/* Description bullets (expanded) */}
+                    {isExpanded && section.description.length > 0 && (
+                      <div style={{ padding: "0 18px 18px 60px", display: "flex", flexDirection: "column", gap: 6, borderTop: "1px solid rgba(22,61,38,.07)" }}>
+                        <div style={{ paddingTop: 14 }}>
+                          {section.description.map((line, li) => (
+                            <div key={li} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 6 }}>
+                              <div style={{ width: 14, height: 1.5, background: C.mid, marginTop: 9, flexShrink: 0 }} />
+                              <div style={{ fontSize: 12, fontWeight: 400, lineHeight: 1.55, color: "rgba(22,61,38,.72)" }}>{line}</div>
+                            </div>
+                          ))}
+                          {section.keywords.length > 0 && (
+                            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+                              {section.keywords.map(kw => (
+                                <span key={kw} style={{ fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: 20, background: "rgba(22,61,38,.07)", color: "rgba(22,61,38,.65)" }}>{kw}</span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Actions */}
+            <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 32, paddingTop: 24, borderTop: "1px solid rgba(22,61,38,.1)" }}>
+              <button
+                onClick={() => setEditorStep("article")}
+                style={{ padding: "13px 24px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
+              >
+                Generate article
+                <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 8h8M9 4l4 4-4 4" />
+                </svg>
+              </button>
+              <button
+                onClick={handleSavePlan}
+                style={{ padding: "13px 18px", border: `1.5px solid ${savePulse ? C.mid : "rgba(22,61,38,.28)"}`, borderRadius: 8, fontSize: 13, fontWeight: 600, background: savePulse ? "rgba(24,95,0,.07)" : "none", cursor: "pointer", color: savePulse ? C.mid : C.dark, display: "flex", alignItems: "center", gap: 7, transition: "all .2s" }}
+              >
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M13 2H4L2 4v10h12V4l-1-2z" /><path d="M5 2v4h6V2" /><rect x="4" y="10" width="8" height="4" />
+                </svg>
+                {savePulse ? "Saved!" : "Save"}
+              </button>
+              <button
+                onClick={() => { prevCardIdRef.current = null; setOutlineLoading(true); setOutline([]); }}
+                style={{ padding: "13px 18px", border: "1px solid rgba(22,61,38,.28)", borderRadius: 8, fontSize: 13, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark }}
+              >
+                Regenerate outline
+              </button>
+              <div style={{ marginLeft: "auto", fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.5)" }}>
+                {outline.length} sections · click any row to expand
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
+
+  // ── ARTICLE STEP ──────────────────────────────────────────────────────────
+  return (
+    <>
+      <BackBtn label="Back to plan" onClick={() => setEditorStep("plan")} />
+      <StepBar current={2} />
+
+      <div style={{ display: "grid", gridTemplateColumns: "212px 1fr 340px", gap: 28, alignItems: "start" }}>
+        {/* Outline sidebar */}
+        <aside style={{ position: "sticky", top: 180 }}>
+          <EyebrowLabel>OUTLINE</EyebrowLabel>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 14 }}>
+            {outline.length > 0 ? outline.map((s, i) => (
+              <div key={i} style={{ padding: "8px 10px", borderRadius: 7, fontSize: 12, fontWeight: i === 0 ? 600 : 400, lineHeight: 1.4, background: i === 0 ? "rgba(22,61,38,.09)" : "transparent", color: C.dark }}>
+                {getSectionTitle(i, s.title)}
+              </div>
+            )) : OUTLINE_ITEMS.map(o => (
+              <div key={o.label} style={{ padding: "8px 10px", borderRadius: 7, fontSize: 12, fontWeight: o.weight as never, lineHeight: 1.4, background: o.bg, paddingLeft: o.indent, color: o.color }}>{o.label}</div>
+            ))}
+          </div>
+          <div style={{ marginTop: 24, padding: 14, border: "1px solid rgba(22,61,38,.14)", borderRadius: 9 }}>
+            <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 8 }}>Answer block coverage</div>
+            <div style={{ fontSize: 11, fontWeight: 400, lineHeight: 1.5, color: "rgba(22,61,38,.68)" }}>4 of 6 sections open with a direct, quotable answer.</div>
+          </div>
+        </aside>
+
+        {/* Document */}
+        <section style={{ padding: "44px 48px", border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".12em", color: C.mid }}>DRAFT · GENERATING…</div>
+          <h2 style={{ margin: "14px 0 0", fontSize: 30, fontWeight: 700, lineHeight: 1.15, letterSpacing: "-.6px" }}>
+            {articleTitle || "Generating article…"}
+          </h2>
+          <p style={{ margin: "20px 0 0", fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: C.dark }}>Generative engine optimization is the practice of structuring content so that answer engines quote it. Where search optimization competed for a ranked link, GEO competes for a sentence inside a generated answer.</p>
+          <div style={{ marginTop: 28 }}>
+            <h3 style={{ margin: "0 0 12px", fontSize: 17, fontWeight: 600 }}>GEO versus SEO</h3>
+            <p style={{ margin: 0, fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: C.dark }}>Both aim at discovery, but the unit of victory differs. SEO wins a position in a list. GEO wins a clause inside a synthesized answer, which means the writing has to be extractable on its own.</p>
+          </div>
+          <div style={{ marginTop: 28 }}>
+            <h3 style={{ margin: "0 0 12px", fontSize: 17, fontWeight: 600 }}>How engines pick sources</h3>
+            <p style={{ margin: 0, fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: C.dark, background: accepted.length > 0 ? "rgba(24,95,0,.06)" : "transparent", borderLeft: accepted.length > 0 ? `3px solid ${C.mid}` : "0", padding: accepted.length > 0 ? "14px 16px" : 0 }}>
+              {accepted.length > 0 ? "Retrieval favours pages that state a claim plainly, attribute it, and repeat the entity by name. In our sample of 4,100 answers, 71 percent of cited passages were under 60 words." : "Retrieval favours pages that state claims plainly. Engines tend to prefer content that is easy to quote."}
+            </p>
+          </div>
+          <div style={{ marginTop: 28 }}>
+            <h3 style={{ margin: "0 0 12px", fontSize: 17, fontWeight: 600 }}>A working checklist</h3>
+            <p style={{ margin: 0, fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: C.dark }}>Open every section with a direct answer. Attribute every number. Name the entity instead of writing it or the company. Keep paragraphs under 60 words so a passage can be lifted whole.</p>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 36, paddingTop: 24, borderTop: "1px solid rgba(22,61,38,.1)" }}>
+            <button onClick={onScore} style={{ padding: "12px 18px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer" }}>Rescore draft</button>
+            <button onClick={onPublish} style={{ padding: "12px 18px", border: "1px solid rgba(22,61,38,.28)", borderRadius: 8, fontSize: 13, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark }}>Send to WordPress</button>
+            <div style={{ marginLeft: "auto", fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.6)" }}>{accepted.length} of 3 suggestions applied</div>
+          </div>
+        </section>
+
+        {/* Live score + suggestions */}
+        <aside style={{ position: "sticky", top: 180, display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ padding: 20, border: `1px solid ${C.border}`, borderRadius: 12, background: C.dark, color: C.white }}>
+            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", opacity: .75 }}>LIVE GEO SCORE</div>
+              <div style={{ fontSize: 11, fontWeight: 400, opacity: .7 }}>{accepted.length ? `up ${accepted.length * 6} this session` : "no change yet"}</div>
+            </div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 12 }}>
+              <div style={{ fontSize: 40, fontWeight: 700, lineHeight: 1, letterSpacing: -1.4, color: C.salmon }}>{liveScore}</div>
+              <div style={{ fontSize: 12, fontWeight: 600, opacity: .7 }}>/ 100</div>
+            </div>
+          </div>
+          <EyebrowLabel>AI SUGGESTIONS</EyebrowLabel>
+          {SUGGESTIONS_DATA.map((sg, i) => {
+            const isAccepted = accepted.includes(i);
+            const isDismissed = dismissed.includes(i);
+            return (
+              <div key={i} style={{ padding: 18, border: `1px solid ${isAccepted ? C.mid : isDismissed ? "rgba(22,61,38,.1)" : "rgba(22,61,38,.16)"}`, borderRadius: 11, background: isAccepted ? "rgba(24,95,0,.06)" : isDismissed ? "rgba(22,61,38,.03)" : C.white }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                  <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", padding: "3px 7px", borderRadius: 5, background: "rgba(24,95,0,.12)", color: C.mid }}>{sg.kind}</span>
+                  <span style={{ fontSize: 11, fontWeight: 600, color: "rgba(22,61,38,.62)" }}>{sg.impact}</span>
+                </div>
+                <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.45 }}>{sg.title}</div>
+                <div style={{ marginTop: 8, fontSize: 12, fontWeight: 400, lineHeight: 1.5, color: "rgba(22,61,38,.72)" }}>{sg.body}</div>
+                <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                  <button onClick={() => { setAccepted(prev => prev.includes(i) ? prev : [...prev, i]); setDismissed(prev => prev.filter(x => x !== i)); }} style={{ padding: "8px 13px", borderRadius: 7, background: C.dark, color: C.white, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer" }}>{isAccepted ? "Applied" : "Apply"}</button>
+                  <button onClick={() => { setDismissed(prev => prev.includes(i) ? prev : [...prev, i]); setAccepted(prev => prev.filter(x => x !== i)); }} style={{ padding: "8px 13px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 7, fontSize: 11, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark }}>Dismiss</button>
+                </div>
+              </div>
+            );
+          })}
+        </aside>
+      </div>
+    </>
   );
 }
 
@@ -1183,13 +1910,486 @@ function SettingsScreen() {
   );
 }
 
+// ─── Usage screen (v2-native, independent of v1) ─────────────────────────────
+
+interface V2UsageSummary {
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalEstimatedUsd: number;
+  totalCalls: number;
+  byFeature: { feature: string; calls: number; estimatedUsd: number; tokens: number }[];
+  byDay: { date: string; estimatedUsd: number; calls: number }[];
+}
+
+const FEATURE_NAMES: Record<string, string> = {
+  "content-forge/create":       "Content Forge — Create",
+  "content-forge/blog":         "Content Forge — Blog",
+  "content-forge/linkedin":     "Content Forge — LinkedIn",
+  "illustration":               "Illustration Generation",
+  "article-outline":            "Article Outline",
+  "article-draft":              "Article Draft",
+  "article-refine":             "Article Refine",
+  "article-chat":               "Article Builder Chat",
+  "article-section-revise":     "Section Revision",
+  "article-selection-rewrite":  "Selection Rewrite",
+  "geo-metadata":               "GEO Metadata",
+  "geo-fix":                    "GEO Fix",
+  "ai-suggest":                 "AI Suggest",
+  "identity-analysis":          "Identity Analysis",
+  "opportunity-generate":       "Opportunity Generation",
+};
+
+function fmtUsd(n: number) { return n < 0.01 ? "<$0.01" : `$${n.toFixed(4)}`; }
+function fmtTok(n: number) {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
+  return String(n);
+}
+
+function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChange: (n: number) => void }) {
+  const [data, setData] = useState<V2UsageSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [days, setDays] = useState(30);
+  const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
+  const [budgetInput, setBudgetInput] = useState(String(budget));
+
+  // Sync budget from server on mount
+  useEffect(() => {
+    fetch("/api/usage/budget")
+      .then(r => r.ok ? r.json() : null)
+      .then(json => {
+        if (json && typeof json.budget === "number" && json.budget > 0) {
+          setBudgetInput(String(json.budget));
+          if (json.budget !== budget) onBudgetChange(json.budget);
+        }
+      })
+      .catch(() => { /* keep localStorage value */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function load(d: number) {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/usage?days=${d}`);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+      }
+      setData((await res.json()) as V2UsageSummary);
+      setLastRefreshed(new Date());
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load usage");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { load(days); }, [days]);
+
+  const totalTokens = data ? data.totalInputTokens + data.totalOutputTokens : 0;
+  const maxDayUsd = data?.byDay.length ? Math.max(...data.byDay.map(d => d.estimatedUsd), 0.0001) : 0.0001;
+
+  const pill = (label: string, active: boolean, onClick: () => void) => (
+    <button onClick={onClick} style={{ padding: "5px 14px", borderRadius: 20, fontSize: 12, fontWeight: 600, border: `1px solid ${active ? C.dark : C.border}`, background: active ? C.dark : "transparent", color: active ? C.white : C.muted, cursor: "pointer" }}>
+      {label}
+    </button>
+  );
+
+  const statTile = (label: string, value: string, sub: string) => (
+    <div style={{ flex: 1, padding: "20px 24px", background: C.white, borderRadius: 12, border: `1px solid ${C.border}` }}>
+      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", opacity: .55, marginBottom: 8 }}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: "-.02em", fontVariantNumeric: "tabular-nums", color: C.dark }}>{value}</div>
+      <div style={{ fontSize: 11, color: C.muted, marginTop: 4 }}>{sub}</div>
+    </div>
+  );
+
+  return (
+    <div style={{ maxWidth: 860 }}>
+      {/* Header row */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: 28, gap: 16 }}>
+        <div>
+          {lastRefreshed && (
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 4, fontVariantNumeric: "tabular-nums" }}>
+              Last refreshed: {lastRefreshed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })} · {lastRefreshed.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {pill("7d", days === 7, () => setDays(7))}
+          {pill("30d", days === 30, () => setDays(30))}
+          {pill("90d", days === 90, () => setDays(90))}
+          <button onClick={() => load(days)} style={{ padding: "5px 10px", borderRadius: 20, fontSize: 12, fontWeight: 600, border: `1px solid ${C.border}`, background: "transparent", color: C.muted, cursor: "pointer" }}>
+            ↻
+          </button>
+        </div>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div style={{ padding: "12px 16px", borderRadius: 8, background: "#FFF0F0", border: "1px solid rgba(249,57,67,.25)", color: C.red, fontSize: 13, marginBottom: 24 }}>
+          {error}
+        </div>
+      )}
+
+      {/* Loading */}
+      {loading && !data && (
+        <div style={{ padding: "60px 0", textAlign: "center", color: C.muted, fontSize: 13 }}>Loading…</div>
+      )}
+
+      {data && (
+        <>
+          {/* Stat tiles */}
+          <div style={{ display: "flex", gap: 16, marginBottom: 24 }}>
+            {statTile("ESTIMATED SPEND", `$${data.totalEstimatedUsd.toFixed(4)}`, `last ${days} days`)}
+            {statTile("TOTAL TOKENS", fmtTok(totalTokens), `${fmtTok(data.totalInputTokens)} in · ${fmtTok(data.totalOutputTokens)} out`)}
+            {statTile("API CALLS", data.totalCalls.toLocaleString(), "logged requests")}
+          </div>
+
+          {/* Budget warning / block banners */}
+          {(() => {
+            const activeBudget = parseInt(budgetInput, 10) || budget;
+            const pct = activeBudget > 0 ? (data.totalCalls / activeBudget) * 100 : 100;
+            if (pct >= 100) return (
+              <div style={{ padding: "12px 16px", borderRadius: 8, background: "#FFF0F0", border: "1px solid rgba(249,57,67,.35)", color: C.red, fontSize: 13, fontWeight: 600, marginBottom: 24, display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 16 }}>🚫</span>
+                <span>Monthly call limit reached — all AI features are currently blocked. Raise the budget below to resume.</span>
+              </div>
+            );
+            if (pct >= 80) return (
+              <div style={{ padding: "12px 16px", borderRadius: 8, background: "#FFFBF0", border: "1px solid rgba(245,166,35,.45)", color: "#92600A", fontSize: 13, fontWeight: 500, marginBottom: 24, display: "flex", alignItems: "center", gap: 10 }}>
+                <span style={{ fontSize: 16 }}>⚠️</span>
+                <span>Approaching your monthly limit — {data.totalCalls} of {activeBudget} calls used ({pct.toFixed(0)}%). Raise the budget below if needed.</span>
+              </div>
+            );
+            return null;
+          })()}
+
+          {/* Daily chart */}
+          {data.byDay.length > 0 && (
+            <div style={{ padding: "20px 24px", background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 24 }}>
+              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", opacity: .55, marginBottom: 16 }}>DAILY SPEND</div>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 72 }}>
+                {data.byDay.map(d => {
+                  const pct = (d.estimatedUsd / maxDayUsd) * 100;
+                  const label = d.date.slice(5);
+                  return (
+                    <div key={d.date} title={`${label}: ${fmtUsd(d.estimatedUsd)}`} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, height: "100%", justifyContent: "flex-end" }}>
+                      <div style={{ width: "100%", height: `${Math.max(pct, 2)}%`, background: C.mid, borderRadius: "3px 3px 0 0", opacity: .75 }} />
+                      {data.byDay.length <= 10 && <div style={{ fontSize: 9, color: C.muted, lineHeight: 1 }}>{label}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Feature breakdown */}
+          {data.byFeature.length > 0 ? (
+            <div style={{ background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, overflow: "hidden" }}>
+              <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.border}` }}>
+                <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", opacity: .55 }}>COST BY FEATURE</div>
+              </div>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: `1px solid ${C.border}` }}>
+                    {["Feature", "Calls", "Tokens", "Est. Cost", "Share"].map(h => (
+                      <th key={h} style={{ padding: "10px 24px", textAlign: h === "Feature" ? "left" : "right", fontSize: 11, fontWeight: 600, letterSpacing: ".06em", color: C.muted }}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.byFeature.map((f, i) => {
+                    const share = data.totalEstimatedUsd > 0 ? (f.estimatedUsd / data.totalEstimatedUsd) * 100 : 0;
+                    return (
+                      <tr key={f.feature} style={{ borderBottom: i < data.byFeature.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                        <td style={{ padding: "12px 24px", fontWeight: 500 }}>{FEATURE_NAMES[f.feature] ?? f.feature}</td>
+                        <td style={{ padding: "12px 24px", textAlign: "right", color: C.muted, fontVariantNumeric: "tabular-nums" }}>{f.calls}</td>
+                        <td style={{ padding: "12px 24px", textAlign: "right", color: C.muted, fontVariantNumeric: "tabular-nums" }}>{fmtTok(f.tokens)}</td>
+                        <td style={{ padding: "12px 24px", textAlign: "right", fontWeight: 600, fontVariantNumeric: "tabular-nums" }}>{fmtUsd(f.estimatedUsd)}</td>
+                        <td style={{ padding: "12px 24px", textAlign: "right" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, justifyContent: "flex-end" }}>
+                            <div style={{ width: 80, height: 4, borderRadius: 4, background: C.faint, overflow: "hidden" }}>
+                              <div style={{ height: "100%", width: `${share.toFixed(1)}%`, background: C.mid, borderRadius: 4 }} />
+                            </div>
+                            <span style={{ fontSize: 11, color: C.muted, minWidth: 32, textAlign: "right", fontVariantNumeric: "tabular-nums" }}>{share.toFixed(0)}%</span>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div style={{ padding: "48px 24px", textAlign: "center", background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, color: C.muted, fontSize: 13 }}>
+              No usage recorded in the last {days} days.<br />Usage is tracked automatically as you use AI features.
+            </div>
+          )}
+
+          {/* Budget setting */}
+          <div style={{ marginTop: 24, padding: "20px 24px", background: C.white, borderRadius: 12, border: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", opacity: .55, marginBottom: 16 }}>MONTHLY BUDGET</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+              <div style={{ flex: 1, minWidth: 220 }}>
+                <div style={{ fontSize: 13, fontWeight: 500, marginBottom: 4 }}>Call limit per month</div>
+                <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.5 }}>
+                  Controls the progress bar in the sidebar. The bar turns full when API calls hit this number.
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <input
+                  type="number"
+                  min={1}
+                  value={budgetInput}
+                  onChange={e => setBudgetInput(e.target.value)}
+                  style={{ width: 96, padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 14, fontWeight: 600, fontFamily: "Montserrat, Arial, sans-serif", color: C.dark, background: C.bg, outline: "none" }}
+                />
+                <button
+                  onClick={() => {
+                    const n = parseInt(budgetInput, 10);
+                    if (n > 0) onBudgetChange(n);
+                  }}
+                  style={{ padding: "8px 18px", borderRadius: 8, background: C.dark, color: C.white, border: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "Montserrat, Arial, sans-serif" }}
+                >
+                  Save
+                </button>
+              </div>
+            </div>
+            {/* Live preview of the bar */}
+            <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 10 }}>
+              <div style={{ flex: 1, height: 6, borderRadius: 4, background: "rgba(22,61,38,.1)", overflow: "hidden" }}>
+                {(() => {
+                  const activeBudget = parseInt(budgetInput, 10) || budget;
+                  const pct = Math.min(((data?.totalCalls ?? 0) / activeBudget) * 100, 100);
+                  return <div style={{ height: "100%", width: `${pct}%`, background: creditBarColor(pct), borderRadius: 4, transition: "width .3s, background .3s" }} />;
+                })()}
+              </div>
+              <div style={{ fontSize: 12, color: C.muted, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
+                {data?.totalCalls ?? 0} of {parseInt(budgetInput, 10) || budget} calls
+              </div>
+            </div>
+          </div>
+
+          <div style={{ marginTop: 20, textAlign: "center", fontSize: 11, color: C.muted }}>
+            Token counts are exact values from the API. Costs use OpenAI list pricing — verify at platform.openai.com/usage.
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Trash screen ────────────────────────────────────────────────────────────
+
+function TrashScreen({ trashedCards, onRestore, onDeletePermanently, onEmptyTrash }: {
+  trashedCards: DraftCard[];
+  onRestore: (id: string) => void;
+  onDeletePermanently: (id: string) => void;
+  onEmptyTrash: () => void;
+}) {
+  if (trashedCards.length === 0) {
+    return (
+      <div style={{ maxWidth: 440, margin: "80px auto", textAlign: "center", padding: "48px 40px", border: "1px dashed rgba(22,61,38,.22)", borderRadius: 16, background: C.white }}>
+        <div style={{ width: 48, height: 48, margin: "0 auto 20px", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(22,61,38,.18)", borderRadius: "50%" }}>
+          <svg viewBox="0 0 20 20" width="20" height="20"><path d="M7 3h6v2H7zM3 5h14v2H3zM5 7h10l-1 10H6L5 7z" fill={C.muted} /></svg>
+        </div>
+        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Trash is empty</h2>
+        <p style={{ margin: "12px 0 0", fontSize: 13, fontWeight: 400, lineHeight: 1.55, color: C.muted }}>Removed cards will appear here. You can restore them or delete permanently.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 28 }}>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 8 }}>TRASH</div>
+          <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
+            {trashedCards.length} deleted brief{trashedCards.length !== 1 ? "s" : ""}
+          </h2>
+        </div>
+        <button
+          onClick={onEmptyTrash}
+          style={{ padding: "9px 16px", border: "1px solid rgba(249,57,67,.35)", borderRadius: 8, fontSize: 12, fontWeight: 600, background: "rgba(249,57,67,.05)", color: C.red, cursor: "pointer", whiteSpace: "nowrap" }}
+        >
+          Empty trash
+        </button>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
+        {trashedCards.map(card => (
+          <div key={card.opportunityId} style={{ padding: 24, border: "1px solid rgba(22,61,38,.09)", borderRadius: 12, background: C.white, opacity: 0.82, display: "flex", flexDirection: "column", minHeight: 200 }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "rgba(22,61,38,.4)", marginBottom: 12 }}>DELETED</div>
+            <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4, color: C.dark, flex: 1, marginBottom: 10 }}>
+              {card.brief.prompt ?? "Untitled brief"}
+            </div>
+            {card.brief.format && (
+              <div style={{ fontSize: 12, fontWeight: 400, color: C.muted, marginBottom: 6 }}>{card.brief.format}</div>
+            )}
+            {card.brief.client && (
+              <div style={{ fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 12, background: C.faint, color: C.dark, width: "fit-content", marginBottom: 6 }}>{card.brief.client}</div>
+            )}
+            <div style={{ fontSize: 11, color: "rgba(22,61,38,.38)", marginTop: 12, marginBottom: 16, paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.07)" }}>
+              {timeAgo(card.createdAt)}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={() => onRestore(card.opportunityId)}
+                style={{ flex: 1, padding: "10px 14px", borderRadius: 8, border: "1px solid rgba(22,61,38,.28)", fontSize: 12, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark }}
+              >
+                Restore
+              </button>
+              <button
+                onClick={() => onDeletePermanently(card.opportunityId)}
+                style={{ padding: "10px 14px", borderRadius: 8, border: "1px solid rgba(249,57,67,.3)", fontSize: 12, fontWeight: 600, background: "rgba(249,57,67,.05)", color: C.red, cursor: "pointer", whiteSpace: "nowrap" }}
+              >
+                Delete
+              </button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── Root page ────────────────────────────────────────────────────────────────
+
+const BUDGET_KEY        = "v2_monthly_call_budget";
+const TRASHED_CARDS_KEY = "v2_trashed_cards";
+
+function readBudget(): number {
+  try { return Math.max(1, Number(localStorage.getItem(BUDGET_KEY) ?? "200") || 200); }
+  catch { return 200; }
+}
+function readTrashedCards(): DraftCard[] {
+  try { return JSON.parse(localStorage.getItem(TRASHED_CARDS_KEY) ?? "[]") as DraftCard[]; }
+  catch { return []; }
+}
+function saveTrashedCards(cards: DraftCard[]) {
+  try { localStorage.setItem(TRASHED_CARDS_KEY, JSON.stringify(cards)); }
+  catch {}
+}
 
 export default function AtelierV2Page() {
   const [screen, setScreen] = useState<Screen>("dashboard");
   const [collapsed, setCollapsed] = useState(false);
   const [dataState] = useState<DataState>("normal");
+  const [currentOpportunityId, setCurrentOpportunityId] = useState<string | null>(null);
+  const [draftCards, setDraftCards] = useState<DraftCard[]>([]);
+  const [trashedCards, setTrashedCards] = useState<DraftCard[]>([]);
+  const [activeCardId, setActiveCardId] = useState<string | null>(null);
+  const [generateDefaultFlow, setGenerateDefaultFlow] = useState<FlowMode>("wizard");
   const { data: settings } = useSettings();
+
+  // Load trashed cards from localStorage on mount
+  useEffect(() => { setTrashedCards(readTrashedCards()); }, []);
+
+  // Load existing sessions from DB on mount — filter out trashed ones
+  useEffect(() => {
+    const trashedIds = new Set(readTrashedCards().map(c => c.opportunityId));
+    fetch("/api/builder-sessions")
+      .then(r => r.ok ? r.json() as Promise<Array<{ opportunityId: string; topicTitle: string; createdAt: string }>> : null)
+      .then(sessions => {
+        if (!sessions?.length) return;
+        const sorted = [...sessions].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setDraftCards(prev => {
+          const existingIds = new Set(prev.map(c => c.opportunityId));
+          const toAdd = sorted
+            .filter(s => !existingIds.has(s.opportunityId) && !trashedIds.has(s.opportunityId))
+            .map(s => ({
+              opportunityId: s.opportunityId,
+              brief: { prompt: s.topicTitle } as BriefFields,
+              createdAt: s.createdAt,
+            }));
+          return [...prev, ...toAdd];
+        });
+      })
+      .catch(() => {});
+  }, []);
+
+  function handleSessionCreated(opportunityId: string, brief: BriefFields) {
+    setCurrentOpportunityId(opportunityId);
+    setDraftCards(prev => [...prev, { opportunityId, brief, createdAt: new Date().toISOString() }]);
+    setActiveCardId(null);
+    setScreen("editor");
+  }
+
+  function handleActivateCard(id: string) { setActiveCardId(id); }
+
+  function handleBackToCards() {
+    setActiveCardId(null);
+    if (draftCards.length === 0) setScreen("generate");
+  }
+
+  function handleResumeChat() {
+    setGenerateDefaultFlow("chat");
+    setScreen("generate");
+  }
+
+  function handleTrashCard(id: string) {
+    const card = draftCards.find(c => c.opportunityId === id);
+    if (!card) return;
+    const newDraft = draftCards.filter(c => c.opportunityId !== id);
+    const newTrashed = [card, ...trashedCards];
+    setDraftCards(newDraft);
+    setTrashedCards(newTrashed);
+    saveTrashedCards(newTrashed);
+    if (activeCardId === id) setActiveCardId(null);
+    if (newDraft.length === 0) setActiveCardId(null);
+  }
+
+  function handleRestoreCard(id: string) {
+    const card = trashedCards.find(c => c.opportunityId === id);
+    if (!card) return;
+    const newTrashed = trashedCards.filter(c => c.opportunityId !== id);
+    setDraftCards(prev => [card, ...prev]);
+    setTrashedCards(newTrashed);
+    saveTrashedCards(newTrashed);
+  }
+
+  function handleDeletePermanently(id: string) {
+    const newTrashed = trashedCards.filter(c => c.opportunityId !== id);
+    setTrashedCards(newTrashed);
+    saveTrashedCards(newTrashed);
+  }
+
+  function handleEmptyTrash() {
+    setTrashedCards([]);
+    saveTrashedCards([]);
+  }
+
+  // ── Budget (persisted locally, independent of v1) ─────────────────────────
+  const [budget, setBudget] = useState<number>(200);
+
+  useEffect(() => { setBudget(readBudget()); }, []);
+
+  function handleBudgetChange(n: number) {
+    setBudget(n);
+    try { localStorage.setItem(BUDGET_KEY, String(n)); } catch {}
+    void fetch("/api/usage/budget", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ budget: n }) })
+      .catch(() => { /* non-fatal — localStorage is the fast local cache */ });
+  }
+
+  // ── AI usage (v2-local fetch, independent of v1) ──────────────────────────
+  const [monthlyCallCount, setMonthlyCallCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetch("/api/usage?days=30")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((json) => {
+        if (json && typeof json.totalCalls === "number") {
+          setMonthlyCallCount(json.totalCalls);
+        }
+      })
+      .catch(() => { /* silently ignore — sidebar just stays at 0 */ });
+  }, []);
+
+  const creditCount = monthlyCallCount ?? 0;
+  const creditPct   = Math.min((creditCount / budget) * 100, 100);
+  const creditLabel = `${creditCount} of ${budget} used this month`;
 
   const go = (s: Screen) => () => setScreen(s);
 
@@ -1209,8 +2409,9 @@ export default function AtelierV2Page() {
         setScreen={setScreen}
         collapsed={collapsed}
         onToggle={() => setCollapsed(c => !c)}
-        creditPct={62}
-        creditLabel="124 of 200 used this month"
+        creditPct={creditPct}
+        creditLabel={creditLabel}
+        onUsageClick={() => setScreen("usage")}
       />
 
       <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
@@ -1218,14 +2419,16 @@ export default function AtelierV2Page() {
 
         <div style={{ flex: 1, padding: "32px 40px 64px" }}>
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}
-          {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} seedKeywords={settings?.seed_keywords ?? []} />}
+          {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} />}
           {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} />}
-          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} />}
+          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} />}
           {screen === "score"      && <ScoreScreen onEditor={go("editor")} />}
           {screen === "keywords"   && <KeywordsScreen />}
           {screen === "publish"    && <PublishScreen />}
           {screen === "analytics"  && <AnalyticsScreen />}
           {screen === "settings"   && <SettingsScreen />}
+          {screen === "usage"      && <UsageScreen budget={budget} onBudgetChange={handleBudgetChange} />}
+          {screen === "trash"      && <TrashScreen trashedCards={trashedCards} onRestore={handleRestoreCard} onDeletePermanently={handleDeletePermanently} onEmptyTrash={handleEmptyTrash} />}
         </div>
       </main>
     </div>
