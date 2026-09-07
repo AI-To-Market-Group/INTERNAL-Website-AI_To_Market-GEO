@@ -991,9 +991,9 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
   const hasActive = activeUsers && activeUsers.length > 0;
 
   return (
-    <div style={{ padding: 24, border: `1px solid ${hasActive ? "rgba(24,95,0,.35)" : C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", height: 300, position: "relative", boxShadow: hasActive ? "0 0 0 2px rgba(24,95,0,.12)" : "none" }}>
-      {/* X remove button */}
-      {onRemove && (
+    <div style={{ padding: 24, border: `1px solid ${hasActive ? "rgba(24,95,0,.35)" : C.border}`, borderRadius: 12, background: hasActive ? "rgba(24,95,0,.04)" : C.white, display: "flex", flexDirection: "column", height: 300, position: "relative", boxShadow: hasActive ? "0 0 0 2px rgba(24,95,0,.18)" : "none" }}>
+      {/* X remove button — hidden when locked */}
+      {onRemove && !hasActive && (
         <button
           onClick={e => { e.stopPropagation(); onRemove(); }}
           title="Remove"
@@ -1005,7 +1005,13 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
 
       {/* Header: badge + score */}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 16, paddingRight: onRemove ? 28 : 0 }}>
-        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: C.mid, background: "rgba(24,95,0,.1)", padding: "4px 9px", borderRadius: 20 }}>READY TO BUILD</span>
+        {hasActive ? (
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: C.mid, background: "rgba(24,95,0,.12)", padding: "4px 9px", borderRadius: 20 }}>
+            🔒 {activeUsers![0].user_email.split("@")[0].toUpperCase()} IS EDITING
+          </span>
+        ) : (
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: C.mid, background: "rgba(24,95,0,.1)", padding: "4px 9px", borderRadius: 20 }}>READY TO BUILD</span>
+        )}
         {scoreNum !== null && (
           <div style={{ textAlign: "right", flexShrink: 0 }}>
             <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1, color: scoreColor(scoreNum) }}>{scoreNum}</div>
@@ -1058,9 +1064,10 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
       <div style={{ display: "flex", gap: 8 }}>
         <button
           onClick={onCreateArticle}
-          style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
+          disabled={hasActive}
+          style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: hasActive ? "rgba(22,61,38,.25)" : C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: hasActive ? "not-allowed" : "pointer", opacity: hasActive ? 0.8 : 1 }}
         >
-          {hasActive ? "Open (someone is here)" : "Create Article"}
+          {hasActive ? "🔒 Locked" : "Create Article"}
         </button>
       </div>
     </div>
@@ -1472,7 +1479,7 @@ function sectionTypeStyle(type: string) {
 
 // ─── Editor screen ────────────────────────────────────────────────────────────
 
-function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[] }) {
+function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, savedPlans }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; savedPlans?: SavedPlan[] }) {
   // ── Plan step state ────────────────────────────────────────────────────────
   type EditorStep = "plan" | "article";
   const [editorStep, setEditorStep] = useState<EditorStep>("plan");
@@ -1702,6 +1709,20 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     }
 
     const card = draftCards?.find(c => c.opportunityId === activeCardId);
+
+    // If another team member saved a plan for this card, restore it (org-wide workspace)
+    const sharedPlan = savedPlans?.find(p => p.opportunityId === activeCardId);
+    if (sharedPlan) {
+      setEditorStep("plan");
+      setOutline(sharedPlan.outline);
+      setArticleTitle(sharedPlan.articleTitle);
+      setEditingTitles({});
+      setExpandedSection(null);
+      setOutlineError(null);
+      setOutlineLoading(false);
+      return;
+    }
+
     setEditorStep("plan");
     setOutline([]);
     setEditingTitles({});
@@ -1725,7 +1746,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       })
       .catch((e: unknown) => setOutlineError(e instanceof Error ? e.message : String(e)))
       .finally(() => setOutlineLoading(false));
-  }, [activeCardId, draftCards]);
+  }, [activeCardId, draftCards, savedPlans]);
 
   // ── Save current plan (org-wide via Supabase) ─────────────────────────────
   async function handleSavePlan() {
@@ -3939,7 +3960,10 @@ export default function AtelierV2Page() {
     setScreen("editor");
   }
 
-  function handleActivateCard(id: string) { setActiveCardId(id); }
+  function handleActivateCard(id: string) {
+    if (presenceData.some(u => u.active_card_id === id)) return;
+    setActiveCardId(id);
+  }
 
   function handleBackToCards() {
     setActiveCardId(null);
@@ -4050,7 +4074,7 @@ export default function AtelierV2Page() {
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}
           {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} />}
           {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} />}
-          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} />}
+          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} savedPlans={savedPlans} />}
           {screen === "score"      && <ScoreScreen onEditor={go("editor")} />}
           {screen === "keywords"   && <KeywordsScreen />}
           {screen === "publish"    && <PublishScreen />}
