@@ -44,7 +44,7 @@ const SEEDED_KEYWORDS = [
   "AI-first growth strategy",
 ];
 
-const ADMIN_EMAIL = "neha@aitomarketgroup.com";
+const ADMIN_EMAILS = new Set(["neha@aitomarketgroup.com", "manoj@aitomarketgroup.com"]);
 
 interface KeywordWorkspaceProps {
   /** Seed keywords from user settings — fallback when GSC is not connected */
@@ -220,7 +220,7 @@ export function KeywordWorkspace({ seedKeywords }: KeywordWorkspaceProps) {
               <div className="flex flex-col overflow-hidden rounded-lg border border-slate-200">
                 <ColHeader title="Search Console" subtitle="Not connected" count={0} />
                 <div className="flex flex-1 flex-col items-center justify-center gap-3 p-5 min-h-[150px]">
-                  {userEmail === ADMIN_EMAIL ? (
+                  {ADMIN_EMAILS.has(userEmail) ? (
                     <>
                       <p className="text-center text-xs text-slate-400 leading-relaxed">
                         Connect Google Search Console once to pull real queries for your whole team.
