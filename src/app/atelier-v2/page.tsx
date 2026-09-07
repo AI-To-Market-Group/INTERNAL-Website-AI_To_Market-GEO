@@ -52,6 +52,33 @@ function writeSavedPlans(plans: SavedPlan[]) {
   catch {}
 }
 
+// ─── Per-card autosave cache ──────────────────────────────────────────────────
+
+const CARD_CACHE_PREFIX = "v2_card_";
+
+interface V2CardCache {
+  editorStep: "plan" | "article";
+  outline: V2OutlineSection[];
+  articleTitle: string;
+  articleData: GeneratedArticle | null;
+  geoScore: { score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number } | null;
+  qualityFlags: { section?: string; type: string; message: string }[];
+  brandVoiceStatus: { status: string; residuals?: { paragraphIndex: number; violations: { type: string; match: string }[] }[] } | null;
+  seoTitle: string;
+  seoMetaDesc: string;
+  seoTags: string[];
+  savedAt: string;
+}
+
+function readCardCache(id: string): V2CardCache | null {
+  try { return JSON.parse(localStorage.getItem(CARD_CACHE_PREFIX + id) ?? "null") as V2CardCache | null; }
+  catch { return null; }
+}
+function writeCardCache(id: string, data: V2CardCache) {
+  try { localStorage.setItem(CARD_CACHE_PREFIX + id, JSON.stringify(data)); }
+  catch {}
+}
+
 // ─── Palette constants ────────────────────────────────────────────────────────
 
 const C = {
@@ -70,6 +97,10 @@ const C = {
 
 function scoreColor(v: number) {
   return v >= 80 ? C.dark : v >= 70 ? C.mid : C.red;
+}
+
+function sectionSlug(heading: string): string {
+  return "nl-sec-" + heading.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 60);
 }
 
 function creditBarColor(pct: number): string {
@@ -936,7 +967,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove }: {
   const scoreNum = isNaN(rawScore) ? null : rawScore;
 
   return (
-    <div style={{ padding: 24, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", minHeight: 220, position: "relative" }}>
+    <div style={{ padding: 24, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", height: 300, position: "relative" }}>
       {/* X remove button */}
       {onRemove && (
         <button
@@ -959,7 +990,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove }: {
       </div>
 
       {/* Prompt (title) */}
-      <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4, color: C.dark, marginBottom: 10, flex: 1 }}>
+      <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4, color: C.dark, marginBottom: 10, display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
         {card.brief.prompt ?? "Untitled brief"}
       </div>
 
@@ -975,8 +1006,11 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove }: {
         </div>
       )}
 
+      {/* Spacer */}
+      <div style={{ flex: 1 }} />
+
       {/* Timestamp */}
-      <div style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.42)", marginTop: 14, marginBottom: 16, paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.08)" }}>
+      <div style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.42)", marginBottom: 16, paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.08)" }}>
         {timeAgo(card.createdAt)}
       </div>
 
@@ -988,12 +1022,376 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove }: {
         >
           Create Article
         </button>
-        <button
-          onClick={onResume}
-          style={{ padding: "11px 14px", border: "1px solid rgba(22,61,38,.28)", borderRadius: 8, fontSize: 12, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark, whiteSpace: "nowrap" }}
-        >
-          Resume
-        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Article types ────────────────────────────────────────────────────────────
+
+interface ArticleParagraph { id: number; text: string; }
+interface ArticleSectionContent { paragraphs: ArticleParagraph[]; bullets: string[]; }
+interface GeneratedSection { order: number; type: string; heading: string; content: ArticleSectionContent; }
+interface GeneratedArticle { title: string; sections: GeneratedSection[]; }
+
+// ─── Newsletter article renderer ──────────────────────────────────────────────
+
+function ImgPlaceholder({ height = 200 }: { height?: number }) {
+  return (
+    <div style={{ width: "100%", height, background: "rgba(22,61,38,.07)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 28 }}>
+      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(22,61,38,.22)" strokeWidth="1.5" strokeLinecap="round">
+        <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
+      </svg>
+    </div>
+  );
+}
+
+function WhatItMeansBlock({ bullets }: { bullets: string[] }) {
+  if (!bullets.length) return null;
+  return (
+    <div style={{ margin: "22px 0 0", padding: "16px 20px", background: "rgba(22,61,38,.04)", borderLeft: `3px solid ${C.mid}`, borderRadius: "0 6px 6px 0" }}>
+      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 10 }}>WHAT IT MEANS</div>
+      {bullets.map((b, i) => (
+        <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: i < bullets.length - 1 ? 7 : 0 }}>
+          <div style={{ width: 12, height: 1.5, background: C.mid, marginTop: 9, flexShrink: 0 }} />
+          <div style={{ fontSize: 13, fontWeight: 400, lineHeight: 1.6, color: "rgba(22,61,38,.75)" }}>{b}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// Renders a paragraph that may contain LLM-emitted HTML (lists, bold, etc.)
+const HTML_TAG_RE = /<[a-z][\s\S]*?>/i;
+function richPara(text: string, style: React.CSSProperties, key: number | string) {
+  if (HTML_TAG_RE.test(text)) {
+    return <div key={key} className="v2-rich" style={style} dangerouslySetInnerHTML={{ __html: text }} />;
+  }
+  return <p key={key} style={style}>{text}</p>;
+}
+
+function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches }: {
+  article: GeneratedArticle;
+  outline: V2OutlineSection[];
+  onScore: () => void;
+  onPublish: () => void;
+  highlightedSectionId?: string | null;
+  brandVoiceMatches?: string[];
+}) {
+  const { sections } = article;
+  const [subEmail, setSubEmail] = useState("");
+  const [subState, setSubState] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [faqOpenIdx, setFaqOpenIdx] = useState<number | null>(0);
+  const articleBodyRef = useRef<HTMLDivElement>(null);
+
+  // DOM-based brand voice violation highlighting — same approach as v1
+  useEffect(() => {
+    const root = articleBodyRef.current;
+    if (!root) return;
+    // Strip any existing marks first
+    root.querySelectorAll("mark[data-bv-violation]").forEach(mark => {
+      const parent = mark.parentNode;
+      if (!parent) return;
+      parent.replaceChild(document.createTextNode(mark.textContent ?? ""), mark);
+      parent.normalize();
+    });
+    const matches = brandVoiceMatches?.filter(Boolean) ?? [];
+    if (!matches.length) return;
+    // Walk all text nodes and wrap first occurrence of each match
+    function highlightNode(el: HTMLElement) {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const textNodes: Text[] = [];
+      let n = walker.nextNode();
+      while (n) { textNodes.push(n as Text); n = walker.nextNode(); }
+      for (const textNode of textNodes) {
+        const text = textNode.textContent ?? "";
+        for (const match of matches) {
+          const idx = text.indexOf(match);
+          if (idx === -1) continue;
+          const parent = textNode.parentNode;
+          if (!parent) break;
+          const mark = document.createElement("mark");
+          mark.setAttribute("data-bv-violation", "true");
+          mark.style.cssText = "background:#fef3c7;color:#92400e;border-radius:2px;padding:0 2px;outline:1px solid #f59e0b;";
+          mark.textContent = match;
+          parent.insertBefore(document.createTextNode(text.slice(0, idx)), textNode);
+          parent.insertBefore(mark, textNode);
+          parent.insertBefore(document.createTextNode(text.slice(idx + match.length)), textNode);
+          parent.removeChild(textNode);
+          break;
+        }
+      }
+    }
+    highlightNode(root);
+  }, [brandVoiceMatches, article]);
+
+  async function handleSubscribe() {
+    const email = subEmail.trim();
+    if (!email || subState === "loading" || subState === "success") return;
+    setSubState("loading");
+    try {
+      const res = await fetch("/api/subscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, source: "newsletter-footer" }),
+      });
+      setSubState(res.ok ? "success" : "error");
+    } catch {
+      setSubState("error");
+    }
+  }
+
+  function getOutlineDesc(sectionIdx: number): string[] {
+    return outline[sectionIdx]?.description ?? [];
+  }
+
+  const hlStyle = (heading: string): React.CSSProperties =>
+    highlightedSectionId === sectionSlug(heading)
+      ? { outline: "2.5px solid #F5A623", borderRadius: 8, transition: "outline .1s" }
+      : {};
+
+  const intro = sections.find(s => s.type === "introduction");
+  const statsSection = sections.find(s => s.type === "stats");
+  const faqSection = sections.find(s => s.type === "faq");
+  const conclusion = sections.find(s => s.type === "conclusion");
+  const body = sections.filter(s => !["introduction", "stats", "faq", "conclusion"].includes(s.type));
+
+  const divider = <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "40px 0" }} />;
+
+  return (
+    <div ref={articleBodyRef} style={{ maxWidth: 720, margin: 0 }}>
+
+      {/* Newsletter masthead */}
+      <div className="v2-masthead" style={{ background: C.dark, padding: "28px 44px", borderRadius: "12px 12px 0 0" }}>
+        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".22em", color: C.salmon, marginBottom: 10 }}>AI TO MARKET · GEO CONTENT</div>
+        <h1 style={{ margin: "0 0 10px", fontSize: 24, fontWeight: 700, lineHeight: 1.2, color: C.white, letterSpacing: "-.3px" }}>
+          {article.title}
+        </h1>
+        <div style={{ fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.45)" }}>
+          {sections.length} sections · generated article
+        </div>
+      </div>
+
+      {/* Hero image */}
+      <div style={{ background: `linear-gradient(140deg, #163D26 0%, #185F00 100%)`, height: 240, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden" }}>
+        <svg viewBox="0 0 400 240" width="100%" height="100%" style={{ position: "absolute", inset: 0, opacity: .06 }} preserveAspectRatio="xMidYMid slice">
+          <defs><pattern id="nlgrid" x="0" y="0" width="36" height="36" patternUnits="userSpaceOnUse"><path d="M 36 0 L 0 0 0 36" fill="none" stroke="white" strokeWidth="1"/></pattern></defs>
+          <rect width="100%" height="100%" fill="url(#nlgrid)"/>
+        </svg>
+        <div style={{ position: "relative", textAlign: "center" }}>
+          <svg viewBox="0 0 48 48" width="44" height="44" fill="none" stroke="rgba(255,255,255,.32)" strokeWidth="1.5" strokeLinecap="round">
+            <rect x="4" y="4" width="40" height="40" rx="4"/><circle cx="16" cy="18" r="4"/><path d="M44 32l-10-10-14 14"/>
+          </svg>
+          <div style={{ marginTop: 10, fontSize: 10, fontWeight: 600, letterSpacing: ".12em", color: "rgba(255,255,255,.28)" }}>HERO IMAGE</div>
+        </div>
+      </div>
+
+      {/* Article body */}
+      <div style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", padding: "44px 52px" }}>
+
+        {/* Introduction */}
+        {intro && (() => {
+          const idx = sections.indexOf(intro);
+          return (
+            <div id={sectionSlug(intro.heading)} style={{ marginBottom: 8, scrollMarginTop: 32, ...hlStyle(intro.heading) }}>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.salmon, marginBottom: 14 }}>LEAD ITEM</div>
+              <h2 style={{ margin: "0 0 18px", fontSize: 21, fontWeight: 700, lineHeight: 1.25, letterSpacing: "-.3px", color: C.dark }}>{intro.heading}</h2>
+              {intro.content.paragraphs.map((p, i) =>
+                richPara(p.text, { margin: i < intro.content.paragraphs.length - 1 ? "0 0 15px" : 0, fontSize: 15, fontWeight: 400, lineHeight: 1.7, color: "#222" }, p.id)
+              )}
+              <WhatItMeansBlock bullets={getOutlineDesc(idx)} />
+            </div>
+          );
+        })()}
+
+        {/* Body sections */}
+        {body.map((s, bi) => {
+          const idx = sections.indexOf(s);
+          return (
+            <div key={s.order} id={sectionSlug(s.heading)} style={{ scrollMarginTop: 32, ...hlStyle(s.heading) }}>
+              {divider}
+              <ImgPlaceholder height={170} />
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 12 }}>
+                {s.type.replace(/_/g, " ").toUpperCase()}
+              </div>
+              <h3 style={{ margin: "0 0 16px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-.2px", color: C.dark }}>{s.heading}</h3>
+              {s.content.paragraphs.map((p, i) =>
+                richPara(p.text, { margin: i < s.content.paragraphs.length - 1 ? "0 0 14px" : 0, fontSize: 15, fontWeight: 400, lineHeight: 1.7, color: "#222" }, p.id)
+              )}
+              {s.content.bullets.length > 0 && (
+                <ul style={{ margin: "14px 0 0", paddingLeft: 22, display: "flex", flexDirection: "column", gap: 7 }}>
+                  {s.content.bullets.map((b, i) => (
+                    <li key={i} style={{ fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: "#222" }}>{b}</li>
+                  ))}
+                </ul>
+              )}
+              <WhatItMeansBlock bullets={getOutlineDesc(idx)} />
+            </div>
+          );
+        })}
+
+        {/* Stats / BY THE NUMBERS */}
+        {statsSection && (() => {
+          const ps = statsSection.content.paragraphs;
+          return (
+            <div id={sectionSlug(statsSection.heading)} style={{ scrollMarginTop: 32, ...hlStyle(statsSection.heading) }}>
+              {divider}
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.mid, marginBottom: 14 }}>BY THE NUMBERS</div>
+              <h3 style={{ margin: "0 0 22px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, color: C.dark }}>{statsSection.heading}</h3>
+              {ps.length > 0 && (
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 24 }}>
+                  {ps.slice(0, 3).map((p, i) => {
+                    const m = p.text.match(/(\d[\d,.%x+\-]*\s*(?:billion|million|thousand|percent|%|x)?)/i);
+                    const stat = m ? m[1].trim() : "—";
+                    const caption = p.text.replace(stat, "").trim().slice(0, 72);
+                    return (
+                      <div key={i} style={{ padding: "20px 16px", background: C.dark, borderRadius: 10, textAlign: "center" }}>
+                        <div style={{ fontSize: 30, fontWeight: 700, color: C.salmon, lineHeight: 1, letterSpacing: -1 }}>{stat}</div>
+                        <div style={{ marginTop: 10, fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.6)", lineHeight: 1.45 }}>{caption || p.text.slice(0, 60)}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {ps.slice(3).map((p, i) =>
+                richPara(p.text, { margin: "0 0 13px", fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: "#222" }, i)
+              )}
+            </div>
+          );
+        })()}
+
+        {/* FAQ — accordion */}
+        {faqSection && (() => {
+          // Parse "Q: ...\nA: ..." format produced by the LLM
+          const faqItems = faqSection.content.paragraphs.map((p, i) => {
+            const m = p.text.match(/^Q:\s*([\s\S]+?)\s*\n+A:\s*([\s\S]+)$/i);
+            if (m) return { id: p.id, question: m[1].trim(), answer: m[2].trim() };
+            // Fallback: split on "\nA:" in case newline is missing
+            const splitIdx = p.text.search(/\nA:\s/i);
+            if (splitIdx !== -1) {
+              const q = p.text.slice(0, splitIdx).replace(/^Q:\s*/i, "").trim();
+              const a = p.text.slice(splitIdx).replace(/^\nA:\s*/i, "").trim();
+              return { id: p.id, question: q, answer: a };
+            }
+            // Plain paragraph: use as answer, label as Question N
+            return { id: p.id, question: `Question ${i + 1}`, answer: p.text };
+          });
+          return (
+            <div id={sectionSlug(faqSection.heading)} style={{ scrollMarginTop: 32, ...hlStyle(faqSection.heading) }}>
+              {divider}
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.mid, marginBottom: 14 }}>FREQUENTLY ASKED</div>
+              <h3 style={{ margin: "0 0 22px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, color: C.dark }}>{faqSection.heading}</h3>
+              <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+                {faqItems.map((item, i) => {
+                  const open = faqOpenIdx === i;
+                  return (
+                    <div key={item.id} style={{ borderBottom: i < faqItems.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                      <button
+                        onClick={() => setFaqOpenIdx(open ? null : i)}
+                        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "16px 20px", background: open ? C.faint : "transparent", border: "none", cursor: "pointer", textAlign: "left", transition: "background .15s" }}
+                      >
+                        <span style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.45, color: C.dark }}>{item.question}</span>
+                        <span style={{ width: 22, height: 22, flexShrink: 0, borderRadius: "50%", border: `1.5px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, lineHeight: 1, color: C.mid, transition: "transform .18s", transform: open ? "rotate(45deg)" : "none", userSelect: "none" }}>+</span>
+                      </button>
+                      {open && item.answer && (
+                        <div style={{ padding: "2px 20px 18px", fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: C.muted }}>
+                          {item.answer}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })()}
+
+        {/* Conclusion / Key takeaways */}
+        {conclusion && (() => {
+          const idx = sections.indexOf(conclusion);
+          const fallbackBullets = getOutlineDesc(idx);
+          const takeaways = conclusion.content.bullets.length > 0 ? conclusion.content.bullets : fallbackBullets;
+          return (
+            <div id={sectionSlug(conclusion.heading)} style={{ scrollMarginTop: 32, ...hlStyle(conclusion.heading) }}>
+              {divider}
+              <div style={{ background: C.dark, borderRadius: 12, padding: "32px 36px" }}>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.salmon, marginBottom: 14 }}>KEY TAKEAWAYS</div>
+                <h3 style={{ margin: "0 0 18px", fontSize: 18, fontWeight: 700, color: C.white, lineHeight: 1.3 }}>{conclusion.heading}</h3>
+                {conclusion.content.paragraphs.length > 0 && (
+                  <p style={{ margin: "0 0 18px", fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: "rgba(255,255,255,.72)" }}>
+                    {conclusion.content.paragraphs[0].text}
+                  </p>
+                )}
+                {takeaways.map((b, i) => (
+                  <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: i < takeaways.length - 1 ? 12 : 0 }}>
+                    <div style={{ width: 16, height: 1.5, background: C.salmon, marginTop: 9, flexShrink: 0 }} />
+                    <div style={{ fontSize: 14, fontWeight: 400, lineHeight: 1.6, color: "rgba(255,255,255,.8)" }}>{b}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
+
+      </div>
+
+      {/* Footer */}
+      <div style={{ background: C.dark, padding: "28px 44px", borderRadius: "0 0 12px 12px" }}>
+        {/* Top row: logo + socials */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.white }}>AI To Market</div>
+          <div style={{ display: "flex", gap: 10 }}>
+            {/* LinkedIn */}
+            <a href="https://www.linkedin.com/company/ai-to-market" target="_blank" rel="noreferrer"
+              style={{ width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,.1)", border: "1px solid rgba(255,255,255,.18)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", textDecoration: "none" }}>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill={C.white}>
+                <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+              </svg>
+            </a>
+            {/* X / Twitter */}
+            <a href="https://x.com/aitomarket" target="_blank" rel="noreferrer"
+              style={{ width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,.1)", border: "1px solid rgba(255,255,255,.18)", display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", textDecoration: "none" }}>
+              <svg viewBox="0 0 24 24" width="15" height="15" fill={C.white}>
+                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L2.25 2.25h6.918l4.253 5.623 5.823-5.623zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+              </svg>
+            </a>
+          </div>
+        </div>
+
+        {/* Email subscribe */}
+        <div style={{ borderTop: "1px solid rgba(255,255,255,.12)", paddingTop: 20 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: C.white, marginBottom: 4 }}>Get our blogs in your DMs</div>
+          {subState === "success" ? (
+            <div style={{ padding: "10px 14px", borderRadius: 7, background: "rgba(24,95,0,.25)", border: "1px solid rgba(24,95,0,.4)", fontSize: 12, fontWeight: 600, color: "#7FD4A0" }}>
+              You're in! We'll send new articles your way.
+            </div>
+          ) : (
+            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+              <input
+                type="email"
+                value={subEmail}
+                onChange={e => { setSubEmail(e.target.value); if (subState === "error") setSubState("idle"); }}
+                onKeyDown={e => { if (e.key === "Enter") void handleSubscribe(); }}
+                placeholder="your@email.com"
+                disabled={subState === "loading"}
+                style={{ flex: 1, padding: "9px 12px", borderRadius: 7, border: `1px solid ${subState === "error" ? "rgba(249,57,67,.5)" : "rgba(255,255,255,.2)"}`, background: "rgba(255,255,255,.08)", color: C.white, fontSize: 12, outline: "none", opacity: subState === "loading" ? 0.6 : 1 }}
+              />
+              <button
+                onClick={() => void handleSubscribe()}
+                disabled={subState === "loading" || !subEmail.trim()}
+                style={{ padding: "9px 16px", borderRadius: 7, background: C.salmon, color: C.dark, fontSize: 12, fontWeight: 700, border: "none", cursor: subState === "loading" || !subEmail.trim() ? "not-allowed" : "pointer", whiteSpace: "nowrap", opacity: subState === "loading" || !subEmail.trim() ? 0.6 : 1 }}
+              >
+                {subState === "loading" ? "…" : "Subscribe"}
+              </button>
+            </div>
+          )}
+          {subState === "error" && (
+            <div style={{ fontSize: 11, color: C.red, marginBottom: 8 }}>Something went wrong — please try again.</div>
+          )}
+          <div style={{ fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.4)", marginTop: subState === "success" ? 10 : 0 }}>
+            Have a suggestion? Tell us more at <span style={{ color: C.salmon }}>socials@aitomarketgroup.com</span>
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -1046,20 +1444,146 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [editingTitles, setEditingTitles] = useState<Record<number, string>>({});
   const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
   const [savePulse, setSavePulse] = useState(false);
+  const [articleSavePulse, setArticleSavePulse] = useState(false);
+  const [bvExpanded, setBvExpanded] = useState(false);
+  const [restoring, setRestoring] = useState(false);
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+  const [hoveredSection, setHoveredSection] = useState<number | null>(null);
+  const [hoveredBtn, setHoveredBtn] = useState<string | null>(null);
+  const [regeneratingSections, setRegeneratingSections] = useState<Set<number>>(new Set());
   const prevCardIdRef = useRef<string | null>(null);
   const preloadedPlanRef = useRef<{ outline: V2OutlineSection[]; title: string; brief: BriefFields } | null>(null);
 
-  // ── Article step state (static mockup until wired in next build) ───────────
-  const [accepted, setAccepted] = useState<number[]>([]);
-  const [dismissed, setDismissed] = useState<number[]>([]);
-  const liveScore = 71 + accepted.length * 6;
+  // ── Article generation state ────────────────────────────────────────────────
+  const [articleData, setArticleData] = useState<GeneratedArticle | null>(null);
+  const [articleLoading, setArticleLoading] = useState(false);
+  const [articleError, setArticleError] = useState<string | null>(null);
+  const [geoScore, setGeoScore] = useState<{ score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number } | null>(null);
+  const [qualityFlags, setQualityFlags] = useState<{ section?: string; type: string; message: string }[]>([]);
+  const [brandVoiceStatus, setBrandVoiceStatus] = useState<{ status: string; residuals?: { paragraphIndex: number; violations: { type: string; match: string }[] }[] } | null>(null);
+  // ── SEO panel state ────────────────────────────────────────────────────────
+  const [seoTitle, setSeoTitle] = useState("");
+  const [seoMetaDesc, setSeoMetaDesc] = useState("");
+  const [seoTags, setSeoTags] = useState<string[]>([]);
+  const [newTagInput, setNewTagInput] = useState("");
+  // ── Publish state ──────────────────────────────────────────────────────────
+  const [draftState, setDraftState] = useState<"idle"|"loading"|"success"|"error">("idle");
+  const [draftError, setDraftError] = useState<string | null>(null);
+  const [liveState, setLiveState] = useState<"idle"|"loading"|"success"|"error">("idle");
+  const [liveError, setLiveError] = useState<string | null>(null);
+  const [liveUrl, setLiveUrl] = useState<string | null>(null);
+
+  const [highlightedSectionId, setHighlightedSectionId] = useState<string | null>(null);
+
+  function scrollToSection(heading: string) {
+    const id = sectionSlug(heading);
+    setHighlightedSectionId(id);
+    setTimeout(() => setHighlightedSectionId(null), 2200);
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+
+  async function sendToDraftSanity() {
+    if (!activeCardId || draftState === "loading") return;
+    setDraftState("loading");
+    setDraftError(null);
+    try {
+      const res = await fetch(`/api/builder-sessions/${activeCardId}/publish-draft`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seoTitle, seoMetaDesc, seoTags }),
+      });
+      const data = await res.json() as { error?: string };
+      if (!res.ok) { setDraftState("error"); setDraftError(data.error ?? "Failed to save draft"); return; }
+      setDraftState("success");
+    } catch {
+      setDraftState("error");
+      setDraftError("Network error — please try again");
+    }
+  }
+
+  async function publishLive() {
+    if (!activeCardId || liveState === "loading") return;
+    // Must have a Sanity draft first
+    if (draftState !== "success") {
+      await sendToDraftSanity();
+    }
+    setLiveState("loading");
+    setLiveError(null);
+    try {
+      const res = await fetch(`/api/builder-sessions/${activeCardId}/publish-live`, { method: "POST" });
+      const data = await res.json() as { error?: string; link?: string };
+      if (!res.ok) { setLiveState("error"); setLiveError(data.error ?? "Failed to publish"); return; }
+      setLiveState("success");
+      setLiveUrl(data.link ?? null);
+    } catch {
+      setLiveState("error");
+      setLiveError("Network error — please try again");
+    }
+  }
 
   // ── Load saved plans from localStorage on mount ────────────────────────────
   useEffect(() => { setSavedPlans(readSavedPlans()); }, []);
 
+  // ── Autosave: persist editor state per card so refresh restores correctly ──
+  // Runs on every state change — no early-exit guard so even small changes are saved.
+  useEffect(() => {
+    if (!activeCardId) return;
+    writeCardCache(activeCardId, {
+      editorStep: articleData ? "article" : editorStep,
+      outline,
+      articleTitle,
+      articleData: articleData ?? null,
+      geoScore: geoScore ?? null,
+      qualityFlags,
+      brandVoiceStatus: brandVoiceStatus ?? null,
+      seoTitle,
+      seoMetaDesc,
+      seoTags,
+      savedAt: new Date().toISOString(),
+    });
+  }, [activeCardId, editorStep, outline, articleTitle, articleData, geoScore, qualityFlags, brandVoiceStatus, seoTitle, seoMetaDesc, seoTags]);
+
   // ── Generate outline when a card is activated ──────────────────────────────
   useEffect(() => {
-    if (!activeCardId || prevCardIdRef.current === activeCardId) return;
+    // When the user goes back to the card grid, reset the ref so re-activating
+    // the same card always triggers a fresh cache restore instead of reusing
+    // stale component state (e.g. editorStep:"plan" left from "Back to plan" click).
+    if (!activeCardId) {
+      // Save final state to cache BEFORE clearing — the reactive autosave fires
+      // with activeCardId=null and returns early, so this is the last chance to
+      // capture state that changed in the same render batch (e.g. qualityFlags
+      // cleared by autoFixAll just before the user hit Back).
+      const prevId = prevCardIdRef.current;
+      if (prevId) {
+        writeCardCache(prevId, {
+          editorStep: articleData ? "article" : editorStep,
+          outline,
+          articleTitle,
+          articleData: articleData ?? null,
+          geoScore: geoScore ?? null,
+          qualityFlags,
+          brandVoiceStatus: brandVoiceStatus ?? null,
+          seoTitle,
+          seoMetaDesc,
+          seoTags,
+          savedAt: new Date().toISOString(),
+        });
+      }
+      prevCardIdRef.current = null;
+      // Clear article state so the next card activation starts from a clean slate
+      setEditorStep("plan");
+      setOutline([]);
+      setArticleTitle("");
+      setArticleData(null);
+      setGeoScore(null);
+      setQualityFlags([]);
+      setBrandVoiceStatus(null);
+      setArticleLoading(false);
+      setArticleError(null);
+      return;
+    }
+    if (prevCardIdRef.current === activeCardId) return;
     prevCardIdRef.current = activeCardId;
 
     // If resuming a saved plan — skip the API call and restore directly
@@ -1077,6 +1601,30 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       return;
     }
 
+    // Restore from autosave cache if available
+    const cached = readCardCache(activeCardId);
+    if (cached && (cached.outline.length > 0 || cached.articleData)) {
+      setEditorStep(cached.editorStep);
+      setOutline(cached.outline ?? []);
+      setArticleTitle(cached.articleTitle ?? "");
+      setEditingTitles({});
+      setExpandedSection(null);
+      setOutlineError(null);
+      setOutlineLoading(false);
+      if (cached.editorStep === "article" && cached.articleData) {
+        setArticleData(cached.articleData);
+        setGeoScore(cached.geoScore ?? null);
+        setQualityFlags(cached.qualityFlags ?? []);
+        setBrandVoiceStatus(cached.brandVoiceStatus ?? null);
+        setSeoTitle(cached.seoTitle ?? "");
+        setSeoMetaDesc(cached.seoMetaDesc ?? "");
+        setSeoTags(cached.seoTags ?? []);
+        setArticleLoading(false);
+        setArticleError(null);
+      }
+      return;
+    }
+
     const card = draftCards?.find(c => c.opportunityId === activeCardId);
     setEditorStep("plan");
     setOutline([]);
@@ -1090,12 +1638,16 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ topic_title: card?.brief?.prompt ?? "Article" }),
     })
-      .then(r => r.ok ? r.json() as Promise<{ article_title: string; sections: V2OutlineSection[] }> : Promise.reject(r.statusText))
+      .then(async r => {
+        const body = await r.json() as { article_title?: string; sections?: V2OutlineSection[]; error?: string };
+        if (!r.ok) return Promise.reject(body.error ?? `Server error (${r.status})`);
+        return body;
+      })
       .then(data => {
         setArticleTitle(data.article_title ?? card?.brief?.prompt ?? "Article");
         setOutline(data.sections ?? []);
       })
-      .catch(e => setOutlineError(String(e)))
+      .catch((e: unknown) => setOutlineError(e instanceof Error ? e.message : String(e)))
       .finally(() => setOutlineLoading(false));
   }, [activeCardId, draftCards]);
 
@@ -1141,6 +1693,304 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     return editingTitles[idx] !== undefined ? editingTitles[idx] : original;
   }
 
+  // ── Section manipulation ───────────────────────────────────────────────────
+  function handleDeleteSection(idx: number) {
+    setOutline(prev => prev.filter((_, i) => i !== idx));
+    setEditingTitles(prev => {
+      const next: Record<number, string> = {};
+      Object.entries(prev).forEach(([k, v]) => {
+        const ki = parseInt(k);
+        if (ki < idx) next[ki] = v;
+        else if (ki > idx) next[ki - 1] = v;
+      });
+      return next;
+    });
+    if (expandedSection === idx) setExpandedSection(null);
+    else if (expandedSection !== null && expandedSection > idx) setExpandedSection(expandedSection - 1);
+  }
+
+  function handleDuplicateSection(idx: number) {
+    const section = outline[idx];
+    const copy = { ...section, title: getSectionTitle(idx, section.title) };
+    setOutline(prev => { const next = [...prev]; next.splice(idx + 1, 0, copy); return next; });
+    setEditingTitles(prev => {
+      const next: Record<number, string> = {};
+      Object.entries(prev).forEach(([k, v]) => {
+        const ki = parseInt(k);
+        if (ki <= idx) next[ki] = v;
+        else next[ki + 1] = v;
+      });
+      return next;
+    });
+  }
+
+  async function handleRegenerateSection(idx: number) {
+    if (!activeCardId) return;
+    const section = outline[idx];
+    const title = getSectionTitle(idx, section.title);
+    setRegeneratingSections(prev => new Set(prev).add(idx));
+    try {
+      const res = await fetch(`/api/builder-sessions/${activeCardId}/generate-outline`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic_title: title }),
+      });
+      if (!res.ok) throw new Error(res.statusText);
+      const data = await res.json() as { sections: V2OutlineSection[] };
+      const match = data.sections?.find(s => s.type === section.type) ?? data.sections?.[0];
+      if (match) {
+        setOutline(prev => prev.map((s, i) => i === idx ? { ...s, description: match.description, keywords: match.keywords } : s));
+      }
+    } catch { /* silently keep existing section */ } finally {
+      setRegeneratingSections(prev => { const next = new Set(prev); next.delete(idx); return next; });
+    }
+  }
+
+  function handleDragStart(e: React.DragEvent, idx: number) {
+    setDragIdx(idx);
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function handleDragOver(e: React.DragEvent, idx: number) {
+    e.preventDefault();
+    if (dragIdx !== null && dragIdx !== idx) setDragOverIdx(idx);
+  }
+
+  function handleDrop(e: React.DragEvent, dropIdx: number) {
+    e.preventDefault();
+    if (dragIdx === null || dragIdx === dropIdx) { setDragIdx(null); setDragOverIdx(null); return; }
+    const from = dragIdx;
+    setOutline(prev => { const next = [...prev]; const [m] = next.splice(from, 1); next.splice(dropIdx, 0, m); return next; });
+    setEditingTitles(prev => {
+      const order = Array.from({ length: outline.length }, (_, i) => i);
+      const [moved] = order.splice(from, 1);
+      order.splice(dropIdx, 0, moved);
+      const next: Record<number, string> = {};
+      order.forEach((oldIdx, newIdx) => { if (prev[oldIdx] !== undefined) next[newIdx] = prev[oldIdx]; });
+      return next;
+    });
+    setDragIdx(null);
+    setDragOverIdx(null);
+  }
+
+  function handleDragEnd() { setDragIdx(null); setDragOverIdx(null); }
+
+  // ── Rescore GEO + brand voice from saved article (no article regen) ─────────
+  const [rescoring, setRescoring] = useState(false);
+
+  async function rescoreGeo() {
+    if (!activeCardId || rescoring) return;
+    setRescoring(true);
+    try {
+      const res = await fetch(`/api/builder-sessions/${activeCardId}/rescore`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Send the live v2 article so the server doesn't fall back to stale Supabase blocks
+        body: JSON.stringify({ article: articleData }),
+      });
+      // ok() returns data directly — no { data: ... } wrapper
+      const data = await res.json() as { geoScore?: typeof geoScore; brandVoiceStatus?: typeof brandVoiceStatus; error?: string };
+      if (res.ok) {
+        if (data.geoScore) setGeoScore(data.geoScore);
+        if (data.brandVoiceStatus) setBrandVoiceStatus(data.brandVoiceStatus);
+      }
+    } catch { /* non-fatal */ }
+    finally { setRescoring(false); }
+  }
+
+  // ── Auto-fix state ────────────────────────────────────────────────────────
+  const [expandedFlagIdx, setExpandedFlagIdx] = useState<number | null>(null);
+  const [fixingFlagIdx, setFixingFlagIdx] = useState<number | null>(null);
+  const [expandedCheckIdx, setExpandedCheckIdx] = useState<number | null>(null);
+  const [fixingCheckIdx, setFixingCheckIdx] = useState<number | null>(null);
+  const [fixingAll, setFixingAll] = useState(false);
+  const [fixAllProgress, setFixAllProgress] = useState<string | null>(null);
+
+  async function autoFixFlag(f: { section?: string; type: string; message: string }, flagIdx: number) {
+    if (!activeCardId || !articleData || fixingFlagIdx !== null) return;
+    setFixingFlagIdx(flagIdx);
+    const sectionHeading = f.section ?? f.message.match(/^"([^"]+)"/)?.[1] ?? "";
+    const minWordsMatch = f.message.match(/minimum (\d+)/);
+    const minWords = minWordsMatch ? parseInt(minWordsMatch[1]) : 150;
+    const section = articleData.sections.find(s => s.heading === sectionHeading);
+    if (!section) { setFixingFlagIdx(null); return; }
+    try {
+      const res = await fetch(`/api/builder-sessions/${activeCardId}/fix-section-v2`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fixType: "thin_section",
+          sectionHeading,
+          sectionType: section.type,
+          paragraphs: section.content.paragraphs,
+          minWords,
+          articleTitle: articleData.title,
+          sections: articleData.sections,
+        }),
+      });
+      const data = await res.json() as { sectionHeading?: string; paragraphs?: { id: number; text: string }[]; error?: string };
+      if (res.ok && data.paragraphs?.length) {
+        setArticleData(prev => !prev ? prev : ({
+          ...prev,
+          sections: prev.sections.map(s =>
+            s.heading === sectionHeading ? { ...s, content: { ...s.content, paragraphs: data.paragraphs! } } : s
+          ),
+        }));
+        setQualityFlags(prev => prev.filter((_, i) => i !== flagIdx));
+        setExpandedFlagIdx(null);
+      }
+    } catch { /* non-fatal */ }
+    finally { setFixingFlagIdx(null); }
+  }
+
+  async function autoFixGeoCheck(checkLabel: string, checkIdx: number) {
+    if (!activeCardId || !articleData || fixingCheckIdx !== null) return;
+    setFixingCheckIdx(checkIdx);
+    try {
+      const res = await fetch(`/api/builder-sessions/${activeCardId}/fix-section-v2`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fixType: "geo_check",
+          checkLabel,
+          articleTitle: articleData.title,
+          sections: articleData.sections,
+        }),
+      });
+      const data = await res.json() as { sectionHeading?: string; paragraphs?: { id: number; text: string }[]; error?: string };
+      if (res.ok && data.paragraphs?.length && data.sectionHeading) {
+        const { sectionHeading, paragraphs } = data as { sectionHeading: string; paragraphs: { id: number; text: string }[] };
+        setArticleData(prev => !prev ? prev : ({
+          ...prev,
+          sections: prev.sections.map(s =>
+            s.heading === sectionHeading ? { ...s, content: { ...s.content, paragraphs } } : s
+          ),
+        }));
+        setExpandedCheckIdx(null);
+        void rescoreGeo();
+      }
+    } catch { /* non-fatal */ }
+    finally { setFixingCheckIdx(null); }
+  }
+
+  // ── Auto-fix ALL quality flags in sequence ────────────────────────────────
+  async function autoFixAll() {
+    if (!activeCardId || !articleData || fixingAll) return;
+    setFixingAll(true);
+    // Work against a mutable copy of sections so each fix sees the previous fix's output
+    let currentSections = [...articleData.sections];
+    let remainingFlags = [...qualityFlags];
+
+    for (let i = 0; i < remainingFlags.length; i++) {
+      const f = remainingFlags[i];
+      const sectionHeading = f.section ?? f.message.match(/^"([^"]+)"/)?.[1] ?? "";
+      const section = currentSections.find(s => s.heading === sectionHeading);
+      if (!section) continue;
+
+      const minWordsMatch = f.message.match(/minimum (\d+)/);
+      const minWords = minWordsMatch ? parseInt(minWordsMatch[1]) : 150;
+      setFixAllProgress(`Fixing "${sectionHeading}" (${i + 1}/${remainingFlags.length})…`);
+
+      try {
+        const res = await fetch(`/api/builder-sessions/${activeCardId}/fix-section-v2`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fixType: "thin_section",
+            sectionHeading,
+            sectionType: section.type,
+            paragraphs: section.content.paragraphs,
+            minWords,
+            articleTitle: articleData.title,
+            sections: currentSections,
+          }),
+        });
+        const data = await res.json() as { sectionHeading?: string; paragraphs?: { id: number; text: string }[]; error?: string };
+        if (res.ok && data.paragraphs?.length) {
+          currentSections = currentSections.map(s =>
+            s.heading === sectionHeading ? { ...s, content: { ...s.content, paragraphs: data.paragraphs! } } : s
+          );
+        }
+      } catch { /* skip failed fix, continue */ }
+    }
+
+    // Commit all changes at once
+    setArticleData(prev => prev ? { ...prev, sections: currentSections } : prev);
+    setQualityFlags([]);
+    setExpandedFlagIdx(null);
+    setFixAllProgress(null);
+    setFixingAll(false);
+    void rescoreGeo();
+  }
+
+  // ── Generate article via validate-plan SSE ─────────────────────────────────
+  async function generateArticle() {
+    if (!activeCardId) return;
+    setArticleData(null);
+    setGeoScore(null);
+    setQualityFlags([]);
+    setBrandVoiceStatus(null);
+    setArticleLoading(true);
+    setArticleError(null);
+    setEditorStep("article");
+    try {
+      const finalOutline = outline.map((s, i) => ({
+        ...s,
+        title: getSectionTitle(i, s.title),
+      }));
+      const res = await fetch(`/api/builder-sessions/${activeCardId}/validate-plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ outline: finalOutline }),
+      });
+      if (!res.ok) {
+        const t = await res.text().catch(() => res.statusText);
+        throw new Error(t || res.statusText);
+      }
+      if (!res.body) throw new Error("No response body");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split("\n");
+        buf = parts.pop() ?? "";
+        for (const line of parts) {
+          if (!line.startsWith("data: ")) continue;
+          const json = line.slice(6).trim();
+          if (!json || json === "[DONE]") continue;
+          try {
+            const parsed = JSON.parse(json) as {
+              article?: GeneratedArticle;
+              quality_flags?: { section?: string; type: string; message: string }[];
+              geo_score?: { score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number };
+              brand_voice_status?: { status: string; residuals?: { paragraphIndex: number; violations: { type: string; match: string }[] }[] };
+            };
+            if (parsed.article) {
+              setArticleData(parsed.article);
+              if (parsed.geo_score) setGeoScore(parsed.geo_score);
+              if (parsed.quality_flags) setQualityFlags(parsed.quality_flags);
+              if (parsed.brand_voice_status) setBrandVoiceStatus(parsed.brand_voice_status);
+              const t = parsed.article.title ?? "";
+              setSeoTitle(t.slice(0, 60));
+              setSeoMetaDesc("");
+              const slug = t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
+              void slug; // stored in seoTitle slug derives on render
+              setSeoTags(parsed.article.sections.slice(0, 4).map(s => s.type).filter((v, i, a) => a.indexOf(v) === i));
+            }
+          } catch { /* partial chunk, keep buffering */ }
+        }
+      }
+    } catch (e) {
+      setArticleError(e instanceof Error ? e.message : "Failed to generate article");
+      setEditorStep("plan");
+    } finally {
+      setArticleLoading(false);
+    }
+  }
+
   // ── Card grid ──────────────────────────────────────────────────────────────
   const showCardGrid = (draftCards?.length ?? 0) > 0 && !activeCardId;
 
@@ -1160,7 +2010,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
               {savedPlans.map(plan => (
-                <div key={plan.opportunityId} style={{ padding: 24, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", minHeight: 200, position: "relative" }}>
+                <div key={plan.opportunityId} style={{ padding: 24, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", height: 260, position: "relative" }}>
                   {/* Remove button */}
                   <button
                     onClick={() => handleDeleteSavedPlan(plan.opportunityId)}
@@ -1175,7 +2025,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   </div>
 
                   {/* Title */}
-                  <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4, color: C.dark, marginBottom: 10, flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4, color: C.dark, marginBottom: 10, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
                     {plan.articleTitle || plan.brief?.prompt || "Untitled plan"}
                   </div>
 
@@ -1193,6 +2043,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                       <span style={{ fontSize: 9, fontWeight: 600, padding: "2px 6px", borderRadius: 4, background: C.faint, color: "rgba(22,61,38,.5)" }}>+{plan.outline.length - 5}</span>
                     )}
                   </div>
+
+                  {/* Spacer */}
+                  <div style={{ flex: 1 }} />
 
                   {/* Timestamp */}
                   <div style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.42)", marginBottom: 16, paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.08)" }}>
@@ -1278,7 +2131,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     const activeCard = draftCards?.find(c => c.opportunityId === activeCardId);
 
     return (
-      <div style={{ maxWidth: 820 }}>
+      <div style={{ maxWidth: 820, margin: "0 auto" }}>
         <BackBtn label="All opportunities" onClick={onBackToCards} />
         <StepBar current={1} />
 
@@ -1329,22 +2182,60 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               {outline.map((section, idx) => {
                 const typeStyle = sectionTypeStyle(section.type);
                 const isExpanded = expandedSection === idx;
+                const isBeingDragged = dragIdx === idx;
+                const isDragTarget = dragOverIdx === idx;
+                const isHovered = hoveredSection === idx;
+                const isRegenerating = regeneratingSections.has(idx);
                 const editedTitle = getSectionTitle(idx, section.title);
 
                 return (
                   <div
                     key={idx}
-                    style={{ border: `1px solid ${isExpanded ? "rgba(22,61,38,.22)" : C.border}`, borderRadius: 10, background: isExpanded ? C.white : "rgba(255,255,255,.7)", transition: "all .15s" }}
+                    draggable
+                    onDragStart={e => handleDragStart(e, idx)}
+                    onDragOver={e => handleDragOver(e, idx)}
+                    onDrop={e => handleDrop(e, idx)}
+                    onDragEnd={handleDragEnd}
+                    onMouseEnter={() => setHoveredSection(idx)}
+                    onMouseLeave={() => setHoveredSection(null)}
+                    style={{
+                      border: `1px solid ${isDragTarget ? C.mid : isExpanded ? "rgba(22,61,38,.22)" : C.border}`,
+                      borderRadius: 10,
+                      background: isBeingDragged ? "rgba(22,61,38,.04)" : isExpanded ? C.white : "rgba(255,255,255,.7)",
+                      transition: "all .15s",
+                      opacity: isBeingDragged ? 0.45 : 1,
+                      boxShadow: isDragTarget ? `0 0 0 2px rgba(22,61,38,.15)` : "none",
+                    }}
                   >
                     {/* Section header row */}
-                    <div
-                      style={{ display: "flex", alignItems: "center", gap: 14, padding: "16px 18px", cursor: "pointer" }}
-                      onClick={() => setExpandedSection(isExpanded ? null : idx)}
-                    >
-                      <div style={{ width: 28, height: 28, borderRadius: "50%", background: "rgba(22,61,38,.08)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "rgba(22,61,38,.55)", flexShrink: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 16px" }}>
+
+                      {/* Drag handle */}
+                      <div
+                        title="Drag to reorder"
+                        style={{ cursor: "grab", flexShrink: 0, color: isHovered ? "rgba(22,61,38,.38)" : "rgba(22,61,38,.12)", transition: "color .15s", display: "flex", alignItems: "center" }}
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <svg viewBox="0 0 10 16" width="10" height="16" fill="currentColor">
+                          <circle cx="3" cy="4" r="1.5"/><circle cx="7" cy="4" r="1.5"/>
+                          <circle cx="3" cy="8" r="1.5"/><circle cx="7" cy="8" r="1.5"/>
+                          <circle cx="3" cy="12" r="1.5"/><circle cx="7" cy="12" r="1.5"/>
+                        </svg>
+                      </div>
+
+                      {/* Number badge */}
+                      <div
+                        onClick={() => setExpandedSection(isExpanded ? null : idx)}
+                        style={{ width: 26, height: 26, borderRadius: "50%", background: "rgba(22,61,38,.08)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.55)", flexShrink: 0, cursor: "pointer" }}
+                      >
                         {String(idx + 1).padStart(2, "0")}
                       </div>
-                      <div style={{ flex: 1, minWidth: 0 }}>
+
+                      {/* Title */}
+                      <div
+                        style={{ flex: 1, minWidth: 0, cursor: "pointer" }}
+                        onClick={() => !isExpanded && setExpandedSection(idx)}
+                      >
                         {isExpanded ? (
                           <input
                             value={editedTitle}
@@ -1353,22 +2244,73 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                             style={{ width: "100%", fontSize: 14, fontWeight: 600, color: C.dark, border: "none", background: "transparent", outline: "none", padding: 0 }}
                           />
                         ) : (
-                          <div style={{ fontSize: 14, fontWeight: 600, color: C.dark, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          <div style={{ fontSize: 14, fontWeight: 600, color: C.dark, lineHeight: 1.4 }}>
                             {editedTitle}
                           </div>
                         )}
                       </div>
+
+                      {/* Type badge */}
                       <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", padding: "3px 8px", borderRadius: 5, background: typeStyle.bg, color: typeStyle.color, textTransform: "uppercase", flexShrink: 0 }}>
                         {section.type}
                       </span>
-                      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" style={{ flexShrink: 0, opacity: .45, transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform .15s" }}>
+
+                      {/* Section action buttons — visible on hover */}
+                      <div style={{ display: "flex", gap: 3, flexShrink: 0, opacity: isHovered ? 1 : 0, transition: "opacity .15s", pointerEvents: isHovered ? "auto" : "none" }}>
+                        {/* Regenerate */}
+                        <button
+                          title="Regenerate section"
+                          onClick={e => { e.stopPropagation(); void handleRegenerateSection(idx); }}
+                          onMouseEnter={() => setHoveredBtn(`${idx}-regen`)}
+                          onMouseLeave={() => setHoveredBtn(null)}
+                          disabled={isRegenerating}
+                          style={{ width: 32, height: 32, borderRadius: 7, border: `1px solid ${hoveredBtn === `${idx}-regen` ? "rgba(22,61,38,.35)" : "rgba(22,61,38,.2)"}`, background: hoveredBtn === `${idx}-regen` ? "rgba(22,61,38,.1)" : "rgba(22,61,38,.06)", color: C.dark, cursor: isRegenerating ? "wait" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, transition: "all .12s" }}
+                        >
+                          {isRegenerating ? (
+                            <div style={{ width: 12, height: 12, border: "2px solid rgba(22,61,38,.25)", borderTopColor: C.mid, borderRadius: "50%", animation: "spin 0.7s linear infinite" }} />
+                          ) : (
+                            <span style={{ fontSize: 16, lineHeight: 1, userSelect: "none", display: "block" }}>↻</span>
+                          )}
+                        </button>
+                        {/* Duplicate */}
+                        <button
+                          title="Duplicate section"
+                          onClick={e => { e.stopPropagation(); handleDuplicateSection(idx); }}
+                          onMouseEnter={() => setHoveredBtn(`${idx}-dup`)}
+                          onMouseLeave={() => setHoveredBtn(null)}
+                          style={{ width: 32, height: 32, borderRadius: 7, border: `1px solid ${hoveredBtn === `${idx}-dup` ? "rgba(22,61,38,.35)" : "rgba(22,61,38,.2)"}`, background: hoveredBtn === `${idx}-dup` ? "rgba(22,61,38,.1)" : "rgba(22,61,38,.06)", color: C.dark, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, transition: "all .12s" }}
+                        >
+                          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3a1 1 0 011-1h7"/>
+                          </svg>
+                        </button>
+                        {/* Delete */}
+                        <button
+                          title="Delete section"
+                          onClick={e => { e.stopPropagation(); handleDeleteSection(idx); }}
+                          onMouseEnter={() => setHoveredBtn(`${idx}-del`)}
+                          onMouseLeave={() => setHoveredBtn(null)}
+                          style={{ width: 32, height: 32, borderRadius: 7, border: `1px solid ${hoveredBtn === `${idx}-del` ? "rgba(249,57,67,.4)" : "rgba(22,61,38,.2)"}`, background: hoveredBtn === `${idx}-del` ? "rgba(249,57,67,.08)" : "rgba(22,61,38,.06)", color: hoveredBtn === `${idx}-del` ? C.red : C.dark, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, transition: "all .12s" }}
+                        >
+                          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M3 5h10M6 5V3h4v2M5 5l.7 8h4.6L11 5"/>
+                          </svg>
+                        </button>
+                      </div>
+
+                      {/* Chevron */}
+                      <svg
+                        viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"
+                        onClick={() => setExpandedSection(isExpanded ? null : idx)}
+                        style={{ flexShrink: 0, opacity: .38, transform: isExpanded ? "rotate(180deg)" : "none", transition: "transform .15s", cursor: "pointer" }}
+                      >
                         <path d="M4 6l4 4 4-4" />
                       </svg>
                     </div>
 
                     {/* Description bullets (expanded) */}
                     {isExpanded && section.description.length > 0 && (
-                      <div style={{ padding: "0 18px 18px 60px", display: "flex", flexDirection: "column", gap: 6, borderTop: "1px solid rgba(22,61,38,.07)" }}>
+                      <div style={{ padding: "0 18px 18px 54px", borderTop: "1px solid rgba(22,61,38,.07)" }}>
                         <div style={{ paddingTop: 14 }}>
                           {section.description.map((line, li) => (
                             <div key={li} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 6 }}>
@@ -1393,11 +2335,68 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
 
             {/* Actions */}
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 32, paddingTop: 24, borderTop: "1px solid rgba(22,61,38,.1)" }}>
+              {/* Resume article from cache (fastest) */}
+              {activeCardId && readCardCache(activeCardId)?.articleData && (
+                <button
+                  onClick={() => {
+                    if (!activeCardId) return;
+                    const cached = readCardCache(activeCardId);
+                    if (!cached?.articleData) return;
+                    setArticleData(cached.articleData);
+                    setGeoScore(cached.geoScore ?? null);
+                    setQualityFlags(cached.qualityFlags ?? []);
+                    setBrandVoiceStatus(cached.brandVoiceStatus ?? null);
+                    setSeoTitle(cached.seoTitle ?? "");
+                    setSeoMetaDesc(cached.seoMetaDesc ?? "");
+                    setSeoTags(cached.seoTags ?? []);
+                    setEditorStep("article");
+                  }}
+                  style={{ padding: "13px 24px", borderRadius: 8, background: C.mid, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
+                >
+                  Resume article
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4 8h8M9 4l4 4-4 4" />
+                  </svg>
+                </button>
+              )}
+              {/* Load from server when no cache — article was saved to Supabase */}
+              {activeCardId && !readCardCache(activeCardId)?.articleData && (
+                <button
+                  disabled={restoring}
+                  onClick={async () => {
+                    if (!activeCardId || restoring) return;
+                    setRestoring(true);
+                    try {
+                      const res = await fetch(`/api/builder-sessions/${activeCardId}/restore-article`, { method: "POST" });
+                      const data = await res.json() as {
+                        article?: GeneratedArticle;
+                        geoScore?: { score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number };
+                        qualityFlags?: { section?: string; type: string; message: string }[];
+                        error?: string;
+                      };
+                      if (res.ok && data.article) {
+                        setArticleData(data.article);
+                        setGeoScore(data.geoScore ?? null);
+                        setQualityFlags(data.qualityFlags ?? []);
+                        setSeoTitle(data.article.title?.slice(0, 60) ?? "");
+                        setEditorStep("article");
+                      }
+                    } catch { /* non-fatal */ }
+                    finally { setRestoring(false); }
+                  }}
+                  style={{ padding: "13px 24px", borderRadius: 8, background: C.mid, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: restoring ? "default" : "pointer", opacity: restoring ? 0.6 : 1, display: "flex", alignItems: "center", gap: 8 }}
+                >
+                  {restoring ? <><span style={{ display: "inline-block", animation: "spin .8s linear infinite" }}>↻</span> Loading…</> : "Resume article"}
+                  {!restoring && <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M4 8h8M9 4l4 4-4 4" />
+                  </svg>}
+                </button>
+              )}
               <button
-                onClick={() => setEditorStep("article")}
+                onClick={() => void generateArticle()}
                 style={{ padding: "13px 24px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
               >
-                Generate article
+                {activeCardId && readCardCache(activeCardId)?.articleData ? "Regenerate article" : "Generate article"}
                 <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M4 8h8M9 4l4 4-4 4" />
                 </svg>
@@ -1433,86 +2432,426 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       <BackBtn label="Back to plan" onClick={() => setEditorStep("plan")} />
       <StepBar current={2} />
 
-      <div style={{ display: "grid", gridTemplateColumns: "212px 1fr 340px", gap: 28, alignItems: "start" }}>
-        {/* Outline sidebar */}
-        <aside style={{ position: "sticky", top: 180 }}>
-          <EyebrowLabel>OUTLINE</EyebrowLabel>
-          <div style={{ display: "flex", flexDirection: "column", gap: 2, marginTop: 14 }}>
-            {outline.length > 0 ? outline.map((s, i) => (
-              <div key={i} style={{ padding: "8px 10px", borderRadius: 7, fontSize: 12, fontWeight: i === 0 ? 600 : 400, lineHeight: 1.4, background: i === 0 ? "rgba(22,61,38,.09)" : "transparent", color: C.dark }}>
-                {getSectionTitle(i, s.title)}
-              </div>
-            )) : OUTLINE_ITEMS.map(o => (
-              <div key={o.label} style={{ padding: "8px 10px", borderRadius: 7, fontSize: 12, fontWeight: o.weight as never, lineHeight: 1.4, background: o.bg, paddingLeft: o.indent, color: o.color }}>{o.label}</div>
-            ))}
-          </div>
-          <div style={{ marginTop: 24, padding: 14, border: "1px solid rgba(22,61,38,.14)", borderRadius: 9 }}>
-            <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 8 }}>Answer block coverage</div>
-            <div style={{ fontSize: 11, fontWeight: 400, lineHeight: 1.5, color: "rgba(22,61,38,.68)" }}>4 of 6 sections open with a direct, quotable answer.</div>
-          </div>
-        </aside>
+      {/* Loading skeleton */}
+      {articleLoading && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 720 }}>
+          <div style={{ height: 130, borderRadius: 12, background: "rgba(22,61,38,.09)", animation: "pulse 1.4s ease-in-out infinite" }} />
+          <div style={{ height: 240, background: "rgba(22,61,38,.05)", animation: "pulse 1.4s ease-in-out infinite", animationDelay: ".1s" }} />
+          <div style={{ height: 180, borderRadius: 10, background: "rgba(22,61,38,.04)", animation: "pulse 1.4s ease-in-out infinite", animationDelay: ".2s" }} />
+          <div style={{ height: 160, borderRadius: 10, background: "rgba(22,61,38,.04)", animation: "pulse 1.4s ease-in-out infinite", animationDelay: ".3s" }} />
+          <div style={{ marginTop: 8, fontSize: 12, color: "rgba(22,61,38,.5)", fontWeight: 500 }}>Writing your article — usually takes 30–60 seconds…</div>
+        </div>
+      )}
 
-        {/* Document */}
-        <section style={{ padding: "44px 48px", border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
-          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".12em", color: C.mid }}>DRAFT · GENERATING…</div>
-          <h2 style={{ margin: "14px 0 0", fontSize: 30, fontWeight: 700, lineHeight: 1.15, letterSpacing: "-.6px" }}>
-            {articleTitle || "Generating article…"}
-          </h2>
-          <p style={{ margin: "20px 0 0", fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: C.dark }}>Generative engine optimization is the practice of structuring content so that answer engines quote it. Where search optimization competed for a ranked link, GEO competes for a sentence inside a generated answer.</p>
-          <div style={{ marginTop: 28 }}>
-            <h3 style={{ margin: "0 0 12px", fontSize: 17, fontWeight: 600 }}>GEO versus SEO</h3>
-            <p style={{ margin: 0, fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: C.dark }}>Both aim at discovery, but the unit of victory differs. SEO wins a position in a list. GEO wins a clause inside a synthesized answer, which means the writing has to be extractable on its own.</p>
-          </div>
-          <div style={{ marginTop: 28 }}>
-            <h3 style={{ margin: "0 0 12px", fontSize: 17, fontWeight: 600 }}>How engines pick sources</h3>
-            <p style={{ margin: 0, fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: C.dark, background: accepted.length > 0 ? "rgba(24,95,0,.06)" : "transparent", borderLeft: accepted.length > 0 ? `3px solid ${C.mid}` : "0", padding: accepted.length > 0 ? "14px 16px" : 0 }}>
-              {accepted.length > 0 ? "Retrieval favours pages that state a claim plainly, attribute it, and repeat the entity by name. In our sample of 4,100 answers, 71 percent of cited passages were under 60 words." : "Retrieval favours pages that state claims plainly. Engines tend to prefer content that is easy to quote."}
-            </p>
-          </div>
-          <div style={{ marginTop: 28 }}>
-            <h3 style={{ margin: "0 0 12px", fontSize: 17, fontWeight: 600 }}>A working checklist</h3>
-            <p style={{ margin: 0, fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: C.dark }}>Open every section with a direct answer. Attribute every number. Name the entity instead of writing it or the company. Keep paragraphs under 60 words so a passage can be lifted whole.</p>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 36, paddingTop: 24, borderTop: "1px solid rgba(22,61,38,.1)" }}>
-            <button onClick={onScore} style={{ padding: "12px 18px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer" }}>Rescore draft</button>
-            <button onClick={onPublish} style={{ padding: "12px 18px", border: "1px solid rgba(22,61,38,.28)", borderRadius: 8, fontSize: 13, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark }}>Send to WordPress</button>
-            <div style={{ marginLeft: "auto", fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.6)" }}>{accepted.length} of 3 suggestions applied</div>
-          </div>
-        </section>
+      {/* Error state */}
+      {articleError && !articleLoading && (
+        <div style={{ padding: "20px 24px", border: "1px solid rgba(249,57,67,.3)", borderRadius: 10, background: "rgba(249,57,67,.04)", color: C.red, fontSize: 13, maxWidth: 720 }}>
+          <div style={{ fontWeight: 700, marginBottom: 4 }}>Could not generate article</div>
+          <div style={{ fontWeight: 400, opacity: .8 }}>{articleError}</div>
+          <button
+            onClick={() => void generateArticle()}
+            style={{ marginTop: 14, padding: "8px 14px", borderRadius: 7, background: C.red, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
+          >Retry</button>
+        </div>
+      )}
 
-        {/* Live score + suggestions */}
-        <aside style={{ position: "sticky", top: 180, display: "flex", flexDirection: "column", gap: 16 }}>
-          <div style={{ padding: 20, border: `1px solid ${C.border}`, borderRadius: 12, background: C.dark, color: C.white }}>
-            <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", opacity: .75 }}>LIVE GEO SCORE</div>
-              <div style={{ fontSize: 11, fontWeight: 400, opacity: .7 }}>{accepted.length ? `up ${accepted.length * 6} this session` : "no change yet"}</div>
-            </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginTop: 12 }}>
-              <div style={{ fontSize: 40, fontWeight: 700, lineHeight: 1, letterSpacing: -1.4, color: C.salmon }}>{liveScore}</div>
-              <div style={{ fontSize: 12, fontWeight: 600, opacity: .7 }}>/ 100</div>
-            </div>
-          </div>
-          <EyebrowLabel>AI SUGGESTIONS</EyebrowLabel>
-          {SUGGESTIONS_DATA.map((sg, i) => {
-            const isAccepted = accepted.includes(i);
-            const isDismissed = dismissed.includes(i);
-            return (
-              <div key={i} style={{ padding: 18, border: `1px solid ${isAccepted ? C.mid : isDismissed ? "rgba(22,61,38,.1)" : "rgba(22,61,38,.16)"}`, borderRadius: 11, background: isAccepted ? "rgba(24,95,0,.06)" : isDismissed ? "rgba(22,61,38,.03)" : C.white }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-                  <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".08em", padding: "3px 7px", borderRadius: 5, background: "rgba(24,95,0,.12)", color: C.mid }}>{sg.kind}</span>
-                  <span style={{ fontSize: 11, fontWeight: 600, color: "rgba(22,61,38,.62)" }}>{sg.impact}</span>
+      {/* Newsletter + right sidebar */}
+      {articleData && !articleLoading && (() => {
+        const score = geoScore?.score ?? 0;
+        const scoreColor = score >= 80 ? C.mid : score >= 60 ? "#F5A623" : C.red;
+        const checks = geoScore?.checks ?? [];
+        const wordCount = geoScore?.wordCount ?? 0;
+        const bvStatus = brandVoiceStatus?.status ?? "clean";
+        const residualCount = brandVoiceStatus?.residuals?.reduce((n, r) => n + r.violations.length, 0) ?? 0;
+        const seoSlug = seoTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60);
+
+        return (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 272px", gap: 24, alignItems: "start" }}>
+            {/* Left: newsletter */}
+            <NewsletterArticle
+              article={articleData}
+              outline={outline}
+              onScore={onScore}
+              onPublish={onPublish}
+              highlightedSectionId={highlightedSectionId}
+              brandVoiceMatches={
+                brandVoiceStatus?.status === "partial"
+                  ? (brandVoiceStatus.residuals?.flatMap(r => r.violations.map(v => v.match)) ?? [])
+                  : []
+              }
+            />
+
+            {/* Right: panels */}
+            <aside style={{ position: "sticky", top: 72, alignSelf: "start", width: 272, display: "flex", flexDirection: "column", gap: 14, overflowY: "auto", maxHeight: "calc(100vh - 72px)", paddingBottom: 24 }}>
+
+              {/* ── QUALITY CHECKS ── */}
+              <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, flexShrink: 0 }}>
+                <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".12em", color: C.mid }}>QUALITY CHECKS</div>
                 </div>
-                <div style={{ fontSize: 12, fontWeight: 600, lineHeight: 1.45 }}>{sg.title}</div>
-                <div style={{ marginTop: 8, fontSize: 12, fontWeight: 400, lineHeight: 1.5, color: "rgba(22,61,38,.72)" }}>{sg.body}</div>
-                <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-                  <button onClick={() => { setAccepted(prev => prev.includes(i) ? prev : [...prev, i]); setDismissed(prev => prev.filter(x => x !== i)); }} style={{ padding: "8px 13px", borderRadius: 7, background: C.dark, color: C.white, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer" }}>{isAccepted ? "Applied" : "Apply"}</button>
-                  <button onClick={() => { setDismissed(prev => prev.includes(i) ? prev : [...prev, i]); setAccepted(prev => prev.filter(x => x !== i)); }} style={{ padding: "8px 13px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 7, fontSize: 11, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark }}>Dismiss</button>
+                <div style={{ padding: "14px 16px" }}>
+
+                  {/* Brand voice row */}
+                  <div style={{ marginBottom: bvStatus === "partial" && residualCount > 0 ? 10 : 14, paddingBottom: bvStatus === "partial" && residualCount > 0 ? 10 : 14, borderBottom: bvStatus === "partial" && residualCount > 0 ? "none" : `1px solid ${C.border}` }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: C.dark }}>Brand Voice</div>
+                      <span style={{
+                        fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 20,
+                        background: bvStatus === "clean" ? "rgba(24,95,0,.1)" : bvStatus === "partial" ? "rgba(245,166,35,.12)" : "rgba(249,57,67,.08)",
+                        color: bvStatus === "clean" ? C.mid : bvStatus === "partial" ? "#A0620A" : C.red,
+                      }}>
+                        {bvStatus === "clean" ? "Passed" : bvStatus === "partial" ? "Partially corrected" : "Check failed"}
+                      </span>
+                    </div>
+                    {bvStatus === "partial" && residualCount > 0 && (() => {
+                      const allViolations = brandVoiceStatus?.residuals?.flatMap(r => r.violations) ?? [];
+                      return (
+                        <div style={{ marginTop: 8 }}>
+                          <button
+                            onClick={() => setBvExpanded(e => !e)}
+                            style={{ display: "flex", alignItems: "center", gap: 5, background: "none", border: "none", cursor: "pointer", padding: 0, fontSize: 11, fontWeight: 500, color: "#A0620A" }}
+                          >
+                            <svg viewBox="0 0 10 10" width="10" height="10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" style={{ transition: "transform .18s", transform: bvExpanded ? "rotate(180deg)" : "none" }}><path d="M2 3.5l3 3 3-3"/></svg>
+                            {residualCount} violation{residualCount !== 1 ? "s" : ""} — {bvExpanded ? "hide" : "show"} details
+                          </button>
+                          {bvExpanded && (
+                            <ul style={{ margin: "8px 0 0", padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 5 }}>
+                              {allViolations.map((v, vi) => (
+                                <li
+                                  key={vi}
+                                  onClick={() => {
+                                    const marks = document.querySelectorAll<HTMLElement>('mark[data-bv-violation="true"]');
+                                    for (const mark of marks) {
+                                      if (mark.textContent === v.match) {
+                                        mark.scrollIntoView({ behavior: "smooth", block: "center" });
+                                        const orig = mark.style.cssText;
+                                        mark.style.cssText = "background:#fbbf24;color:#78350f;border-radius:2px;padding:0 2px;outline:2.5px solid #d97706;transition:all .15s;";
+                                        setTimeout(() => { mark.style.cssText = orig; }, 1100);
+                                        break;
+                                      }
+                                    }
+                                  }}
+                                  style={{ fontSize: 10, lineHeight: 1.4, color: "#92400e", display: "flex", gap: 4, alignItems: "baseline", flexWrap: "wrap", cursor: "pointer", borderRadius: 5, padding: "3px 4px", transition: "background .12s" }}
+                                  onMouseEnter={e => (e.currentTarget.style.background = "rgba(254,243,199,.7)")}
+                                  onMouseLeave={e => (e.currentTarget.style.background = "transparent")}
+                                >
+                                  <span style={{ fontWeight: 600, textTransform: "capitalize" }}>{v.type.replace(/_/g, " ")}</span>
+                                  <span style={{ color: "#A0620A" }}>—</span>
+                                  <span style={{ fontFamily: "monospace", background: "#fef3c7", border: "1px solid #f59e0b", borderRadius: 3, padding: "0 4px", color: "#92400e" }}>{v.match}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      );
+                    })()}
+                    {bvStatus === "partial" && residualCount > 0 && <div style={{ height: 1, background: C.border, marginTop: 10 }} />}
+                  </div>
+
+                  {/* GEO score */}
+                  <div style={{ marginBottom: 14, paddingBottom: 14, borderBottom: `1px solid ${C.border}` }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: C.dark }}>GEO Score</div>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: scoreColor }}>{score}/100</div>
+                    </div>
+                    <div style={{ height: 6, borderRadius: 4, background: "rgba(22,61,38,.1)", overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${score}%`, background: scoreColor, borderRadius: 4, transition: "width .4s" }} />
+                    </div>
+                  </div>
+
+                  {/* 5 GEO checks */}
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {checks.length > 0 ? checks.map((ch, i) => {
+                      const isCheckExpanded = expandedCheckIdx === i;
+                      const isCheckFixing = fixingCheckIdx === i;
+                      return (
+                      <div key={i} style={{ borderRadius: 7, border: `1px solid ${!ch.pass && isCheckExpanded ? "rgba(249,57,67,.25)" : "transparent"}`, background: !ch.pass && isCheckExpanded ? "rgba(249,57,67,.03)" : "transparent" }}>
+                        <button
+                          onClick={() => !ch.pass && setExpandedCheckIdx(isCheckExpanded ? null : i)}
+                          style={{ width: "100%", textAlign: "left", padding: isCheckExpanded ? "8px 8px 4px" : 0, background: "none", border: "none", cursor: ch.pass ? "default" : "pointer", display: "flex", alignItems: "flex-start", gap: 8 }}
+                        >
+                          <div style={{ width: 16, height: 16, borderRadius: "50%", flexShrink: 0, marginTop: 1, display: "flex", alignItems: "center", justifyContent: "center", background: ch.pass ? "rgba(24,95,0,.12)" : "rgba(249,57,67,.1)" }}>
+                            <svg viewBox="0 0 12 12" width="8" height="8" fill="none" stroke={ch.pass ? C.mid : C.red} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                              {ch.pass ? <path d="M2 6l3 3 5-5" /> : <><path d="M3 3l6 6"/><path d="M9 3l-6 6"/></>}
+                            </svg>
+                          </div>
+                          <div style={{ minWidth: 0, flex: 1 }}>
+                            <div style={{ fontSize: 11, fontWeight: 600, color: C.dark, lineHeight: 1.3 }}>{ch.label}</div>
+                            <div style={{ fontSize: 10, fontWeight: 400, color: "rgba(22,61,38,.58)", lineHeight: 1.4, marginTop: 2 }}>
+                              {ch.evidence.length > 80 ? ch.evidence.slice(0, 80) + "…" : ch.evidence}
+                            </div>
+                          </div>
+                          {!ch.pass && <span style={{ fontSize: 9, color: "rgba(22,61,38,.35)", flexShrink: 0, marginTop: 3 }}>{isCheckExpanded ? "▲" : "▼"}</span>}
+                        </button>
+                        {!ch.pass && isCheckExpanded && (
+                          <div style={{ display: "flex", gap: 6, padding: "4px 8px 8px" }}>
+                            <button
+                              onClick={() => void autoFixGeoCheck(ch.label, i)}
+                              disabled={isCheckFixing}
+                              style={{ flex: 1, padding: "7px 10px", borderRadius: 6, background: C.dark, color: C.white, fontSize: 10, fontWeight: 700, border: "none", cursor: isCheckFixing ? "default" : "pointer", opacity: isCheckFixing ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}
+                            >
+                              {isCheckFixing ? <><span style={{ display: "inline-block", animation: "spin .8s linear infinite" }}>↻</span> Fixing…</> : "⚡ Auto fix"}
+                            </button>
+                            <button
+                              onClick={() => setExpandedCheckIdx(null)}
+                              style={{ padding: "7px 10px", borderRadius: 6, background: "none", color: "rgba(22,61,38,.5)", fontSize: 10, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer" }}
+                            >
+                              Skip
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      );
+                    }) : (
+                      /* Placeholder checks while score loads */
+                      ["Named sources","Statistics with sources","Cited claims","AI-tell density","FAQ fan-out coverage"].map(label => (
+                        <div key={label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                          <div style={{ width: 16, height: 6, borderRadius: 4, background: "rgba(22,61,38,.1)" }} />
+                          <div style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.4)" }}>{label}</div>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Word count + quality flags */}
+                  {wordCount > 0 && (
+                    <div style={{ marginTop: 12, fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.5)" }}>{wordCount.toLocaleString()} words</div>
+                  )}
+                  {qualityFlags.length > 0 && (
+                    <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+                      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".1em", color: "rgba(22,61,38,.45)", marginBottom: 2 }}>CONTENT QUALITY — thin or missing sections</div>
+                      {qualityFlags.map((f, i) => {
+                        const sectionName = f.section ?? f.message.match(/^"([^"]+)"/)?.[1] ?? "";
+                        const isActive = sectionName && highlightedSectionId === sectionSlug(sectionName);
+                        const isExpanded = expandedFlagIdx === i;
+                        const isFixing = fixingFlagIdx === i;
+                        return (
+                          <div key={i} style={{ borderRadius: 7, background: isActive ? "rgba(245,166,35,.08)" : "rgba(249,57,67,.05)", border: `1px solid ${isActive ? "rgba(245,166,35,.6)" : "rgba(249,57,67,.18)"}`, overflow: "hidden" }}>
+                            <button
+                              onClick={() => {
+                                if (sectionName) scrollToSection(sectionName);
+                                setExpandedFlagIdx(isExpanded ? null : i);
+                              }}
+                              style={{ width: "100%", textAlign: "left", padding: "8px 10px", background: "none", border: "none", cursor: "pointer", display: "flex", flexDirection: "column", gap: 4 }}
+                            >
+                              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                                <span style={{ flexShrink: 0, fontSize: 9, fontWeight: 700, letterSpacing: ".08em", padding: "2px 5px", borderRadius: 4, background: C.red, color: C.white }}>E{i + 1}</span>
+                                {sectionName && <span style={{ fontSize: 9, fontWeight: 600, color: "rgba(22,61,38,.5)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{sectionName}</span>}
+                                <span style={{ marginLeft: "auto", fontSize: 9, color: "rgba(22,61,38,.35)", flexShrink: 0 }}>{isExpanded ? "▲" : "▼"}</span>
+                              </div>
+                              <span style={{ fontSize: 10, fontWeight: 400, color: C.red, lineHeight: 1.4 }}>
+                                {f.message.length > 90 ? f.message.slice(0, 90) + "…" : f.message}
+                              </span>
+                            </button>
+                            {isExpanded && (
+                              <div style={{ display: "flex", gap: 6, padding: "0 10px 10px" }}>
+                                <button
+                                  onClick={() => void autoFixFlag(f, i)}
+                                  disabled={isFixing}
+                                  style={{ flex: 1, padding: "7px 10px", borderRadius: 6, background: C.dark, color: C.white, fontSize: 10, fontWeight: 700, border: "none", cursor: isFixing ? "default" : "pointer", opacity: isFixing ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}
+                                >
+                                  {isFixing ? <><span style={{ display: "inline-block", animation: "spin .8s linear infinite" }}>↻</span> Fixing…</> : "⚡ Auto fix"}
+                                </button>
+                                <button
+                                  onClick={() => { setQualityFlags(prev => prev.filter((_, j) => j !== i)); setExpandedFlagIdx(null); }}
+                                  style={{ padding: "7px 10px", borderRadius: 6, background: "none", color: "rgba(22,61,38,.5)", fontSize: 10, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer" }}
+                                >
+                                  Dismiss
+                                </button>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Auto fix all */}
+                  {qualityFlags.length > 0 && (
+                    <button
+                      onClick={() => void autoFixAll()}
+                      disabled={fixingAll}
+                      style={{ width: "100%", marginTop: 14, padding: "10px 12px", border: "none", borderRadius: 8, fontSize: 12, fontWeight: 700, background: fixingAll ? "rgba(22,61,38,.55)" : C.dark, color: C.white, cursor: fixingAll ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}
+                    >
+                      {fixingAll
+                        ? <><span style={{ display: "inline-block", animation: "spin .8s linear infinite" }}>↻</span>{fixAllProgress ?? "Fixing…"}</>
+                        : <><span>⚡⚡⚡</span> Auto fix all ({qualityFlags.length})</>}
+                    </button>
+                  )}
+
+                  {/* Re-run GEO checks */}
+                  <button
+                    onClick={() => void rescoreGeo()}
+                    disabled={rescoring || fixingAll}
+                    style={{ width: "100%", marginTop: 8, padding: "9px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, background: "none", color: C.dark, cursor: (rescoring || fixingAll) ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 7, opacity: (rescoring || fixingAll) ? 0.6 : 1 }}
+                  >
+                    <span style={{ fontSize: 14, display: "inline-block", animation: rescoring ? "spin .8s linear infinite" : "none" }}>↻</span>
+                    {rescoring ? "Rescoring…" : "Re-run GEO checks"}
+                  </button>
+                  <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
                 </div>
               </div>
-            );
-          })}
-        </aside>
-      </div>
+
+              {/* ── SEO METADATA ── */}
+              <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, flexShrink: 0 }}>
+                <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".12em", color: C.mid }}>SEO METADATA</div>
+                  <button onClick={() => { setSeoTitle(articleData.title.slice(0, 60)); setSeoMetaDesc(""); }} style={{ fontSize: 10, fontWeight: 600, color: C.mid, background: "none", border: "none", cursor: "pointer" }}>Refresh</button>
+                </div>
+                <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+
+                  {/* Title */}
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)", marginBottom: 5 }}>Title</label>
+                    <input
+                      value={seoTitle}
+                      onChange={e => setSeoTitle(e.target.value)}
+                      style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, fontWeight: 400, background: C.bg, color: C.dark, outline: "none" }}
+                    />
+                  </div>
+
+                  {/* Slug */}
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)", marginBottom: 5 }}>Slug</label>
+                    <div style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 11, fontWeight: 400, background: "rgba(22,61,38,.03)", color: "rgba(22,61,38,.6)", fontFamily: "monospace", wordBreak: "break-all" }}>
+                      {seoSlug || "—"}
+                    </div>
+                  </div>
+
+                  {/* Tags */}
+                  <div>
+                    <label style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)", marginBottom: 5 }}>Tags</label>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 7 }}>
+                      {seoTags.map(tag => (
+                        <span key={tag} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: 20, background: "rgba(22,61,38,.07)", color: C.dark }}>
+                          {tag}
+                          <button onClick={() => setSeoTags(prev => prev.filter(t => t !== tag))} style={{ fontSize: 11, lineHeight: 1, background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.45)", padding: 0 }}>×</button>
+                        </span>
+                      ))}
+                    </div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <input
+                        value={newTagInput}
+                        onChange={e => setNewTagInput(e.target.value)}
+                        onKeyDown={e => { if (e.key === "Enter" && newTagInput.trim()) { setSeoTags(prev => [...new Set([...prev, newTagInput.trim()])]); setNewTagInput(""); } }}
+                        placeholder="New tag"
+                        style={{ flex: 1, padding: "7px 9px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 11, background: C.bg, color: C.dark, outline: "none" }}
+                      />
+                      <button
+                        onClick={() => { if (newTagInput.trim()) { setSeoTags(prev => [...new Set([...prev, newTagInput.trim()])]); setNewTagInput(""); } }}
+                        style={{ padding: "7px 11px", borderRadius: 7, background: C.dark, color: C.white, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer" }}
+                      >Add</button>
+                    </div>
+                  </div>
+
+                  {/* SEO title */}
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+                      <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)" }}>SEO title (≤ 60 chars)</label>
+                      <span style={{ fontSize: 10, fontWeight: 600, color: seoTitle.length > 60 ? C.red : "rgba(22,61,38,.4)" }}>{seoTitle.length}/60</span>
+                    </div>
+                    <input
+                      value={seoTitle}
+                      onChange={e => setSeoTitle(e.target.value)}
+                      style={{ width: "100%", padding: "8px 10px", border: `1px solid ${seoTitle.length > 60 ? C.red : C.border}`, borderRadius: 7, fontSize: 11, background: C.bg, color: C.dark, outline: "none" }}
+                    />
+                  </div>
+
+                  {/* Meta description */}
+                  <div>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+                      <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)" }}>Meta description (≤ 160 chars)</label>
+                      <span style={{ fontSize: 10, fontWeight: 600, color: seoMetaDesc.length > 160 ? C.red : "rgba(22,61,38,.4)" }}>{seoMetaDesc.length}/160</span>
+                    </div>
+                    <textarea
+                      value={seoMetaDesc}
+                      onChange={e => setSeoMetaDesc(e.target.value)}
+                      rows={3}
+                      placeholder="Write a compelling meta description…"
+                      style={{ width: "100%", padding: "8px 10px", border: `1px solid ${seoMetaDesc.length > 160 ? C.red : C.border}`, borderRadius: 7, fontSize: 11, lineHeight: 1.5, background: C.bg, color: C.dark, outline: "none", resize: "vertical" }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* ── PUBLISH ── */}
+              <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, flexShrink: 0 }}>
+                <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}` }}>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".12em", color: C.mid }}>PUBLISH</div>
+                </div>
+                <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+                  {/* Draft status */}
+                  {draftState === "success" && (
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 8, background: "rgba(24,95,0,.07)", border: "1px solid rgba(24,95,0,.18)" }}>
+                      <svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke={C.mid} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6l3 3 5-5"/></svg>
+                      <span style={{ fontSize: 11, fontWeight: 600, color: C.mid }}>Saved as draft in Sanity</span>
+                    </div>
+                  )}
+                  {draftState === "error" && (
+                    <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(249,57,67,.07)", border: "1px solid rgba(249,57,67,.22)", fontSize: 11, color: C.red }}>{draftError}</div>
+                  )}
+                  {/* Save inside tool (localStorage) */}
+                  <button
+                    onClick={() => {
+                      if (!activeCardId || !articleData) return;
+                      writeCardCache(activeCardId, {
+                        editorStep, outline, articleTitle, articleData,
+                        geoScore, qualityFlags, brandVoiceStatus,
+                        seoTitle, seoMetaDesc, seoTags,
+                        savedAt: new Date().toISOString(),
+                      });
+                      setArticleSavePulse(true);
+                      setTimeout(() => setArticleSavePulse(false), 1500);
+                    }}
+                    disabled={!articleData}
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700, border: `1.5px solid ${articleSavePulse ? C.mid : C.border}`, background: articleSavePulse ? "rgba(24,95,0,.07)" : C.faint, color: articleSavePulse ? C.mid : C.dark, cursor: !articleData ? "default" : "pointer", opacity: !articleData ? 0.45 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, transition: "border-color .2s, background .2s, color .2s" }}
+                  >
+                    {articleSavePulse ? (
+                      <>
+                        <svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6l3 3 5-5"/></svg>
+                        Saved!
+                      </>
+                    ) : (
+                      <>
+                        <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 13H3a1 1 0 01-1-1V2a1 1 0 011-1h6l3 3v8a1 1 0 01-1 1z"/><path d="M9 13V8H5v5M5 1v4h4"/></svg>
+                        Save
+                      </>
+                    )}
+                  </button>
+                  {/* Send to Sanity draft button */}
+                  <button
+                    onClick={() => void sendToDraftSanity()}
+                    disabled={draftState === "loading" || !articleData}
+                    style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 600, background: "none", color: C.dark, cursor: draftState === "loading" || !articleData ? "default" : "pointer", opacity: !articleData ? 0.45 : 1 }}
+                  >
+                    {draftState === "loading" ? "Saving…" : draftState === "success" ? "Update draft in Sanity" : "Save as draft in Sanity"}
+                  </button>
+                  {/* Publish live button */}
+                  {liveState === "success" && liveUrl ? (
+                    <a href={liveUrl} target="_blank" rel="noopener noreferrer" style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 7, width: "100%", padding: "10px 12px", borderRadius: 8, background: C.mid, color: C.white, fontSize: 12, fontWeight: 700, border: "none", textDecoration: "none" }}>
+                      <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 1v8M3 5l4 4 4-4M1 11h12"/></svg>
+                      View live article
+                    </a>
+                  ) : (
+                    <button
+                      onClick={() => void publishLive()}
+                      disabled={liveState === "loading" || !articleData}
+                      style={{ width: "100%", padding: "10px 12px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 700, border: "none", cursor: liveState === "loading" || !articleData ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 7, opacity: !articleData ? 0.45 : 1 }}
+                    >
+                      <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M7 1v8M3 5l4 4 4-4M1 11h12"/></svg>
+                      {liveState === "loading" ? "Publishing…" : "Publish live on website"}
+                    </button>
+                  )}
+                  {liveState === "error" && (
+                    <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(249,57,67,.07)", border: "1px solid rgba(249,57,67,.22)", fontSize: 11, color: C.red }}>{liveError}</div>
+                  )}
+                </div>
+              </div>
+
+            </aside>
+          </div>
+        );
+      })()}
     </>
   );
 }
@@ -2220,9 +3559,9 @@ function TrashScreen({ trashedCards, onRestore, onDeletePermanently, onEmptyTras
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
         {trashedCards.map(card => (
-          <div key={card.opportunityId} style={{ padding: 24, border: "1px solid rgba(22,61,38,.09)", borderRadius: 12, background: C.white, opacity: 0.82, display: "flex", flexDirection: "column", minHeight: 200 }}>
+          <div key={card.opportunityId} style={{ padding: 24, border: "1px solid rgba(22,61,38,.09)", borderRadius: 12, background: C.white, opacity: 0.82, display: "flex", flexDirection: "column", height: 260 }}>
             <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "rgba(22,61,38,.4)", marginBottom: 12 }}>DELETED</div>
-            <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4, color: C.dark, flex: 1, marginBottom: 10 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4, color: C.dark, marginBottom: 10, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
               {card.brief.prompt ?? "Untitled brief"}
             </div>
             {card.brief.format && (
@@ -2231,7 +3570,8 @@ function TrashScreen({ trashedCards, onRestore, onDeletePermanently, onEmptyTras
             {card.brief.client && (
               <div style={{ fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 12, background: C.faint, color: C.dark, width: "fit-content", marginBottom: 6 }}>{card.brief.client}</div>
             )}
-            <div style={{ fontSize: 11, color: "rgba(22,61,38,.38)", marginTop: 12, marginBottom: 16, paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.07)" }}>
+            <div style={{ flex: 1 }} />
+            <div style={{ fontSize: 11, color: "rgba(22,61,38,.38)", marginBottom: 16, paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.07)" }}>
               {timeAgo(card.createdAt)}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
@@ -2283,6 +3623,30 @@ export default function AtelierV2Page() {
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [generateDefaultFlow, setGenerateDefaultFlow] = useState<FlowMode>("wizard");
   const { data: settings } = useSettings();
+
+  // ── URL persistence: restore screen + active card on refresh ─────────────────
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const savedCard = params.get("card");
+    const savedScreen = params.get("screen") as Screen | null;
+    const validScreens: Screen[] = ["dashboard", "generate", "editor", "queue", "settings"];
+    if (savedCard) {
+      // Card takes priority — always opens editor
+      setActiveCardId(savedCard);
+      setScreen("editor");
+    } else if (savedScreen && validScreens.includes(savedScreen)) {
+      setScreen(savedScreen);
+    }
+  }, []);
+
+  // Keep URL in sync with current screen + card
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (screen !== "dashboard") params.set("screen", screen);
+    if (activeCardId) params.set("card", activeCardId);
+    const query = params.toString();
+    window.history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : ""));
+  }, [screen, activeCardId]);
 
   // Load trashed cards from localStorage on mount
   useEffect(() => { setTrashedCards(readTrashedCards()); }, []);
@@ -2398,10 +3762,17 @@ export default function AtelierV2Page() {
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap');
         * { box-sizing: border-box; }
-        button:hover { opacity: 0.88; }
         @keyframes pulse { 0%,100%{opacity:.35}50%{opacity:.7} }
-        ::-webkit-scrollbar { width: 10px; height: 10px; }
-        ::-webkit-scrollbar-thumb { background: rgba(22,61,38,.18); border-radius: 8px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: rgba(22,61,38,.06); border-radius: 8px; }
+        ::-webkit-scrollbar-thumb { background: rgba(22,61,38,.28); border-radius: 8px; }
+        mark[data-bv-violation] { background:#fef3c7;color:#92400e;border-radius:2px;padding:0 2px;outline:1px solid #f59e0b; }
+        .v2-masthead mark[data-bv-violation] { background:#f59e0b;color:#1c1917;outline:1px solid #d97706; }
+        .v2-rich ol, .v2-rich ul { margin: 10px 0 10px 22px; padding: 0; }
+        .v2-rich li { margin-bottom: 5px; font-size: inherit; line-height: 1.65; color: inherit; }
+        .v2-rich strong, .v2-rich b { font-weight: 600; }
+        .v2-rich em, .v2-rich i { font-style: italic; }
       `}</style>
 
       <Sidebar
@@ -2415,7 +3786,7 @@ export default function AtelierV2Page() {
       />
 
       <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-        <PageHeader screen={screen} onGenerate={go("generate")} onKeywords={go("keywords")} />
+        {screen !== "editor" && <PageHeader screen={screen} onGenerate={go("generate")} onKeywords={go("keywords")} />}
 
         <div style={{ flex: 1, padding: "32px 40px 64px" }}>
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}

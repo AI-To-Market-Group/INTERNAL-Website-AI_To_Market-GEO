@@ -44,7 +44,7 @@ function faqBlockToHtml(text: string): string {
   const clean = text.replace(/^\s*<p>\s*/i, "").replace(/\s*<\/p>\s*$/i, "").trim();
 
   // Format 1: newline between Q and A
-  const nlMatch = clean.match(/^Q:\s*(.+?)[\r\n]+A:\s*(.+)$/s);
+  const nlMatch = clean.match(/^Q:\s*(.+?)[\r\n]+A:\s*([\s\S]+)$/);
   if (nlMatch) {
     return `<details class="faq-item"><summary><span>${nlMatch[1].trim()}</span></summary><p>${nlMatch[2].trim()}</p></details>`;
   }

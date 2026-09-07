@@ -197,18 +197,23 @@ STRUCTURE RULES:
   response.sections = enforceOutlineStructure(response.sections, topicTitle);
   const outlineWarnings = validateOutline(response.sections);
 
-  await updateSession(user.id, opportunityId, {
-    outline: response.sections.map((s, i) => ({
-      id: `outline-${Date.now()}-${i}`,
-      headingLevel: "H2" as const,
-      type: s.type,
-      title: s.title,
-      content: s.description.map((d) => `• ${d}`).join("\n"),
-      bullets: [],
-      seo: { keywords: s.keywords ?? [] },
-    })),
-    currentStep: 1,
-  });
+  try {
+    await updateSession(user.id, opportunityId, {
+      outline: response.sections.map((s, i) => ({
+        id: `outline-${Date.now()}-${i}`,
+        headingLevel: "H2" as const,
+        type: s.type,
+        title: s.title,
+        content: s.description.map((d) => `• ${d}`).join("\n"),
+        bullets: [],
+        seo: { keywords: s.keywords ?? [] },
+      })),
+      currentStep: 1,
+    });
+  } catch (e) {
+    // Non-fatal — return the outline to the client even if persistence fails
+    console.error("[generate-outline] updateSession failed:", e);
+  }
 
   return Response.json({ ...response, outline_warnings: outlineWarnings });
 }
