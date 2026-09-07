@@ -154,6 +154,7 @@ Return only valid JSON with this exact shape (no markdown, no code block):
       "order": 1,
       "type": "introduction|section|comparison|how_to|faq|stats|conclusion",
       "title": "Section heading",
+      "eyebrow": "2–4 WORD LABEL IN CAPS — specific to this article's angle (e.g. THE CITATION GAP, PROOF PROBLEM, TOOL BREAKDOWN). Leave empty for faq, stats, and conclusion — those use fixed structural labels.",
       "description": ["What to cover: ...", "Angle: ...", "Avoid: ..."],
       "keywords": ["keyword1", "keyword2"]
     }
@@ -168,7 +169,8 @@ STRUCTURE RULES:
 5. "conclusion" comes BEFORE "faq" (faq is always last).
 6. Any how-to or process section MUST be type "how_to" — use numbered steps in description.
 7. Include 5 to 7 sections total.
-8. Each description array MUST have exactly 3 bullets: "What to cover: [specific content with real product names]", "Angle: [perspective]", "Avoid: [pitfalls]". No generic bullets like "explain benefits" — name the actual mechanism, brand, or stat.`;
+8. For every "introduction", "section", "comparison", and "how_to" section, write a punchy 2–4 word "eyebrow" in ALL CAPS that captures the specific tension or angle of that section (e.g. "THE PROOF PROBLEM", "TOOL SHOWDOWN", "WHY FLUENCY FAILS"). Do NOT set eyebrow for faq, stats, or conclusion — those use fixed structural labels.
+9. Each description array MUST have exactly 3 bullets: "What to cover: [specific content with real product names]", "Angle: [perspective]", "Avoid: [pitfalls]". No generic bullets like "explain benefits" — name the actual mechanism, brand, or stat.`;
       const contextLines: string[] = [`Topic: ${topicTitle}`];
       if (body.theme) contextLines.push(`Theme: ${body.theme}`);
       if (body.intents?.length) contextLines.push(`Intents: ${body.intents.join(", ")}`);
@@ -185,6 +187,7 @@ STRUCTURE RULES:
           order: s.order ?? i + 1,
           type: s.type ?? "section",
           title: s.title ?? `Section ${i + 1}`,
+          eyebrow: typeof s.eyebrow === "string" && s.eyebrow.trim() ? s.eyebrow.trim().toUpperCase() : undefined,
           description: Array.isArray(s.description) ? s.description : [],
           keywords: Array.isArray(s.keywords) ? s.keywords : [],
         }));
@@ -204,6 +207,7 @@ STRUCTURE RULES:
         headingLevel: "H2" as const,
         type: s.type,
         title: s.title,
+        eyebrow: s.eyebrow,
         content: s.description.map((d) => `• ${d}`).join("\n"),
         bullets: [],
         seo: { keywords: s.keywords ?? [] },

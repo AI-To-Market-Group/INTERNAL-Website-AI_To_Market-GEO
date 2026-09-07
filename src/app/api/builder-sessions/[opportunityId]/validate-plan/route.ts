@@ -56,11 +56,17 @@ function mockArticleResponse(
 function processResponse(raw: GenerateArticleResponse, articleTitle: string, outline: OutlineSection[]): GenerateArticleResponse {
   if (!raw.sections?.length) return mockArticleResponse(articleTitle, outline);
 
-  // 1. Normalise each section
+  // 1. Normalise each section — lowercase the type so all downstream checks are consistent
   const sections = raw.sections.map((s, i) => ({
     order: s.order ?? i + 1,
-    type: s.type ?? "section",
+    type: (s.type ?? "section").toLowerCase(),
     heading: s.heading ?? outline[i]?.title ?? `Section ${i + 1}`,
+    eyebrow: (() => {
+      const raw = (s as { eyebrow?: string }).eyebrow;
+      if (raw && raw.trim()) return raw.trim().toUpperCase();
+      const matched = outline.find(o => o.title?.toLowerCase() === (s.heading ?? "").toLowerCase()) ?? outline[i];
+      return matched?.eyebrow ?? undefined;
+    })(),
     content: {
       paragraphs: (s.content?.paragraphs ?? []).map((p, j) => ({
         id: (p as GenerateArticleParagraph).id ?? i * 10 + j + 1,
@@ -75,7 +81,7 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
   //    If a section becomes empty, backfill it from its outline bullets.
   const orphanFaq: { id: number; text: string }[] = [];
   for (const sec of sections) {
-    if (sec.type === "faq") continue;
+    if (sec.type === "faq" || /frequently.asked/i.test(sec.heading)) continue;
     const regular = sec.content.paragraphs.filter((p) => !p.text.trimStart().startsWith("Q:"));
     const faqLike = sec.content.paragraphs.filter((p) => p.text.trimStart().startsWith("Q:"));
     if (faqLike.length === 0) continue;
@@ -92,11 +98,9 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
     }
   }
 
-  // 3. Bullet-only sections (conclusion, how_to): GPT correctly puts content
-  //    in content.bullets, but mapGenerateArticleResponseToDraft only reads
-  //    content.paragraphs. Convert bullets into ONE paragraph containing an
-  //    HTML <ul>/<ol> list — strips the repetitive "Key Takeaway:" / "1." prefix
-  //    so each item reads cleanly inside a real bulleted list.
+  // 3. Bullet-only sections — how_to: convert to <ol> paragraph.
+  //    conclusion: keep bullets in content.bullets so the frontend renders them
+  //    as styled coral-dot items (never convert to HTML paragraph).
   for (const sec of sections) {
     if (sec.content.paragraphs.length > 0) continue;
     const bullets = (sec.content.bullets ?? []) as unknown[];
@@ -107,12 +111,9 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
         const text = typeof b === "string" ? b : (b as { text?: string })?.text ?? String(b);
         return text
           .trim()
-          // strip "Key Takeaway:", "Key Takeaways:", "Takeaway:" etc.
           .replace(/^key\s*takeaways?\s*:\s*/i, "")
           .replace(/^takeaway\s*:\s*/i, "")
-          // strip leading numbered prefixes like "1.", "1)", "Step 1:"
           .replace(/^(?:step\s*)?\d+[.)\]:]?\s*/i, "")
-          // strip leading bullet markers
           .replace(/^[•\-*]\s*/, "")
           .trim();
       })
@@ -120,9 +121,15 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
 
     if (items.length === 0) continue;
 
+    // conclusion: leave bullets in place — renderer uses them directly
+    if (/^conclusion$/i.test(sec.type)) {
+      sec.content.bullets = items;
+      continue;
+    }
+
+    // how_to: numbered ordered list
     const listTag = sec.type === "how_to" ? "ol" : "ul";
     const listHtml = `<${listTag}>${items.map((s) => `<li>${s}</li>`).join("")}</${listTag}>`;
-
     sec.content.paragraphs = [{ id: sec.order * 10 + 1, text: listHtml }];
     sec.content.bullets = [];
   }
@@ -151,7 +158,7 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
 
   // 4. Place orphan Q/A into the faq section (or create one)
   if (orphanFaq.length > 0) {
-    const faqIdx = sections.findIndex((s) => s.type === "faq");
+    const faqIdx = sections.findIndex((s) => s.type === "faq" || /frequently.asked/i.test(s.heading));
     if (faqIdx >= 0) {
       sections[faqIdx].content.paragraphs = [
         ...orphanFaq,
@@ -173,7 +180,7 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
   //       breaking the FAQ accordion rendering)
   //    b) Ensure every Q: paragraph has the \nA: separator
   for (const sec of sections) {
-    if (sec.type !== "faq") continue;
+    if (sec.type !== "faq" && !/frequently.asked/i.test(sec.heading)) continue;
 
     const expanded: typeof sec.content.paragraphs = [];
     for (const p of sec.content.paragraphs) {
@@ -303,7 +310,7 @@ SECTION-TYPE RULES (each one MUST add value beyond the outline):
 - For "how_to" sections: use the bullets array. Each step is formatted as: "N. [Short action title]: [40–60 word elaboration that adds at least ONE of: a specific tool/platform name, a real-world workflow example, a watch-out tip, or a mechanism explanation]." The elaboration must contain information NOT present in the outline. A bare step like "Pick an automation tool" is FORBIDDEN — write "Pick the automation tool that fits the team: n8n suits teams that need custom logic and low cost per run, Make suits marketing ops teams that want drag-and-drop speed. Avoid evaluating more than two options in parallel — tool paralysis kills sprint momentum." That's the bar.
 
 - For "introduction": 60–100 words, hook-driven, NOT a definition opener.
-- For "conclusion": bullets array contains 3–5 "Key Takeaway: [actionable insight]" bullet points.
+- For "conclusion": The "heading" MUST be a punchy, opinionated one-liner that captures the article's central thesis — NOT "Key Takeaways" or any generic label (e.g. "The teams that win citations build proof into the workflow"). The bullets array contains 3–5 short, actionable takeaways — plain sentences, no "Key Takeaway:" prefix.
 - For other "section" types: 2–3 paragraphs (60–80 words each) of real specific content using brand and product names from the outline.
 
 Every section must have at least one paragraph or one bullet entry. Use outline bullets as content scaffolding — never ignore them, never quote them.

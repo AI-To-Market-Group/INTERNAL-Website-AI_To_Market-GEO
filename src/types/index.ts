@@ -266,6 +266,7 @@ export interface GenerateArticleSection {
   order: number;
   type: string;
   title: string;
+  eyebrow?: string;
   description: string[];
   keywords: string[];
 }
@@ -312,6 +313,7 @@ export interface GenerateArticleSectionOutput {
   order: number;
   type: string;
   heading: string;
+  eyebrow?: string;
   content: GenerateArticleSectionContent;
 }
 
@@ -357,6 +359,7 @@ export interface OutlineSection {
   /** Section type for API (introduction, section, comparison, how_to, safety, conclusion). */
   type?: string;
   title: string;
+  eyebrow?: string;
   /** Structured text of the section (edited directly, no bullets). */
   content?: string;
   bullets: OutlineBullet[];
