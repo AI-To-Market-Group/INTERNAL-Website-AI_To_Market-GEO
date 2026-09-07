@@ -105,11 +105,8 @@ function sectionSlug(heading: string): string {
   return "nl-sec-" + heading.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 60);
 }
 
-function creditBarColor(pct: number): string {
-  if (pct >= 100) return C.red;
-  if (pct >= 80) return "#F5A623";
-  return C.salmon;
-}
+// Bar uses a fixed gradient track; fill width reveals it left-to-right
+const CREDIT_BAR_GRADIENT = "linear-gradient(to right, #39FF14 0%, #FFD700 50%, #FF2020 100%)";
 
 // ─── Nav definition ───────────────────────────────────────────────────────────
 
@@ -262,7 +259,7 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
         {collapsed ? (
           <div style={{ display: "flex", justifyContent: "center" }}>
             <div style={{ width: 34, height: 6, borderRadius: 4, background: "rgba(255,255,255,.18)", overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${creditPct}%`, background: creditBarColor(creditPct) }} />
+              <div style={{ height: "100%", width: `${creditPct}%`, background: CREDIT_BAR_GRADIENT, backgroundSize: `${(10000 / Math.max(creditPct, 0.1)).toFixed(0)}% 100%` }} />
             </div>
           </div>
         ) : (
@@ -272,7 +269,7 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
           >
             <div style={{ fontSize: 11, fontWeight: 600, lineHeight: 1.5 }}>Monthly generation credits</div>
             <div style={{ height: 6, borderRadius: 4, background: "rgba(255,255,255,.18)", margin: "10px 0 6px", overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${creditPct}%`, background: creditBarColor(creditPct), transition: "background .3s" }} />
+              <div style={{ height: "100%", width: `${creditPct}%`, background: CREDIT_BAR_GRADIENT, backgroundSize: `${(10000 / Math.max(creditPct, 0.1)).toFixed(0)}% 100%`, transition: "width .3s" }} />
             </div>
             <div style={{ fontSize: 11, fontWeight: 400, opacity: .7 }}>{creditLabel}</div>
           </div>
@@ -3746,7 +3743,7 @@ function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChang
                 {(() => {
                   const activeBudget = parseInt(budgetInput, 10) || budget;
                   const pct = Math.min(((data?.totalCalls ?? 0) / activeBudget) * 100, 100);
-                  return <div style={{ height: "100%", width: `${pct}%`, background: creditBarColor(pct), borderRadius: 4, transition: "width .3s, background .3s" }} />;
+                  return <div style={{ height: "100%", width: `${pct}%`, background: CREDIT_BAR_GRADIENT, backgroundSize: `${(10000 / Math.max(pct, 0.1)).toFixed(0)}% 100%`, borderRadius: 4, transition: "width .3s" }} />;
                 })()}
               </div>
               <div style={{ fontSize: 12, color: C.muted, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
