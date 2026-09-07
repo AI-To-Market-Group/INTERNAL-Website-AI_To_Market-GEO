@@ -1479,7 +1479,7 @@ function sectionTypeStyle(type: string) {
 
 // ─── Editor screen ────────────────────────────────────────────────────────────
 
-function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, savedPlans }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; savedPlans?: SavedPlan[] }) {
+function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[] }) {
   // ── Plan step state ────────────────────────────────────────────────────────
   type EditorStep = "plan" | "article";
   const [editorStep, setEditorStep] = useState<EditorStep>("plan");
@@ -4074,7 +4074,7 @@ export default function AtelierV2Page() {
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}
           {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} />}
           {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} />}
-          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} savedPlans={savedPlans} />}
+          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} />}
           {screen === "score"      && <ScoreScreen onEditor={go("editor")} />}
           {screen === "keywords"   && <KeywordsScreen />}
           {screen === "publish"    && <PublishScreen />}
