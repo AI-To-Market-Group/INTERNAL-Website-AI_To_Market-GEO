@@ -27,14 +27,13 @@ const EMPTY: UsageSummary = {
   byDay: [],
 };
 
-export async function dbGetUsageSummary(userId: string, days = 30): Promise<UsageSummary & { setupRequired?: boolean }> {
+export async function dbGetUsageSummary(_userId: string, days = 30): Promise<UsageSummary & { setupRequired?: boolean }> {
   const since = new Date();
   since.setDate(since.getDate() - days);
 
   const { data, error } = await supabaseAdmin
     .from("ai_usage_log")
     .select("feature, model, input_tokens, output_tokens, estimated_usd, created_at")
-    .eq("user_id", userId)
     .gte("created_at", since.toISOString())
     .order("created_at", { ascending: false });
 

@@ -48,16 +48,6 @@ interface SavedPlan {
   savedAt: string;
 }
 
-const SAVED_PLANS_KEY = "v2_saved_plans";
-
-function readSavedPlans(): SavedPlan[] {
-  try { return JSON.parse(localStorage.getItem(SAVED_PLANS_KEY) ?? "[]") as SavedPlan[]; }
-  catch { return []; }
-}
-function writeSavedPlans(plans: SavedPlan[]) {
-  try { localStorage.setItem(SAVED_PLANS_KEY, JSON.stringify(plans)); }
-  catch {}
-}
 
 // ─── Per-card autosave cache ──────────────────────────────────────────────────
 
@@ -1579,8 +1569,13 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     }
   }
 
-  // ── Load saved plans from localStorage on mount ────────────────────────────
-  useEffect(() => { setSavedPlans(readSavedPlans()); }, []);
+  // ── Load saved plans from Supabase on mount (org-wide) ────────────────────
+  useEffect(() => {
+    fetch("/api/saved-plans")
+      .then(r => r.json())
+      .then((plans: SavedPlan[]) => { if (Array.isArray(plans)) setSavedPlans(plans); })
+      .catch(() => {});
+  }, []);
 
   // ── Autosave: persist editor state per card so refresh restores correctly ──
   // Runs on every state change — no early-exit guard so even small changes are saved.
@@ -1732,8 +1727,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       .finally(() => setOutlineLoading(false));
   }, [activeCardId, draftCards]);
 
-  // ── Save current plan ──────────────────────────────────────────────────────
-  function handleSavePlan() {
+  // ── Save current plan (org-wide via Supabase) ─────────────────────────────
+  async function handleSavePlan() {
     if (!activeCardId || outline.length === 0) return;
     const card = draftCards?.find(c => c.opportunityId === activeCardId);
     const finalOutline = outline.map((s, i) => ({
@@ -1747,12 +1742,14 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       brief: card?.brief ?? {},
       savedAt: new Date().toISOString(),
     };
-    const existing = readSavedPlans();
-    const updated = [plan, ...existing.filter(p => p.opportunityId !== activeCardId)];
-    writeSavedPlans(updated);
-    setSavedPlans(updated);
+    setSavedPlans(prev => [plan, ...prev.filter(p => p.opportunityId !== activeCardId)]);
     setSavePulse(true);
     setTimeout(() => setSavePulse(false), 1400);
+    await fetch("/api/saved-plans", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(plan),
+    }).catch(() => {});
   }
 
   // ── Resume a saved plan ────────────────────────────────────────────────────
@@ -1763,10 +1760,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   }
 
   // ── Delete a saved plan ────────────────────────────────────────────────────
-  function handleDeleteSavedPlan(opportunityId: string) {
-    const updated = savedPlans.filter(p => p.opportunityId !== opportunityId);
-    writeSavedPlans(updated);
-    setSavedPlans(updated);
+  async function handleDeleteSavedPlan(opportunityId: string) {
+    setSavedPlans(prev => prev.filter(p => p.opportunityId !== opportunityId));
+    await fetch(`/api/saved-plans/${opportunityId}`, { method: "DELETE" }).catch(() => {});
   }
 
   // ── Helper: get the (possibly edited) title for a section ─────────────────
