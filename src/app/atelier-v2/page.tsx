@@ -238,18 +238,22 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
 
       {/* Nav */}
       <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {NAV_ITEMS.map(([key, label, d, badge]) => (
-          <button
-            key={key}
-            onClick={() => setScreen(key)}
-            title={collapsed ? label : undefined}
-            style={{ display: "flex", alignItems: "center", gap: collapsed ? 0 : 11, justifyContent: collapsed ? "center" : "flex-start", width: "100%", textAlign: "left", padding: collapsed ? "10px 0" : "9px 12px", borderRadius: 8, fontSize: 13, fontWeight: screen === key ? 600 : 400, background: screen === key ? "rgba(255,255,255,.16)" : "transparent", color: C.white, border: "none", cursor: "pointer" }}
-          >
-            <svg viewBox="0 0 20 20" width="16" height="16" style={{ flexShrink: 0, opacity: screen === key ? 1 : .6 }}><path d={d} fill="currentColor" /></svg>
-            {!collapsed && <span style={{ flex: 1, whiteSpace: "nowrap" }}>{label}</span>}
-            {!collapsed && badge && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "rgba(255,255,255,.16)" }}>{badge}</span>}
-          </button>
-        ))}
+        {NAV_ITEMS.map(([key, label, d, badge]) => {
+          const isActive = screen === key;
+          return (
+            <button
+              key={key}
+              onClick={() => setScreen(key)}
+              title={collapsed ? label : undefined}
+              className={`v2-nav-btn${isActive ? " v2-nav-active" : ""}${collapsed ? " v2-nav-collapsed" : ""}`}
+              style={{ display: "flex", alignItems: "center", gap: collapsed ? 0 : 11, justifyContent: collapsed ? "center" : "flex-start", width: "100%", textAlign: "left", padding: collapsed ? "10px 0" : "9px 12px", borderRadius: 8, fontSize: 13, fontWeight: isActive ? 600 : 400, background: isActive ? "rgba(255,255,255,.16)" : "transparent", color: C.white, border: "none", cursor: "pointer" }}
+            >
+              <svg viewBox="0 0 20 20" width="16" height="16" className="v2-nav-icon" style={{ flexShrink: 0, opacity: isActive ? 1 : .6 }}><path d={d} fill="currentColor" /></svg>
+              {!collapsed && <span className="v2-nav-label" style={{ flex: 1, whiteSpace: "nowrap" }}>{label}</span>}
+              {!collapsed && badge && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "rgba(255,255,255,.16)", transition: "transform .14s ease" }} className="v2-nav-label">{badge}</span>}
+            </button>
+          );
+        })}
       </nav>
 
       {/* Credits — click opens AI Usage page */}
@@ -4127,22 +4131,67 @@ function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChang
                   </div>
                 </div>
 
-                {/* Date axis */}
+                {/* Date axis — absolutely positioned so labels never get clipped by bar width */}
                 <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 0 }} />
-                <div style={{ display: "flex", gap: barGap, marginTop: 6 }}>
-                  {fullRange.map((d, i) => {
-                    const showLabel = i === 0 || i === fullRange.length - 1 || i % labelEvery === 0;
-                    const isHovered = hoveredBar?.idx === i;
-                    return (
-                      <div key={d.date} style={{ flex: 1, textAlign: "center", overflow: "hidden" }}>
-                        {showLabel || isHovered ? (
-                          <span style={{ fontSize: 10, fontWeight: isHovered ? 700 : 400, color: isHovered ? C.dark : C.muted, lineHeight: 1, display: "block", userSelect: "none" }}>
-                            {d.date.slice(5)}
-                          </span>
-                        ) : null}
-                      </div>
-                    );
-                  })}
+                <div style={{ position: "relative", height: 24, marginTop: 2 }}>
+                  {(() => {
+                    // Build label positions as % of total width
+                    type LabelPos = { pct: number; text: string; key: string; bold?: boolean };
+                    const labels: LabelPos[] = [];
+                    const n = fullRange.length;
+
+                    if (days <= 7) {
+                      // Every day
+                      fullRange.forEach((d, i) => {
+                        labels.push({ pct: (i + 0.5) / n * 100, text: d.date.slice(5), key: d.date });
+                      });
+                    } else if (days <= 30) {
+                      // Every 5 days + last
+                      fullRange.forEach((d, i) => {
+                        if (i === 0 || i % 5 === 0 || i === n - 1)
+                          labels.push({ pct: (i + 0.5) / n * 100, text: d.date.slice(5), key: d.date });
+                      });
+                    } else {
+                      // 90d: month start markers + first + last day of range
+                      fullRange.forEach((d, i) => {
+                        const dt = new Date(d.date + "T00:00:00");
+                        const isMonthStart = dt.getDate() === 1;
+                        const isFirst = i === 0;
+                        const isLast = i === n - 1;
+                        if (isMonthStart || isFirst || isLast) {
+                          const text = isMonthStart
+                            ? dt.toLocaleString("default", { month: "short" })
+                            : d.date.slice(5);
+                          labels.push({ pct: (i + 0.5) / n * 100, text, key: d.date });
+                        }
+                      });
+                    }
+
+                    // Hovered bar label overrides — show exact date
+                    const hoveredLabel = hoveredBar
+                      ? { pct: (hoveredBar.idx + 0.5) / n * 100, text: hoveredBar.date.slice(5), key: "hover", bold: true }
+                      : null;
+
+                    return [...labels, ...(hoveredLabel ? [hoveredLabel] : [])].map(l => (
+                      <span
+                        key={l.key}
+                        style={{
+                          position: "absolute",
+                          left: `${l.pct}%`,
+                          transform: "translateX(-50%)",
+                          fontSize: 10,
+                          fontWeight: l.bold ? 700 : 400,
+                          color: l.bold ? C.dark : C.muted,
+                          whiteSpace: "nowrap",
+                          userSelect: "none",
+                          lineHeight: 1,
+                          top: 4,
+                        }}
+                      >
+                        {l.text}
+                      </span>
+                    ));
+                  })()}
                 </div>
               </div>
             );
@@ -4539,6 +4588,61 @@ export default function AtelierV2Page() {
         .v2-rich--inv ul { list-style: none; margin-left: 0; padding-left: 0; }
         .v2-rich--inv ul li { padding-left: 20px; position: relative; }
         .v2-rich--inv ul li::before { content: ""; position: absolute; left: 0; top: 7px; width: 7px; height: 7px; border-radius: 50%; background: #F88379; }
+
+        /* Sidebar nav item hover animations */
+        .v2-nav-btn {
+          transition: background .14s ease, transform .13s ease;
+          position: relative;
+        }
+
+        /* ── Expanded (text + icon) ───────────────────────────── */
+        .v2-nav-btn::before {
+          content: "";
+          position: absolute;
+          left: 0; top: 20%; bottom: 20%;
+          width: 2.5px;
+          border-radius: 0 2px 2px 0;
+          background: rgba(255,255,255,.0);
+          transition: background .14s ease, top .14s ease, bottom .14s ease;
+        }
+        .v2-nav-btn:not(.v2-nav-collapsed):not(.v2-nav-active):hover {
+          background: rgba(255,255,255,.08) !important;
+        }
+        .v2-nav-btn:not(.v2-nav-collapsed):not(.v2-nav-active):hover::before {
+          background: rgba(255,255,255,.3);
+          top: 25%; bottom: 25%;
+        }
+        .v2-nav-btn:not(.v2-nav-collapsed):not(.v2-nav-active):hover .v2-nav-icon {
+          opacity: 0.9 !important;
+          transform: translateX(2px);
+        }
+        .v2-nav-btn:not(.v2-nav-collapsed):not(.v2-nav-active):hover .v2-nav-label {
+          transform: translateX(2px);
+        }
+        .v2-nav-active:not(.v2-nav-collapsed)::before {
+          background: rgba(255,255,255,.55);
+          top: 18%; bottom: 18%;
+        }
+
+        /* ── Collapsed (icon only) ────────────────────────────── */
+        .v2-nav-btn.v2-nav-collapsed:not(.v2-nav-active):hover {
+          background: rgba(255,255,255,.1) !important;
+        }
+        .v2-nav-btn.v2-nav-collapsed:not(.v2-nav-active):hover .v2-nav-icon {
+          opacity: 1 !important;
+          transform: translateY(-2px) scale(1.18);
+          filter: drop-shadow(0 2px 4px rgba(0,0,0,.25));
+        }
+        .v2-nav-btn.v2-nav-collapsed:active { transform: scale(0.92); }
+
+        /* ── Shared ───────────────────────────────────────────── */
+        .v2-nav-btn:not(.v2-nav-collapsed):active { transform: scale(0.97); }
+        .v2-nav-icon {
+          transition: opacity .14s ease, transform .16s cubic-bezier(.34,1.56,.64,1), filter .14s ease;
+        }
+        .v2-nav-label {
+          transition: transform .14s ease;
+        }
       `}</style>
 
       <Sidebar
