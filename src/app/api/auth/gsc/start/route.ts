@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
 const CLIENT_ID   = process.env.GOOGLE_OAUTH_CLIENT_ID;
-const ADMIN_EMAIL = "manoj@aitomarketgroup.com";
+const ADMIN_EMAIL = "neha@aitomarketgroup.com";
 
 export async function GET(req: NextRequest) {
   if (!CLIENT_ID) {

@@ -50,7 +50,7 @@ const SEEDED_KEYWORDS = [
   "AI-first growth strategy",
 ];
 
-const ADMIN_EMAIL = "manoj@aitomarketgroup.com";
+const ADMIN_EMAIL = "neha@aitomarketgroup.com";
 
 interface KeywordWorkspaceProps {
   seedKeywords: string[];

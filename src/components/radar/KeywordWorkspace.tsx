@@ -44,6 +44,8 @@ const SEEDED_KEYWORDS = [
   "AI-first growth strategy",
 ];
 
+const ADMIN_EMAIL = "neha@aitomarketgroup.com";
+
 interface KeywordWorkspaceProps {
   /** Seed keywords from user settings — fallback when GSC is not connected */
   seedKeywords: string[];
@@ -54,6 +56,16 @@ export function KeywordWorkspace({ seedKeywords }: KeywordWorkspaceProps) {
 
   // ── Panel state ──────────────────────────────────────────────────────────────
   const [open, setOpen] = useState(true);
+
+  // ── Current user (for admin gate) ────────────────────────────────────────────
+  const [userEmail, setUserEmail] = useState("");
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { email?: string } | null) => { if (d?.email) setUserEmail(d.email); })
+      .catch(() => {});
+  }, []);
 
   // ── Search Console ───────────────────────────────────────────────────────────
   const [gscQueries, setGscQueries]     = useState<GSCQuery[]>([]);
@@ -208,18 +220,23 @@ export function KeywordWorkspace({ seedKeywords }: KeywordWorkspaceProps) {
               <div className="flex flex-col overflow-hidden rounded-lg border border-slate-200">
                 <ColHeader title="Search Console" subtitle="Not connected" count={0} />
                 <div className="flex flex-1 flex-col items-center justify-center gap-3 p-5 min-h-[150px]">
-                  <p className="text-center text-xs text-slate-400 leading-relaxed">
-                    Connect Google Search Console to pull your top&nbsp;30 real queries.
-                  </p>
-                  <a
-                    href="/api/auth/gsc/start?returnTo=/atelier"
-                    className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-700 transition-colors"
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                    Connect GSC
-                  </a>
-                  {seedKeywords.length > 0 && (
-                    <p className="text-[10px] text-slate-400">Showing seed keywords below in the meantime</p>
+                  {userEmail === ADMIN_EMAIL ? (
+                    <>
+                      <p className="text-center text-xs text-slate-400 leading-relaxed">
+                        Connect Google Search Console once to pull real queries for your whole team.
+                      </p>
+                      <a
+                        href="/api/auth/gsc/start?returnTo=/atelier"
+                        className="inline-flex items-center gap-1.5 rounded-lg bg-slate-900 px-3.5 py-2 text-xs font-semibold text-white hover:bg-slate-700 transition-colors"
+                      >
+                        <ExternalLink className="h-3 w-3" />
+                        Connect GSC
+                      </a>
+                    </>
+                  ) : (
+                    <p className="text-center text-xs text-slate-400 leading-relaxed">
+                      Search Console not connected yet — ask your admin to connect it. Showing seed keywords in the meantime.
+                    </p>
                   )}
                 </div>
                 {seedKeywords.length > 0 && (
