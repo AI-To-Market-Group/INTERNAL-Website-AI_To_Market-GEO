@@ -6,7 +6,7 @@ export async function GET() {
   const { user, error } = await requireUser();
   if (error) return error;
 
-  const conn = await getGSCConnection(user.id);
+  const conn = await getGSCConnection();
   if (!conn) {
     return NextResponse.json({ connected: false, storedSiteUrl: null, availableSites: [] });
   }

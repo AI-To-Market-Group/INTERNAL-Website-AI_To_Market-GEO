@@ -20,6 +20,6 @@ export async function POST(req: NextRequest) {
   if (parsed.error) return parsed.error;
 
   const { opportunity_id, topic_title, opportunity_context } = parsed.data;
-  const session = await createSession(user.id, { opportunity_id, topic_title, opportunity_context });
+  const session = await createSession(user.id, { opportunity_id, topic_title, opportunity_context, creatorEmail: user.email ?? undefined });
   return ok(session);
 }

@@ -23,6 +23,13 @@ interface DraftCard {
   opportunityId: string;
   brief: BriefFields;
   createdAt: string;
+  creatorEmail?: string;
+}
+
+interface PresenceUser {
+  user_id: string;
+  user_email: string;
+  active_card_id: string | null;
 }
 
 interface V2OutlineSection {
@@ -962,17 +969,39 @@ function timeAgo(iso: string): string {
   return `${Math.floor(mins / 60)}h ago`;
 }
 
-function DraftCardComponent({ card, onCreateArticle, onResume, onRemove }: {
+const AVATAR_COLORS = ["#185F00", "#163D26", "#1a5276", "#6e2f8a", "#7d3c0e", "#1a6b4a"];
+
+function avatarInitial(email: string) {
+  return (email.split("@")[0]?.[0] ?? "?").toUpperCase();
+}
+
+function avatarColor(email: string) {
+  let h = 0;
+  for (let i = 0; i < email.length; i++) h = (h * 31 + email.charCodeAt(i)) % AVATAR_COLORS.length;
+  return AVATAR_COLORS[h];
+}
+
+function UserAvatar({ email, size = 24 }: { email: string; size?: number }) {
+  return (
+    <div title={email} style={{ width: size, height: size, borderRadius: "50%", background: avatarColor(email), color: "#fff", fontSize: size * 0.42, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, border: "2px solid #fff" }}>
+      {avatarInitial(email)}
+    </div>
+  );
+}
+
+function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers }: {
   card: DraftCard;
   onCreateArticle: () => void;
   onResume?: () => void;
   onRemove?: () => void;
+  activeUsers?: PresenceUser[];
 }) {
   const rawScore = card.brief.predictedScore ? parseInt(card.brief.predictedScore) : NaN;
   const scoreNum = isNaN(rawScore) ? null : rawScore;
+  const hasActive = activeUsers && activeUsers.length > 0;
 
   return (
-    <div style={{ padding: 24, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", height: 300, position: "relative" }}>
+    <div style={{ padding: 24, border: `1px solid ${hasActive ? "rgba(24,95,0,.35)" : C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", height: 300, position: "relative", boxShadow: hasActive ? "0 0 0 2px rgba(24,95,0,.12)" : "none" }}>
       {/* X remove button */}
       {onRemove && (
         <button
@@ -983,6 +1012,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove }: {
           ×
         </button>
       )}
+
       {/* Header: badge + score */}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 16, paddingRight: onRemove ? 28 : 0 }}>
         <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: C.mid, background: "rgba(24,95,0,.1)", padding: "4px 9px", borderRadius: 20 }}>READY TO BUILD</span>
@@ -1014,9 +1044,24 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove }: {
       {/* Spacer */}
       <div style={{ flex: 1 }} />
 
-      {/* Timestamp */}
-      <div style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.42)", marginBottom: 16, paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.08)" }}>
-        {timeAgo(card.createdAt)}
+      {/* Footer: timestamp + creator + active users */}
+      <div style={{ paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.08)", marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <span style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.42)" }}>{timeAgo(card.createdAt)}</span>
+            {card.creatorEmail && (
+              <span style={{ fontSize: 10, fontWeight: 500, color: "rgba(22,61,38,.38)" }}>{card.creatorEmail.split("@")[0]}</span>
+            )}
+          </div>
+          {hasActive && (
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.mid, animation: "pulse 2s infinite" }} />
+              <div style={{ display: "flex" }}>
+                {activeUsers!.slice(0, 3).map(u => <UserAvatar key={u.user_id} email={u.user_email} size={22} />)}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Actions */}
@@ -1025,7 +1070,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove }: {
           onClick={onCreateArticle}
           style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
         >
-          Create Article
+          {hasActive ? "Open (someone is here)" : "Create Article"}
         </button>
       </div>
     </div>
@@ -1437,7 +1482,7 @@ function sectionTypeStyle(type: string) {
 
 // ─── Editor screen ────────────────────────────────────────────────────────────
 
-function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void }) {
+function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[] }) {
   // ── Plan step state ────────────────────────────────────────────────────────
   type EditorStep = "plan" | "article";
   const [editorStep, setEditorStep] = useState<EditorStep>("plan");
@@ -2165,15 +2210,19 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
-          {draftCards!.map(card => (
-            <DraftCardComponent
-              key={card.opportunityId}
-              card={card}
-              onCreateArticle={() => onActivateCard(card.opportunityId)}
-              onResume={onResumeChat}
-              onRemove={() => onTrashCard?.(card.opportunityId)}
-            />
-          ))}
+          {draftCards!.map(card => {
+            const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
+            return (
+              <DraftCardComponent
+                key={card.opportunityId}
+                card={card}
+                onCreateArticle={() => onActivateCard(card.opportunityId)}
+                onResume={onResumeChat}
+                onRemove={() => onTrashCard?.(card.opportunityId)}
+                activeUsers={activeUsers}
+              />
+            );
+          })}
         </div>
       </div>
     );
@@ -2216,6 +2265,19 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     </div>
   );
 
+  // ── Presence banner (shared between plan + article steps) ────────────────
+  const coEditors = presenceData?.filter(p => p.active_card_id === activeCardId) ?? [];
+  const PresenceBanner = coEditors.length > 0 ? (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", marginBottom: 20, borderRadius: 8, background: "rgba(24,95,0,.07)", border: "1px solid rgba(24,95,0,.2)" }}>
+      <div style={{ display: "flex" }}>
+        {coEditors.slice(0, 4).map(u => <UserAvatar key={u.user_id} email={u.user_email} size={24} />)}
+      </div>
+      <span style={{ fontSize: 12, fontWeight: 500, color: C.mid }}>
+        {coEditors.map(u => u.user_email.split("@")[0]).join(", ")} {coEditors.length === 1 ? "is" : "are"} also working here
+      </span>
+    </div>
+  ) : null;
+
   // ── PLAN STEP ─────────────────────────────────────────────────────────────
   if (editorStep === "plan") {
     const activeCard = draftCards?.find(c => c.opportunityId === activeCardId);
@@ -2223,6 +2285,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     return (
       <div style={{ maxWidth: 820, margin: "0 auto" }}>
         <BackBtn label="All opportunities" onClick={onBackToCards} />
+        {PresenceBanner}
         <StepBar current={1} />
 
         {/* Header */}
@@ -2525,6 +2588,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   return (
     <>
       <BackBtn label="Back to plan" onClick={() => setEditorStep("plan")} />
+      {PresenceBanner}
       <StepBar current={2} />
 
       {/* Loading skeleton */}
@@ -3785,7 +3849,41 @@ export default function AtelierV2Page() {
   const [trashedCards, setTrashedCards] = useState<DraftCard[]>([]);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
   const [generateDefaultFlow, setGenerateDefaultFlow] = useState<FlowMode>("wizard");
+  const [presenceData, setPresenceData] = useState<PresenceUser[]>([]);
   const { data: settings } = useSettings();
+
+  // ── Presence: write own state, poll others ────────────────────────────────
+  const writePresence = (cardId: string | null) => {
+    fetch("/api/presence", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ cardId }) }).catch(() => {});
+  };
+
+  useEffect(() => {
+    // Write on mount
+    writePresence(null);
+    // Heartbeat every 30s
+    const hb = setInterval(() => { writePresence(activeCardId); }, 30_000);
+    // Clear presence on unload
+    const onUnload = () => { navigator.sendBeacon("/api/presence", JSON.stringify({ cardId: null })); };
+    window.addEventListener("beforeunload", onUnload);
+    return () => { clearInterval(hb); window.removeEventListener("beforeunload", onUnload); writePresence(null); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Write presence whenever the active card changes
+  useEffect(() => { writePresence(activeCardId); }, [activeCardId]);
+
+  // Poll others' presence every 8s
+  useEffect(() => {
+    const poll = () => {
+      fetch("/api/presence")
+        .then(r => r.ok ? r.json() as Promise<PresenceUser[]> : [])
+        .then(data => setPresenceData(data))
+        .catch(() => {});
+    };
+    poll();
+    const t = setInterval(poll, 8_000);
+    return () => clearInterval(t);
+  }, []);
 
   // ── URL persistence: restore screen + active card on refresh ─────────────────
   useEffect(() => {
@@ -3830,6 +3928,7 @@ export default function AtelierV2Page() {
               opportunityId: s.opportunityId,
               brief: { prompt: s.topicTitle } as BriefFields,
               createdAt: s.createdAt,
+              creatorEmail: (s as { creatorEmail?: string }).creatorEmail,
             }));
           return [...prev, ...toAdd];
         });
@@ -3955,7 +4054,7 @@ export default function AtelierV2Page() {
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}
           {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} />}
           {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} />}
-          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} />}
+          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} />}
           {screen === "score"      && <ScoreScreen onEditor={go("editor")} />}
           {screen === "keywords"   && <KeywordsScreen />}
           {screen === "publish"    && <PublishScreen />}

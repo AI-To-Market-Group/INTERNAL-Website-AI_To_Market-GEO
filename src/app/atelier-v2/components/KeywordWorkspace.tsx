@@ -50,11 +50,14 @@ const SEEDED_KEYWORDS = [
   "AI-first growth strategy",
 ];
 
+const ADMIN_EMAIL = "neha@aitomarketgroup.com";
+
 interface KeywordWorkspaceProps {
   seedKeywords: string[];
 }
 
 export function KeywordWorkspace({ seedKeywords }: KeywordWorkspaceProps) {
+  const [userEmail, setUserEmail] = useState<string>("");
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(true);
 
@@ -62,6 +65,13 @@ export function KeywordWorkspace({ seedKeywords }: KeywordWorkspaceProps) {
   const [gscQueries, setGscQueries]     = useState<GSCQuery[]>([]);
   const [gscConnected, setGscConnected] = useState<boolean | null>(null);
   const [gscSiteUrl, setGscSiteUrl]     = useState("");
+
+  useEffect(() => {
+    fetch("/api/auth/me")
+      .then((r) => r.ok ? r.json() : null)
+      .then((d: { email?: string } | null) => { if (d?.email) setUserEmail(d.email); })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     fetch("/api/gsc/top-queries")
@@ -196,18 +206,23 @@ export function KeywordWorkspace({ seedKeywords }: KeywordWorkspaceProps) {
               <div style={{ display: "flex", flexDirection: "column", border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
                 <ColHeader title="SEARCH CONSOLE" subtitle="Not connected" count={0} />
                 <div style={{ display: "flex", flex: 1, flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, padding: 20, minHeight: 150 }}>
-                  <p style={{ textAlign: "center", fontSize: 11, fontWeight: 400, lineHeight: 1.55, color: C.muted }}>
-                    Connect Google Search Console to pull your top 30 real queries.
-                  </p>
-                  <a
-                    href="/api/auth/gsc/start?returnTo=/atelier-v2"
-                    style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, textDecoration: "none" }}
-                  >
-                    <ExternalLink style={{ width: 12, height: 12 }} />
-                    Connect GSC
-                  </a>
-                  {seedKeywords.length > 0 && (
-                    <p style={{ fontSize: 10, fontWeight: 400, color: C.muted }}>Showing seed keywords in the meantime</p>
+                  {userEmail === ADMIN_EMAIL ? (
+                    <>
+                      <p style={{ textAlign: "center", fontSize: 11, fontWeight: 400, lineHeight: 1.55, color: C.muted }}>
+                        Connect Google Search Console once to pull real queries for your whole team.
+                      </p>
+                      <a
+                        href="/api/auth/gsc/start?returnTo=/atelier-v2"
+                        style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "9px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, textDecoration: "none" }}
+                      >
+                        <ExternalLink style={{ width: 12, height: 12 }} />
+                        Connect GSC
+                      </a>
+                    </>
+                  ) : (
+                    <p style={{ textAlign: "center", fontSize: 11, fontWeight: 400, lineHeight: 1.55, color: C.muted }}>
+                      Search Console not connected yet — ask your admin to connect it. Using seed keywords in the meantime.
+                    </p>
                   )}
                 </div>
                 {seedKeywords.length > 0 && (

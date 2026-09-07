@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { saveGSCConnection } from "@/lib/gsc-oauth-store";
 
 const CLIENT_ID     = process.env.GOOGLE_OAUTH_CLIENT_ID;
 const CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
-const REDIRECT_URI  = process.env.GOOGLE_REDIRECT_URI_GSC;
 
 function abs(req: NextRequest, path: string) {
   return `${req.nextUrl.origin}${path}`;
@@ -22,31 +20,19 @@ export async function GET(req: NextRequest) {
   if (!code) {
     return NextResponse.redirect(abs(req, "/atelier?gsc_error=missing_code"));
   }
-  if (!CLIENT_ID || !CLIENT_SECRET || !REDIRECT_URI) {
+  if (!CLIENT_ID || !CLIENT_SECRET) {
     return NextResponse.redirect(abs(req, "/atelier?gsc_error=not_configured"));
   }
 
-  // Decode state
-  let userId = "";
+  const REDIRECT_URI = `${req.nextUrl.origin}/api/auth/gsc/callback`;
+
+  // Decode state for returnTo only
   let returnTo = "/atelier";
   if (stateParam) {
     try {
       const parsed = JSON.parse(Buffer.from(stateParam, "base64url").toString("utf8"));
-      userId   = parsed.userId  ?? "";
       returnTo = parsed.returnTo ?? "/atelier";
     } catch { /* ignore */ }
-  }
-
-  // Prefer Supabase session
-  if (!userId) {
-    try {
-      const supabase = await createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) userId = user.id;
-    } catch { /* no session */ }
-  }
-  if (!userId) {
-    return NextResponse.redirect(abs(req, "/atelier?gsc_error=unauthenticated"));
   }
 
   // Exchange code for tokens
@@ -101,7 +87,6 @@ export async function GET(req: NextRequest) {
   }
 
   await saveGSCConnection({
-    userId,
     siteUrl,
     accessToken:  tokens.access_token,
     refreshToken: tokens.refresh_token,

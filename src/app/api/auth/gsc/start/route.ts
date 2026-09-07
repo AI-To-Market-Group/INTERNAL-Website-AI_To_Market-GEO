@@ -1,23 +1,29 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-const CLIENT_ID    = process.env.GOOGLE_OAUTH_CLIENT_ID;
-const REDIRECT_URI = process.env.GOOGLE_REDIRECT_URI_GSC;
+const CLIENT_ID   = process.env.GOOGLE_OAUTH_CLIENT_ID;
+const ADMIN_EMAIL = "neha@aitomarketgroup.com";
 
 export async function GET(req: NextRequest) {
-  if (!CLIENT_ID || !REDIRECT_URI) {
+  if (!CLIENT_ID) {
     return NextResponse.json({ error: "GSC OAuth not configured." }, { status: 500 });
   }
 
-  let userId = "";
+  const REDIRECT_URI = `${req.nextUrl.origin}/api/auth/gsc/callback`;
+
+  // Only the admin can initiate the org-level GSC connection
   try {
     const supabase = await createClient();
     const { data: { user } } = await supabase.auth.getUser();
-    if (user) userId = user.id;
-  } catch { /* no session */ }
+    if (!user || user.email !== ADMIN_EMAIL) {
+      return NextResponse.json({ error: "Only an admin can connect Search Console." }, { status: 403 });
+    }
+  } catch {
+    return NextResponse.json({ error: "Not authenticated." }, { status: 401 });
+  }
 
   const returnTo = req.nextUrl.searchParams.get("returnTo") ?? "/atelier";
-  const state = Buffer.from(JSON.stringify({ userId, returnTo }), "utf8").toString("base64url");
+  const state = Buffer.from(JSON.stringify({ returnTo }), "utf8").toString("base64url");
 
   const params = new URLSearchParams({
     client_id:     CLIENT_ID,
