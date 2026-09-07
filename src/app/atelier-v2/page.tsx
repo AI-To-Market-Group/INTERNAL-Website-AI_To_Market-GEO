@@ -3930,6 +3930,7 @@ function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChang
   const [days, setDays] = useState(30);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [budgetInput, setBudgetInput] = useState(String(budget));
+  const [hoveredBar, setHoveredBar] = useState<{ idx: number; date: string; usd: number; calls: number } | null>(null);
 
   // Sync budget from server on mount
   useEffect(() => {
@@ -4045,7 +4046,6 @@ function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChang
 
           {/* Daily chart — full date range, zero-filled for days with no data */}
           {(() => {
-            // Build complete day array for the selected period
             const fullRange: { date: string; estimatedUsd: number; calls: number }[] = [];
             const today = new Date();
             for (let i = days - 1; i >= 0; i--) {
@@ -4056,8 +4056,8 @@ function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChang
               fullRange.push({ date: dateStr, estimatedUsd: found?.estimatedUsd ?? 0, calls: (found as { calls?: number })?.calls ?? 0 });
             }
             const rangeMax = Math.max(...fullRange.map(d => d.estimatedUsd), 0.000001);
-            // Label interval: every 1d for 7d, every 5d for 30d, every 10d for 90d
             const labelEvery = days <= 7 ? 1 : days <= 30 ? 5 : 10;
+            const barGap = days > 30 ? 2 : 3;
             return (
               <div style={{ padding: "20px 24px", background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 24 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
@@ -4066,38 +4066,80 @@ function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChang
                     {fullRange.filter(d => d.estimatedUsd > 0).length} active days · peak {fmtUsd(rangeMax)}
                   </div>
                 </div>
-                {/* Bar chart */}
-                <div style={{ display: "flex", alignItems: "flex-end", gap: days > 30 ? 2 : 3, height: 100, marginBottom: 6 }}>
-                  {fullRange.map((d, i) => {
-                    const pct = (d.estimatedUsd / rangeMax) * 100;
-                    const hasData = d.estimatedUsd > 0;
-                    const mmdd = d.date.slice(5);
-                    return (
-                      <div
-                        key={d.date}
-                        title={`${mmdd}  ${hasData ? fmtUsd(d.estimatedUsd) + " · " + d.calls + " calls" : "no usage"}`}
-                        style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", height: "100%", justifyContent: "flex-end" }}
-                      >
-                        <div style={{
-                          width: "100%",
-                          height: hasData ? `${Math.max(pct, 3)}%` : "2px",
-                          background: hasData ? C.mid : "rgba(22,61,38,.1)",
-                          borderRadius: "3px 3px 0 0",
-                          opacity: hasData ? .85 : 1,
-                          transition: "height .15s",
-                        }} />
-                      </div>
-                    );
-                  })}
+
+                {/* Bars + tooltip */}
+                <div style={{ position: "relative" }}>
+                  {/* Custom tooltip */}
+                  {hoveredBar && (
+                    <div style={{
+                      position: "absolute",
+                      bottom: "calc(100% + 8px)",
+                      left: `clamp(0px, calc(${(hoveredBar.idx / fullRange.length) * 100}% - 60px), calc(100% - 130px))`,
+                      background: C.dark,
+                      color: C.white,
+                      borderRadius: 8,
+                      padding: "8px 12px",
+                      fontSize: 12,
+                      fontWeight: 500,
+                      whiteSpace: "nowrap",
+                      pointerEvents: "none",
+                      zIndex: 10,
+                      boxShadow: "0 4px 12px rgba(0,0,0,.18)",
+                      lineHeight: 1.6,
+                    }}>
+                      <div style={{ fontWeight: 700, marginBottom: 2 }}>{hoveredBar.date}</div>
+                      {hoveredBar.usd > 0 ? (
+                        <>
+                          <div style={{ color: "rgba(255,255,255,.85)" }}>{fmtUsd(hoveredBar.usd)}</div>
+                          <div style={{ color: "rgba(255,255,255,.55)", fontSize: 11 }}>{hoveredBar.calls} call{hoveredBar.calls !== 1 ? "s" : ""}</div>
+                        </>
+                      ) : (
+                        <div style={{ color: "rgba(255,255,255,.45)" }}>No usage</div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Bar columns */}
+                  <div
+                    style={{ display: "flex", alignItems: "flex-end", gap: barGap, height: 110 }}
+                    onMouseLeave={() => setHoveredBar(null)}
+                  >
+                    {fullRange.map((d, i) => {
+                      const pct = (d.estimatedUsd / rangeMax) * 100;
+                      const hasData = d.estimatedUsd > 0;
+                      const isHovered = hoveredBar?.idx === i;
+                      return (
+                        <div
+                          key={d.date}
+                          onMouseEnter={() => setHoveredBar({ idx: i, date: d.date, usd: d.estimatedUsd, calls: d.calls })}
+                          style={{ flex: 1, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", cursor: "default" }}
+                        >
+                          <div style={{
+                            width: "100%",
+                            height: hasData ? `${Math.max(pct, 4)}%` : "2px",
+                            background: hasData ? (isHovered ? C.dark : C.mid) : (isHovered ? "rgba(22,61,38,.2)" : "rgba(22,61,38,.1)"),
+                            borderRadius: "3px 3px 0 0",
+                            transition: "background .1s, height .1s",
+                          }} />
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
-                {/* Date axis labels */}
-                <div style={{ display: "flex", alignItems: "flex-start", gap: days > 30 ? 2 : 3 }}>
+
+                {/* Date axis */}
+                <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 0 }} />
+                <div style={{ display: "flex", gap: barGap, marginTop: 6 }}>
                   {fullRange.map((d, i) => {
                     const showLabel = i === 0 || i === fullRange.length - 1 || i % labelEvery === 0;
-                    const mmdd = d.date.slice(5);
+                    const isHovered = hoveredBar?.idx === i;
                     return (
-                      <div key={d.date} style={{ flex: 1, fontSize: 9, color: C.muted, textAlign: "center", overflow: "hidden", opacity: showLabel ? 1 : 0, userSelect: "none", lineHeight: 1.2 }}>
-                        {showLabel ? mmdd : ""}
+                      <div key={d.date} style={{ flex: 1, textAlign: "center", overflow: "hidden" }}>
+                        {showLabel || isHovered ? (
+                          <span style={{ fontSize: 10, fontWeight: isHovered ? 700 : 400, color: isHovered ? C.dark : C.muted, lineHeight: 1, display: "block", userSelect: "none" }}>
+                            {d.date.slice(5)}
+                          </span>
+                        ) : null}
                       </div>
                     );
                   })}
