@@ -19,11 +19,22 @@ export async function POST(req: NextRequest, { params }: Params) {
     return Response.json({ error: "No article generated yet. Generate the article first." }, { status: 400 });
   }
 
-  let body: { seoTitle?: string; seoMetaDesc?: string; seoTags?: string[] } = {};
+  let body: {
+    seoPageTitle?: string;
+    seoTitle?: string;
+    seoSlug?: string;
+    seoMetaDesc?: string;
+    seoTags?: string[];
+    seoExcerpt?: string;
+    seoFocusKeyword?: string;
+  } = {};
   try { body = (await req.json()) as typeof body; } catch { /* no body is fine */ }
 
-  const title = session.draft.title ?? session.topicTitle;
-  const slug = title
+  const draftTitle = session.draft.title ?? session.topicTitle;
+  const title = body.seoPageTitle ?? draftTitle;
+
+  // Use server-generated slug from generate-metadata if available; otherwise derive from title
+  const slug = body.seoSlug || title
     .toLowerCase()
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, "")
@@ -32,13 +43,14 @@ export async function POST(req: NextRequest, { params }: Params) {
     .slice(0, 80);
 
   const wpMetadata: WordPressMetadata = {
-    title: body.seoTitle ?? title,
+    title,
     slug,
-    excerpt: body.seoMetaDesc ?? "",
-    category: "news",
+    excerpt: body.seoExcerpt ?? "",          // LLM-generated excerpt (≤200 chars)
+    category: "News",
     tags: body.seoTags ?? [],
-    seo_title: body.seoTitle ?? title,
+    seo_title: body.seoTitle ?? title.slice(0, 60),
     seo_description: body.seoMetaDesc ?? "",
+    focus_keyword: body.seoFocusKeyword,
   };
 
   try {

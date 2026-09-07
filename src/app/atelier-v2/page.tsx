@@ -1459,6 +1459,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [regeneratingSections, setRegeneratingSections] = useState<Set<number>>(new Set());
   const prevCardIdRef = useRef<string | null>(null);
   const preloadedPlanRef = useRef<{ outline: V2OutlineSection[]; title: string; brief: BriefFields } | null>(null);
+  const metadataAutoFetchRef = useRef(false);
 
   // ── Article generation state ────────────────────────────────────────────────
   const [articleData, setArticleData] = useState<GeneratedArticle | null>(null);
@@ -1592,6 +1593,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         });
       }
       prevCardIdRef.current = null;
+      metadataAutoFetchRef.current = false;
       // Clear article state so the next card activation starts from a clean slate
       setEditorStep("plan");
       setOutline([]);
@@ -1999,6 +2001,17 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     } catch { /* non-fatal */ }
     finally { setSeoMetadataLoading(false); }
   }
+
+  // ── Auto-generate metadata once when article is finalised and no metadata exists ──
+  useEffect(() => {
+    if (!articleFinalised || !articleData || !activeCardId) return;
+    if (seoTitle || seoMetaDesc) return; // already has metadata, skip
+    if (metadataAutoFetchRef.current) return; // already triggered for this card
+    metadataAutoFetchRef.current = true;
+    void generateMetadata();
+  // generateMetadata reads from closure; only re-run when finalised state or card changes
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [articleFinalised, articleData, activeCardId]);
 
   // ── Generate article via validate-plan SSE ─────────────────────────────────
   async function generateArticle() {
