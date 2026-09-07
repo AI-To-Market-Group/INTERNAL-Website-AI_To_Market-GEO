@@ -1830,12 +1830,19 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       });
       const data = await res.json() as { sectionHeading?: string; paragraphs?: { id: number; text: string }[]; error?: string };
       if (res.ok && data.paragraphs?.length) {
-        setArticleData(prev => !prev ? prev : ({
-          ...prev,
-          sections: prev.sections.map(s =>
+        setArticleData(prev => {
+          if (!prev) return prev;
+          const updated = { ...prev, sections: prev.sections.map(s =>
             s.heading === sectionHeading ? { ...s, content: { ...s.content, paragraphs: data.paragraphs! } } : s
-          ),
-        }));
+          ) };
+          // Persist to Supabase immediately
+          fetch(`/api/builder-sessions/${activeCardId}/save-article`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ article: updated }),
+          }).catch(() => {/* non-fatal */});
+          return updated;
+        });
         setQualityFlags(prev => prev.filter((_, i) => i !== flagIdx));
         setExpandedFlagIdx(null);
       }
@@ -1915,12 +1922,21 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     }
 
     // Commit all changes at once
+    const fixedArticle = articleData ? { ...articleData, sections: currentSections } : null;
     setArticleData(prev => prev ? { ...prev, sections: currentSections } : prev);
     setQualityFlags([]);
     setExpandedFlagIdx(null);
     setFixAllProgress(null);
     setFixingAll(false);
     void rescoreGeo();
+    // Persist the fixed article to Supabase so restore-article always returns the latest version
+    if (fixedArticle && activeCardId) {
+      fetch(`/api/builder-sessions/${activeCardId}/save-article`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ article: fixedArticle }),
+      }).catch(() => {/* non-fatal */});
+    }
   }
 
   // ── Generate article via validate-plan SSE ─────────────────────────────────
@@ -2790,9 +2806,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   {draftState === "error" && (
                     <div style={{ padding: "9px 12px", borderRadius: 8, background: "rgba(249,57,67,.07)", border: "1px solid rgba(249,57,67,.22)", fontSize: 11, color: C.red }}>{draftError}</div>
                   )}
-                  {/* Save inside tool (localStorage) */}
+                  {/* Save inside tool (localStorage + Supabase) */}
                   <button
-                    onClick={() => {
+                    onClick={async () => {
                       if (!activeCardId || !articleData) return;
                       writeCardCache(activeCardId, {
                         editorStep, outline, articleTitle, articleData,
@@ -2800,6 +2816,12 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         seoTitle, seoMetaDesc, seoTags,
                         savedAt: new Date().toISOString(),
                       });
+                      // Also persist to Supabase so restore-article always returns the latest version
+                      fetch(`/api/builder-sessions/${activeCardId}/save-article`, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ article: articleData }),
+                      }).catch(() => {/* non-fatal */});
                       setArticleSavePulse(true);
                       setTimeout(() => setArticleSavePulse(false), 1500);
                     }}
