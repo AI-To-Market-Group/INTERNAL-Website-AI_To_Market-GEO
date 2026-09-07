@@ -67,6 +67,9 @@ interface V2CardCache {
   seoTitle: string;
   seoMetaDesc: string;
   seoTags: string[];
+  articleFinalised?: boolean;
+  seoExcerpt?: string;
+  seoFocusKeyword?: string;
   savedAt: string;
 }
 
@@ -1466,6 +1469,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [seoTitle, setSeoTitle] = useState("");
   const [seoMetaDesc, setSeoMetaDesc] = useState("");
   const [seoTags, setSeoTags] = useState<string[]>([]);
+  const [articleFinalised, setArticleFinalised] = useState(false);
+  const [seoMetadataLoading, setSeoMetadataLoading] = useState(false);
+  const [seoExcerpt, setSeoExcerpt] = useState("");
+  const [seoFocusKeyword, setSeoFocusKeyword] = useState("");
   const [newTagInput, setNewTagInput] = useState("");
   // ── Publish state ──────────────────────────────────────────────────────────
   const [draftState, setDraftState] = useState<"idle"|"loading"|"success"|"error">("idle");
@@ -1540,9 +1547,12 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       seoTitle,
       seoMetaDesc,
       seoTags,
+      articleFinalised,
+      seoExcerpt,
+      seoFocusKeyword,
       savedAt: new Date().toISOString(),
     });
-  }, [activeCardId, editorStep, outline, articleTitle, articleData, geoScore, qualityFlags, brandVoiceStatus, seoTitle, seoMetaDesc, seoTags]);
+  }, [activeCardId, editorStep, outline, articleTitle, articleData, geoScore, qualityFlags, brandVoiceStatus, seoTitle, seoMetaDesc, seoTags, articleFinalised, seoExcerpt, seoFocusKeyword]);
 
   // ── Generate outline when a card is activated ──────────────────────────────
   useEffect(() => {
@@ -1567,6 +1577,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           seoTitle,
           seoMetaDesc,
           seoTags,
+          articleFinalised,
+          seoExcerpt,
+          seoFocusKeyword,
           savedAt: new Date().toISOString(),
         });
       }
@@ -1581,6 +1594,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       setBrandVoiceStatus(null);
       setArticleLoading(false);
       setArticleError(null);
+      setArticleFinalised(false);
+      setSeoExcerpt("");
+      setSeoFocusKeyword("");
       return;
     }
     if (prevCardIdRef.current === activeCardId) return;
@@ -1619,6 +1635,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         setSeoTitle(cached.seoTitle ?? "");
         setSeoMetaDesc(cached.seoMetaDesc ?? "");
         setSeoTags(cached.seoTags ?? []);
+        setArticleFinalised(cached.articleFinalised ?? false);
+        setSeoExcerpt(cached.seoExcerpt ?? "");
+        setSeoFocusKeyword(cached.seoFocusKeyword ?? "");
         setArticleLoading(false);
         setArticleError(null);
       }
@@ -1937,6 +1956,31 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         body: JSON.stringify({ article: fixedArticle }),
       }).catch(() => {/* non-fatal */});
     }
+  }
+
+  // ── Generate / refresh SEO metadata via LLM ───────────────────────────────
+  async function generateMetadata() {
+    if (!activeCardId || !articleData || seoMetadataLoading) return;
+    setSeoMetadataLoading(true);
+    try {
+      const res = await fetch(`/api/builder-sessions/${activeCardId}/generate-metadata`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ article: articleData }),
+      });
+      const data = await res.json() as {
+        title?: string; slug?: string; seo_title?: string; seo_description?: string;
+        tags?: string[]; excerpt?: string; focus_keyword?: string;
+      };
+      if (res.ok) {
+        setSeoTitle(data.seo_title ?? data.title ?? "");
+        setSeoMetaDesc(data.seo_description ?? "");
+        setSeoTags(data.tags ?? []);
+        setSeoExcerpt(data.excerpt ?? "");
+        setSeoFocusKeyword(data.focus_keyword ?? "");
+      }
+    } catch { /* non-fatal */ }
+    finally { setSeoMetadataLoading(false); }
   }
 
   // ── Generate article via validate-plan SSE ─────────────────────────────────
@@ -2365,6 +2409,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                     setSeoTitle(cached.seoTitle ?? "");
                     setSeoMetaDesc(cached.seoMetaDesc ?? "");
                     setSeoTags(cached.seoTags ?? []);
+                    setArticleFinalised(cached.articleFinalised ?? false);
+                    setSeoExcerpt(cached.seoExcerpt ?? "");
+                    setSeoFocusKeyword(cached.seoFocusKeyword ?? "");
                     setEditorStep("article");
                   }}
                   style={{ padding: "13px 24px", borderRadius: 8, background: C.mid, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
@@ -2710,84 +2757,145 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
 
               {/* ── SEO METADATA ── */}
               <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, flexShrink: 0 }}>
+                {/* Header */}
                 <div style={{ padding: "14px 16px", borderBottom: `1px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".12em", color: C.mid }}>SEO METADATA</div>
-                  <button onClick={() => { setSeoTitle(articleData.title.slice(0, 60)); setSeoMetaDesc(""); }} style={{ fontSize: 10, fontWeight: 600, color: C.mid, background: "none", border: "none", cursor: "pointer" }}>Refresh</button>
-                </div>
-                <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
-
-                  {/* Title */}
-                  <div>
-                    <label style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)", marginBottom: 5 }}>Title</label>
-                    <input
-                      value={seoTitle}
-                      onChange={e => setSeoTitle(e.target.value)}
-                      style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, fontWeight: 400, background: C.bg, color: C.dark, outline: "none" }}
-                    />
-                  </div>
-
-                  {/* Slug */}
-                  <div>
-                    <label style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)", marginBottom: 5 }}>Slug</label>
-                    <div style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 11, fontWeight: 400, background: "rgba(22,61,38,.03)", color: "rgba(22,61,38,.6)", fontFamily: "monospace", wordBreak: "break-all" }}>
-                      {seoSlug || "—"}
-                    </div>
-                  </div>
-
-                  {/* Tags */}
-                  <div>
-                    <label style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)", marginBottom: 5 }}>Tags</label>
-                    <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 7 }}>
-                      {seoTags.map(tag => (
-                        <span key={tag} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: 20, background: "rgba(22,61,38,.07)", color: C.dark }}>
-                          {tag}
-                          <button onClick={() => setSeoTags(prev => prev.filter(t => t !== tag))} style={{ fontSize: 11, lineHeight: 1, background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.45)", padding: 0 }}>×</button>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".12em", color: articleFinalised ? C.mid : "rgba(22,61,38,.3)" }}>SEO METADATA</div>
+                  {articleFinalised && (seoTitle || seoMetaDesc) && (
+                    seoMetadataLoading
+                      ? <span style={{ fontSize: 10, color: "rgba(22,61,38,.4)", display: "flex", alignItems: "center", gap: 4 }}>
+                          <span style={{ display: "inline-block", animation: "spin .8s linear infinite" }}>↻</span> Generating…
                         </span>
-                      ))}
-                    </div>
-                    <div style={{ display: "flex", gap: 6 }}>
-                      <input
-                        value={newTagInput}
-                        onChange={e => setNewTagInput(e.target.value)}
-                        onKeyDown={e => { if (e.key === "Enter" && newTagInput.trim()) { setSeoTags(prev => [...new Set([...prev, newTagInput.trim()])]); setNewTagInput(""); } }}
-                        placeholder="New tag"
-                        style={{ flex: 1, padding: "7px 9px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 11, background: C.bg, color: C.dark, outline: "none" }}
-                      />
-                      <button
-                        onClick={() => { if (newTagInput.trim()) { setSeoTags(prev => [...new Set([...prev, newTagInput.trim()])]); setNewTagInput(""); } }}
-                        style={{ padding: "7px 11px", borderRadius: 7, background: C.dark, color: C.white, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer" }}
-                      >Add</button>
-                    </div>
-                  </div>
-
-                  {/* SEO title */}
-                  <div>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-                      <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)" }}>SEO title (≤ 60 chars)</label>
-                      <span style={{ fontSize: 10, fontWeight: 600, color: seoTitle.length > 60 ? C.red : "rgba(22,61,38,.4)" }}>{seoTitle.length}/60</span>
-                    </div>
-                    <input
-                      value={seoTitle}
-                      onChange={e => setSeoTitle(e.target.value)}
-                      style={{ width: "100%", padding: "8px 10px", border: `1px solid ${seoTitle.length > 60 ? C.red : C.border}`, borderRadius: 7, fontSize: 11, background: C.bg, color: C.dark, outline: "none" }}
-                    />
-                  </div>
-
-                  {/* Meta description */}
-                  <div>
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
-                      <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)" }}>Meta description (≤ 160 chars)</label>
-                      <span style={{ fontSize: 10, fontWeight: 600, color: seoMetaDesc.length > 160 ? C.red : "rgba(22,61,38,.4)" }}>{seoMetaDesc.length}/160</span>
-                    </div>
-                    <textarea
-                      value={seoMetaDesc}
-                      onChange={e => setSeoMetaDesc(e.target.value)}
-                      rows={3}
-                      placeholder="Write a compelling meta description…"
-                      style={{ width: "100%", padding: "8px 10px", border: `1px solid ${seoMetaDesc.length > 160 ? C.red : C.border}`, borderRadius: 7, fontSize: 11, lineHeight: 1.5, background: C.bg, color: C.dark, outline: "none", resize: "vertical" }}
-                    />
-                  </div>
+                      : <button onClick={() => void generateMetadata()} style={{ fontSize: 10, fontWeight: 600, color: C.mid, background: "none", border: "none", cursor: "pointer" }}>Refresh</button>
+                  )}
                 </div>
+
+                {/* ── LOCKED: article not finalised ── */}
+                {!articleFinalised && (
+                  <div style={{ padding: "24px 16px", display: "flex", flexDirection: "column", alignItems: "center", gap: 12, textAlign: "center" }}>
+                    <div style={{ width: 44, height: 44, borderRadius: "50%", background: "rgba(22,61,38,.06)", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                      <svg viewBox="0 0 20 20" width="20" height="20" fill="none" stroke="rgba(22,61,38,.3)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="4" y="9" width="12" height="9" rx="2"/>
+                        <path d="M7 9V6a3 3 0 016 0v3"/>
+                      </svg>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "rgba(22,61,38,.5)", marginBottom: 5 }}>Article not finalised</div>
+                      <div style={{ fontSize: 11, color: "rgba(22,61,38,.4)", lineHeight: 1.5, maxWidth: "22ch", margin: "0 auto" }}>Complete your edits, then finalise to unlock SEO metadata.</div>
+                    </div>
+                    <button
+                      onClick={() => setArticleFinalised(true)}
+                      style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6, padding: "9px 16px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 11, fontWeight: 700, border: "none", cursor: "pointer" }}
+                    >
+                      <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6l3 3 5-5"/></svg>
+                      Finalise Article
+                    </button>
+                  </div>
+                )}
+
+                {/* ── FINALISED: no metadata yet ── */}
+                {articleFinalised && !seoTitle && !seoMetaDesc && (
+                  <div style={{ padding: "20px 16px", display: "flex", flexDirection: "column", alignItems: "center", gap: 12, textAlign: "center" }}>
+                    <div style={{ fontSize: 11, color: "rgba(22,61,38,.5)", lineHeight: 1.5 }}>Ready to generate SEO title, meta description, tags, and slug using the article content.</div>
+                    <button
+                      onClick={() => void generateMetadata()}
+                      disabled={seoMetadataLoading}
+                      style={{ display: "flex", alignItems: "center", gap: 6, padding: "9px 18px", borderRadius: 8, background: seoMetadataLoading ? "rgba(24,95,0,.5)" : C.mid, color: C.white, fontSize: 11, fontWeight: 700, border: "none", cursor: seoMetadataLoading ? "default" : "pointer" }}
+                    >
+                      {seoMetadataLoading
+                        ? <><span style={{ display: "inline-block", animation: "spin .8s linear infinite" }}>↻</span> Generating…</>
+                        : <><svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 1v10M1 6h10"/><circle cx="6" cy="6" r="5"/></svg> Generate Metadata</>
+                      }
+                    </button>
+                  </div>
+                )}
+
+                {/* ── FINALISED: fields visible ── */}
+                {articleFinalised && (seoTitle || seoMetaDesc) && (
+                  <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 12 }}>
+
+                    {/* Title */}
+                    <div>
+                      <label style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)", marginBottom: 5 }}>Title</label>
+                      <input
+                        value={seoTitle}
+                        onChange={e => setSeoTitle(e.target.value)}
+                        style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 12, fontWeight: 400, background: C.bg, color: C.dark, outline: "none" }}
+                      />
+                    </div>
+
+                    {/* Slug — derived, read-only */}
+                    <div>
+                      <label style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)", marginBottom: 5 }}>Slug</label>
+                      <div style={{ padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 11, fontWeight: 400, background: "rgba(22,61,38,.03)", color: "rgba(22,61,38,.6)", fontFamily: "monospace", wordBreak: "break-all" }}>
+                        {seoSlug || "—"}
+                      </div>
+                    </div>
+
+                    {/* Tags */}
+                    <div>
+                      <label style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)", marginBottom: 5 }}>Tags</label>
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 7 }}>
+                        {seoTags.map(tag => (
+                          <span key={tag} style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 600, padding: "3px 8px", borderRadius: 20, background: "rgba(22,61,38,.07)", color: C.dark }}>
+                            {tag}
+                            <button onClick={() => setSeoTags(prev => prev.filter(t => t !== tag))} style={{ fontSize: 11, lineHeight: 1, background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.45)", padding: 0 }}>×</button>
+                          </span>
+                        ))}
+                      </div>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <input
+                          value={newTagInput}
+                          onChange={e => setNewTagInput(e.target.value)}
+                          onKeyDown={e => { if (e.key === "Enter" && newTagInput.trim()) { setSeoTags(prev => [...new Set([...prev, newTagInput.trim()])]); setNewTagInput(""); } }}
+                          placeholder="New tag"
+                          style={{ flex: 1, padding: "7px 9px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 11, background: C.bg, color: C.dark, outline: "none" }}
+                        />
+                        <button
+                          onClick={() => { if (newTagInput.trim()) { setSeoTags(prev => [...new Set([...prev, newTagInput.trim()])]); setNewTagInput(""); } }}
+                          style={{ padding: "7px 11px", borderRadius: 7, background: C.dark, color: C.white, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer" }}
+                        >Add</button>
+                      </div>
+                    </div>
+
+                    {/* SEO title */}
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+                        <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)" }}>SEO title (≤ 60 chars)</label>
+                        <span style={{ fontSize: 10, fontWeight: 600, color: seoTitle.length > 60 ? C.red : "rgba(22,61,38,.4)" }}>{seoTitle.length}/60</span>
+                      </div>
+                      <input
+                        value={seoTitle}
+                        onChange={e => setSeoTitle(e.target.value)}
+                        maxLength={70}
+                        style={{ width: "100%", padding: "8px 10px", border: `1px solid ${seoTitle.length > 60 ? C.red : C.border}`, borderRadius: 7, fontSize: 11, background: C.bg, color: C.dark, outline: "none" }}
+                      />
+                    </div>
+
+                    {/* Meta description */}
+                    <div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
+                        <label style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)" }}>Meta description (≤ 160 chars)</label>
+                        <span style={{ fontSize: 10, fontWeight: 600, color: seoMetaDesc.length > 160 ? C.red : "rgba(22,61,38,.4)" }}>{seoMetaDesc.length}/160</span>
+                      </div>
+                      <textarea
+                        value={seoMetaDesc}
+                        onChange={e => setSeoMetaDesc(e.target.value)}
+                        rows={3}
+                        maxLength={180}
+                        placeholder="Write a compelling meta description…"
+                        style={{ width: "100%", padding: "8px 10px", border: `1px solid ${seoMetaDesc.length > 160 ? C.red : C.border}`, borderRadius: 7, fontSize: 11, lineHeight: 1.5, background: C.bg, color: C.dark, outline: "none", resize: "vertical" }}
+                      />
+                    </div>
+
+                    {/* Un-finalise link */}
+                    <button
+                      onClick={() => setArticleFinalised(false)}
+                      style={{ alignSelf: "flex-start", fontSize: 10, fontWeight: 500, color: "rgba(22,61,38,.35)", background: "none", border: "none", cursor: "pointer", padding: 0, textDecoration: "underline", textUnderlineOffset: 2 }}
+                    >
+                      Unlock for editing
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* ── PUBLISH ── */}

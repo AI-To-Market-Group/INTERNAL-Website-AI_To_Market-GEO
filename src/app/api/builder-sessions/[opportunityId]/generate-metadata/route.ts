@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server";
 import { getSession, updateSession } from "@/lib/builder-sessions-store";
 import { requireUser } from "@/lib/api-auth";
-import type { ArticleDraftBlock, InferArticleMetadataResponse, SeoWarning } from "@/types";
+import type { ArticleDraftBlock, GenerateArticleResponse, InferArticleMetadataResponse, SeoWarning } from "@/types";
 
 type Params = { params: Promise<{ opportunityId: string }> };
 
@@ -103,11 +103,56 @@ Return ONLY valid JSON: { "tags": [...], "excerpt": "...", "seo_description": ".
   return { tags, excerpt, seo_description };
 }
 
-export async function POST(_req: NextRequest, { params }: Params) {
+function articleResponseToText(article: GenerateArticleResponse): string {
+  return article.sections
+    .flatMap(s => s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()))
+    .filter(Boolean)
+    .join("\n");
+}
+
+export async function POST(req: NextRequest, { params }: Params) {
   const { user, error } = await requireUser();
   if (error) return error;
 
   const { opportunityId } = await params;
+
+  // v2 fast path: client sends { article: GenerateArticleResponse } directly
+  const body = await req.json().catch(() => ({})) as { article?: GenerateArticleResponse };
+  if (body.article?.sections?.length) {
+    const article = body.article;
+    const title = article.title ?? "Article";
+    const base = deterministicFields(title);
+    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    let tags: string[] = [];
+    let excerpt = "";
+    let seo_description = "";
+    const warnings: SeoWarning[] = [];
+
+    if (apiKey) {
+      try {
+        ({ tags, excerpt, seo_description } = await generateContentFields(apiKey, title, articleResponseToText(article)));
+      } catch {
+        tags = [title.replace(/[^a-zA-Z0-9\s]/g, "").trim().split(/\s+/)[0]?.toLowerCase() ?? "ai"];
+        excerpt = `Key insights on ${title} for B2B marketing and AI content strategy.`;
+        seo_description = `Learn about ${title}. Practical B2B AI content strategy and recommendations.`.slice(0, 160);
+        warnings.push({ field: "excerpt", message: "Metadata generated from title only — LLM unavailable." });
+      }
+    } else {
+      tags = [title.replace(/[^a-zA-Z0-9\s]/g, "").trim().split(/\s+/)[0]?.toLowerCase() ?? "ai"];
+      excerpt = `Key insights on ${title} for B2B marketing and AI content strategy.`;
+      seo_description = `Learn about ${title}. Practical B2B AI content strategy and recommendations.`.slice(0, 160);
+    }
+
+    if (base.seo_title.length > 60)
+      warnings.push({ field: "seo_title", message: `SEO title is ${base.seo_title.length} chars (max 60).` });
+
+    const metadata: InferArticleMetadataResponse = { ...base, tags, excerpt, seo_description, seo_warnings: warnings };
+    // Also persist to session if it exists (best-effort)
+    await updateSession(user.id, opportunityId, { metadataWordPress: metadata }).catch(() => {});
+    return Response.json(metadata);
+  }
+
+  // v1 / legacy path: read draft from Supabase session
   const session = await getSession(user.id, opportunityId);
   const title = session?.draft?.title ?? session?.topicTitle ?? "Article";
   const blocks = (session?.draft as { blocks?: ArticleDraftBlock[] } | null)?.blocks ?? [];
