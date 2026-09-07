@@ -1,6 +1,7 @@
 /**
  * Supabase persistence for builder sessions.
- * User-scoped: every operation requires a userId (auth.users.id).
+ * Org-scoped: all team members see all sessions. user_id is stored for
+ * creator attribution but is NOT used as a read/update/delete filter.
  */
 
 import { supabaseAdmin } from "@/lib/supabase/admin";
@@ -28,14 +29,16 @@ type DbRow = {
 
 function rowToSession(row: DbRow): BuilderSessionInfo {
   const opportunityId = row.opportunity_id ?? row.id;
+  const ctx = (row.opportunity_context as BuilderSessionInfo["opportunityContext"] | null) ?? undefined;
   return {
     opportunityId,
     sessionId: opportunityId,
     topicTitle: row.topic_title,
+    creatorEmail: ctx?.creatorEmail ?? undefined,
     outline: (row.outline as OutlineSection[] | null) ?? undefined,
     draft: (row.draft as ArticleDraft | null) ?? undefined,
     wpMetadata: (row.wp_metadata as WordPressMetadata | null) ?? undefined,
-    opportunityContext: (row.opportunity_context as BuilderSessionInfo["opportunityContext"] | null) ?? undefined,
+    opportunityContext: ctx,
     currentStep: (row.current_step as 1 | 2 | 3) ?? 1,
     sentToWordPressAt: row.sent_to_wordpress_at ?? undefined,
     createdAt: row.created_at,
@@ -44,12 +47,11 @@ function rowToSession(row: DbRow): BuilderSessionInfo {
 }
 
 export async function dbGetAllSessions(
-  userId: string
+  _userId: string
 ): Promise<BuilderSessionInfo[]> {
   const { data, error } = await supabaseAdmin
     .from("builder_sessions")
     .select("*")
-    .eq("user_id", userId)
     .order("updated_at", { ascending: false });
 
   if (error) throw error;
@@ -57,29 +59,34 @@ export async function dbGetAllSessions(
 }
 
 export async function dbGetSession(
-  userId: string,
+  _userId: string,
   opportunityId: string
 ): Promise<BuilderSessionInfo | null> {
   const { data, error } = await supabaseAdmin
     .from("builder_sessions")
     .select("*")
-    .eq("user_id", userId)
     .eq("opportunity_id", opportunityId)
-    .maybeSingle();
+    .order("created_at", { ascending: false })
+    .limit(1);
 
   if (error) throw error;
-  if (!data) return null;
-  return rowToSession(data as DbRow);
+  if (!data.length) return null;
+  return rowToSession(data[0] as DbRow);
 }
 
 export async function dbCreateSession(
   userId: string,
-  params: { opportunity_id?: string; topic_title: string; opportunity_context?: BuilderSessionInfo["opportunityContext"] }
+  params: { opportunity_id?: string; topic_title: string; opportunity_context?: BuilderSessionInfo["opportunityContext"]; creatorEmail?: string }
 ): Promise<BuilderSessionInfo> {
   const id =
     params.opportunity_id ??
     `sess_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
   const now = new Date().toISOString();
+
+  const ctx = {
+    ...(params.opportunity_context ?? {}),
+    ...(params.creatorEmail ? { creatorEmail: params.creatorEmail } : {}),
+  };
 
   const { data, error } = await supabaseAdmin
     .from("builder_sessions")
@@ -88,7 +95,7 @@ export async function dbCreateSession(
         user_id: userId,
         opportunity_id: id,
         topic_title: params.topic_title,
-        opportunity_context: params.opportunity_context ?? null,
+        opportunity_context: Object.keys(ctx).length ? ctx : null,
         current_step: 1,
         created_at: now,
         updated_at: now,
@@ -112,20 +119,19 @@ export type SessionUpdates = {
 };
 
 export async function dbDeleteSession(
-  userId: string,
+  _userId: string,
   opportunityId: string
 ): Promise<void> {
   const { error } = await supabaseAdmin
     .from("builder_sessions")
     .delete()
-    .eq("user_id", userId)
     .eq("opportunity_id", opportunityId);
 
   if (error) throw error;
 }
 
 export async function dbUpdateSession(
-  userId: string,
+  _userId: string,
   opportunityId: string,
   updates: SessionUpdates
 ): Promise<BuilderSessionInfo | null> {
@@ -141,12 +147,11 @@ export async function dbUpdateSession(
   const { data, error } = await supabaseAdmin
     .from("builder_sessions")
     .update(patch)
-    .eq("user_id", userId)
     .eq("opportunity_id", opportunityId)
     .select()
-    .maybeSingle();
+    .limit(1);
 
   if (error) throw error;
-  if (!data) return null;
-  return rowToSession(data as DbRow);
+  if (!data.length) return null;
+  return rowToSession(data[0] as DbRow);
 }

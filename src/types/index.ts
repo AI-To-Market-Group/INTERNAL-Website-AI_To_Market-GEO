@@ -457,6 +457,7 @@ export interface BuilderSessionInfo {
   topicTitle: string;
   updatedAt: string;
   createdAt: string;
+  creatorEmail?: string;
   outline?: OutlineSection[];
   draft?: ArticleDraft | null;
   wpMetadata?: WordPressMetadata | null;
@@ -470,6 +471,7 @@ export interface BuilderSessionInfo {
     content_brief?: string;
     justification_signals?: string[];
     tags?: string[];
+    creatorEmail?: string;
   };
 }
 

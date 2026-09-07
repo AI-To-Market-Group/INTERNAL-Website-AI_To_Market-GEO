@@ -22,7 +22,7 @@ export async function getSession(userId: string, opportunityId: string): Promise
 
 export async function createSession(
   userId: string,
-  params: { opportunity_id?: string; topic_title: string; opportunity_context?: BuilderSessionInfo["opportunityContext"] }
+  params: { opportunity_id?: string; topic_title: string; opportunity_context?: BuilderSessionInfo["opportunityContext"]; creatorEmail?: string }
 ): Promise<BuilderSessionInfo> {
   return dbCreateSession(userId, params);
 }
