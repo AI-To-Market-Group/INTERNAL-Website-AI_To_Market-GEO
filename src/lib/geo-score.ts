@@ -408,6 +408,21 @@ export function checkFanOutCoverage(
       };
     }
 
+    // Explicit FAQ-typed section with ≥ 2 Q&A paragraphs — always passes regardless
+    // of whether headings or plain text match keyword patterns. This is the primary
+    // signal for v2 articles where FAQ content is stored as structured paragraphs
+    // and section headings are excluded from the plainText fed to this function.
+    const faqSection = response.sections.find(
+      (s) => s.type === "faq" || FAQ_MARKER_RE.test(stripHtml(s.heading))
+    );
+    if (faqSection && faqSection.content.paragraphs.length >= 2) {
+      return {
+        label: "FAQ fan-out coverage",
+        pass: true,
+        evidence: `FAQ section detected (${faqSection.content.paragraphs.length} Q&A items)`,
+      };
+    }
+
     // Not enough question headings — fall through to text-based checks.
     // Articles with prose headings + an explicit FAQ section (or ≥2 Q&A sentences)
     // still satisfy fan-out coverage.

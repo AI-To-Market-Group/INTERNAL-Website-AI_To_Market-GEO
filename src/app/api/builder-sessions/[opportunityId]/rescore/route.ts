@@ -61,11 +61,58 @@ export async function POST(req: NextRequest, { params }: Params) {
   const { user, error } = await requireUser();
   if (error) return error;
 
-  // Body draft is the primary source (current in-memory state from the client).
-  // Fall back to DB only when no body draft is provided.
-  const bodyRaw = await req.json().catch(() => ({})) as { draft?: ArticleDraft };
-  const bodyDraft = bodyRaw?.draft ?? null;
+  // v2 clients send { article: GenerateArticleResponse } directly — use it and skip DB.
+  // v1 / legacy path: { draft: ArticleDraft } with blocks, or fall back to DB session.
+  const bodyRaw = await req.json().catch(() => ({})) as {
+    article?: GenerateArticleResponse;
+    draft?: ArticleDraft;
+  };
 
+  if (bodyRaw?.article?.sections?.length) {
+    // ── v2 fast path: score directly from the structured article ──
+    const article = bodyRaw.article;
+    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    if (!apiKey) return err("OPENAI_API_KEY not configured.", 503, "SERVICE_UNAVAILABLE");
+
+    let brandVoiceStatus: BrandVoiceStatus | undefined;
+    try {
+      const rawTexts = article.sections.flatMap(s => [
+        ...s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, " ").trim()),
+      ]);
+      const bvChecks = detectViolations(rawTexts);
+      if (bvChecks.some((c) => c.violations.length > 0)) {
+        const corrections = await correctViolations(rawTexts, bvChecks);
+        const residuals: BrandVoiceResidual[] = corrections
+          .filter((cr) => cr.residualViolations?.length)
+          .map((cr) => ({
+            paragraphIndex: cr.paragraphIndex,
+            violations: (cr.residualViolations ?? []).map((v) => ({
+              type: v.type as string,
+              match: v.match,
+            })),
+          }));
+        brandVoiceStatus = residuals.length > 0 ? { status: "partial", residuals } : { status: "clean" };
+      } else {
+        brandVoiceStatus = { status: "clean" };
+      }
+    } catch {
+      brandVoiceStatus = { status: "error" };
+    }
+
+    let geoScore: GeoScore | null = null;
+    try {
+      const plainText = article.sections
+        .flatMap(s => s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, " ")))
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
+      geoScore = computeGeoScore(plainText, article.title, article);
+    } catch { /* null = unavailable */ }
+
+    return ok({ brandVoiceStatus, geoScore });
+  }
+
+  const bodyDraft = bodyRaw?.draft ?? null;
   const session = bodyDraft ? null : await getSession(user.id, opportunityId);
   const draft: ArticleDraft | null =
     bodyDraft ?? (session?.draft as ArticleDraft | null) ?? null;
