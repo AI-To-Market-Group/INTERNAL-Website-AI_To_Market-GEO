@@ -54,9 +54,10 @@ const ADMIN_EMAILS = new Set(["neha@aitomarketgroup.com", "manoj@aitomarketgroup
 
 interface KeywordWorkspaceProps {
   seedKeywords: string[];
+  onCreated?: (opportunityId: string, brief: { prompt: string }) => void;
 }
 
-export function KeywordWorkspace({ seedKeywords }: KeywordWorkspaceProps) {
+export function KeywordWorkspace({ seedKeywords, onCreated }: KeywordWorkspaceProps) {
   const [userEmail, setUserEmail] = useState<string>("");
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(true);
@@ -164,11 +165,12 @@ export function KeywordWorkspace({ seedKeywords }: KeywordWorkspaceProps) {
         body: JSON.stringify({ title: placeholder, type: "SEO_GAP", score: 50, theme: CONTENT_THEME_IDS[0], content_brief, tags: arr }),
       });
       if (!res.ok) throw new Error("Failed");
+      const data = (await res.json()) as { id: string };
       await queryClient.invalidateQueries({ queryKey: ["opportunities"] });
-      toast.success("Opportunity created — open it to pick a title.");
       setDialogOpen(false);
       setSelected(new Set());
       setInstruction("");
+      onCreated?.(data.id, { prompt: placeholder });
     } catch {
       toast.error("Failed to create opportunity.");
     } finally {

@@ -487,7 +487,7 @@ const PIPELINE_STEPS = [
   "Stage for human review, never auto publish below 75",
 ];
 
-function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, defaultFlow }: { onSettings: () => void; onQueue: () => void; onSessionCreated: (opportunityId: string, brief: BriefFields) => void; seedKeywords: string[]; defaultFlow?: FlowMode }) {
+function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, defaultFlow }: { onSettings: () => void; onQueue: () => void; onSessionCreated: (opportunityId: string, brief: BriefFields) => void; seedKeywords: string[]; defaultFlow?: FlowMode; }) {
   const [flow, setFlow] = useState<FlowMode>(defaultFlow ?? "wizard");
   const [step, setStep] = useState(1);
   const [promptText, setPromptText] = useState("what is generative engine optimization");
@@ -883,7 +883,7 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
 
       {/* ── Keywords ── */}
       {flow === "keywords" && (
-        <KeywordWorkspace seedKeywords={seedKeywords} />
+        <KeywordWorkspace seedKeywords={seedKeywords} onCreated={onSessionCreated} />
       )}
     </div>
   );
@@ -4778,8 +4778,11 @@ export default function AtelierV2Page() {
 
   function handleSessionCreated(opportunityId: string, brief: BriefFields) {
     setCurrentOpportunityId(opportunityId);
-    setDraftCards(prev => [...prev, { opportunityId, brief, createdAt: new Date().toISOString() }]);
-    setActiveCardId(null);
+    setDraftCards(prev => {
+      if (prev.some(c => c.opportunityId === opportunityId)) return prev;
+      return [{ opportunityId, brief, createdAt: new Date().toISOString() }, ...prev];
+    });
+    setActiveCardId(opportunityId);
     setScreen("editor");
   }
 
