@@ -2848,13 +2848,30 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                     {timeAgo(plan.savedAt)}
                   </div>
 
-                  {/* Resume button */}
-                  <button
-                    onClick={() => handleResumeSavedPlan(plan)}
-                    style={{ width: "100%", padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
-                  >
-                    Resume plan
-                  </button>
+                  {/* Footer actions */}
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() => handleResumeSavedPlan(plan)}
+                      style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
+                    >
+                      Resume plan
+                    </button>
+                    {!batchQueuedIds?.includes(plan.opportunityId) && onSendToBatchQueue ? (
+                      <button
+                        onClick={() => onSendToBatchQueue(plan.opportunityId, plan.articleTitle, plan.outline)}
+                        title="Add to batch queue"
+                        style={{ padding: "11px 13px", borderRadius: 8, background: "transparent", color: C.mid, fontSize: 12, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer", display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}
+                      >
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                        Queue
+                      </button>
+                    ) : batchQueuedIds?.includes(plan.opportunityId) ? (
+                      <div style={{ padding: "11px 13px", borderRadius: 8, background: "rgba(24,95,0,.07)", border: `1px solid rgba(22,61,38,.18)`, display: "flex", alignItems: "center", gap: 5, color: C.mid, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>
+                        <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>
+                        Queued
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               ))}
             </div>
