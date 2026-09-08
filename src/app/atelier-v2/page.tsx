@@ -1561,15 +1561,24 @@ const hlStyle = (heading: string): React.CSSProperties =>
           // Gather bullets — prefer the bullets array, then extract <li> from HTML paragraph
           let takeaways = conclusion.content.bullets.filter(b => b.trim());
           if (takeaways.length === 0 && conclusion.content.paragraphs.length > 0) {
-            const pText = conclusion.content.paragraphs[0].text;
-            if (/<li/i.test(pText)) {
-              // Pull text out of each <li>…</li>
-              takeaways = (pText.match(/<li[^>]*>([\s\S]*?)<\/li>/gi) ?? [])
-                .map(li => li.replace(/<\/?li[^>]*>/gi, "").replace(/<[^>]+>/g, "").trim())
-                .filter(Boolean);
-            } else {
-              // Plain paragraph — split on sentence endings as fallback bullets
-              takeaways = [pText.replace(/<[^>]+>/g, "").trim()].filter(Boolean);
+            // Try each paragraph; stop when we get bullets
+            for (const para of conclusion.content.paragraphs) {
+              const pText = para.text;
+              if (/<li/i.test(pText)) {
+                takeaways = (pText.match(/<li[^>]*>([\s\S]*?)<\/li>/gi) ?? [])
+                  .map(li => li.replace(/<\/?li[^>]*>/gi, "").replace(/<[^>]+>/g, "").trim())
+                  .filter(Boolean);
+                if (takeaways.length > 0) break;
+              } else {
+                // Split on sentence boundaries so each sentence becomes its own bullet
+                const sentences = pText
+                  .replace(/<[^>]+>/g, "")
+                  .trim()
+                  .split(/(?<=[.!?])\s+/)
+                  .map(s => s.trim())
+                  .filter(Boolean);
+                takeaways.push(...sentences);
+              }
             }
           }
           const bulletStyle: React.CSSProperties = { fontSize: 14, fontWeight: 400, lineHeight: 1.6, color: "rgba(255,255,255,.85)" };
@@ -3037,12 +3046,17 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                     // Normalise: if bullets are empty (old data stored in paragraphs), derive them first
                     let bullets = [...s.content.bullets];
                     if (bullets.length === 0 && s.content.paragraphs.length > 0) {
-                      const pText = s.content.paragraphs[0].text;
-                      bullets = /<li/i.test(pText)
-                        ? (pText.match(/<li[^>]*>([\s\S]*?)<\/li>/gi) ?? [])
+                      for (const para of s.content.paragraphs) {
+                        const pText = para.text;
+                        if (/<li/i.test(pText)) {
+                          bullets.push(...(pText.match(/<li[^>]*>([\s\S]*?)<\/li>/gi) ?? [])
                             .map(li => li.replace(/<\/?li[^>]*>/gi, "").replace(/<[^>]+>/g, "").trim())
-                            .filter(Boolean)
-                        : [pText.replace(/<[^>]+>/g, "").trim()].filter(Boolean);
+                            .filter(Boolean));
+                        } else {
+                          bullets.push(...pText.replace(/<[^>]+>/g, "").trim()
+                            .split(/(?<=[.!?])\s+/).map(s2 => s2.trim()).filter(Boolean));
+                        }
+                      }
                     }
                     bullets[bulletIdx] = text;
                     return { ...s, content: { ...s.content, bullets } };
