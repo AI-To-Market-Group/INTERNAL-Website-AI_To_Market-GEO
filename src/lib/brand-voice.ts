@@ -1,6 +1,8 @@
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
 export interface BrandVoiceRow {
+  company_name: string;
+  website: string;
   brand_description: string;
   audience: string;
   tone: string[];
@@ -14,6 +16,8 @@ export interface BrandVoiceRow {
 // The DB is seeded with these on first migration, so they should always match.
 // Exported as BRAND_VOICE for backward compatibility with brand-voice-checker.ts
 export const DEFAULT: BrandVoiceRow = {
+  company_name: "AI To Market",
+  website: "https://aitomarketgroup.com/",
   brand_description:
     "Specialist AI strategy and implementation consultancy helping enterprise and mid-market businesses deploy AI across marketing, sales, and supply chain — founded by practitioners, not theorists.",
   audience:
@@ -33,6 +37,8 @@ export const DEFAULT: BrandVoiceRow = {
     "Skip definition openers like 'AI is transforming X' — start with a result, a failure mode, or a specific business scenario instead.",
   ],
   forbidden_phrases: [
+    "AITOM",
+    "AI2M",
     "in today's fast-paced world",
     "in today's digital age",
     "leverage",
@@ -81,7 +87,7 @@ async function loadBrandVoice(): Promise<BrandVoiceRow> {
   try {
     const { data } = await supabaseAdmin
       .from("brand_voice")
-      .select("brand_description,audience,tone,preferred_style,forbidden_phrases,guardrails")
+      .select("company_name,website,brand_description,audience,tone,preferred_style,forbidden_phrases,guardrails")
       .order("id", { ascending: true })
       .limit(1)
       .single();
@@ -100,7 +106,11 @@ export async function getBrandVoicePrompt(): Promise<string> {
   const activeGuardrails = bv.guardrails.filter(g => g.active);
   return `BRAND CONTEXT
 ─────────────
-You are writing for AI To Market: ${bv.brand_description}
+COMPANY IDENTITY
+Company name: ${bv.company_name} — always write it exactly this way. Never abbreviate as "AITOM", "AI2M", or any other shorthand.
+Website: ${bv.website}
+
+You are writing for ${bv.company_name}: ${bv.brand_description}
 
 AUDIENCE
 ${bv.audience}

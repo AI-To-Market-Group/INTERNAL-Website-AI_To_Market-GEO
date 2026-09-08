@@ -4271,6 +4271,8 @@ function AnalyticsScreen() {
 // ─── Brand voice screen ───────────────────────────────────────────────────────
 
 interface BrandVoiceData {
+  company_name: string;
+  website: string;
   brand_description: string;
   audience: string;
   tone: string[];
@@ -4435,6 +4437,34 @@ function SettingsScreen() {
 
       {/* ── Left column ── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 36 }}>
+
+        {/* Company identity */}
+        <div style={{ padding: 20, borderRadius: 10, background: "rgba(24,95,0,.05)", border: "1px solid rgba(22,61,38,.14)" }}>
+          {fieldLabel("COMPANY IDENTITY")}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
+            <div>
+              <div style={{ fontSize: 11, color: "rgba(22,61,38,.55)", marginBottom: 5 }}>Company name</div>
+              <input
+                value={bv.company_name}
+                onChange={e => setBv({ ...bv, company_name: e.target.value })}
+                style={{ ...ta, resize: undefined, padding: "10px 12px" }}
+                placeholder="AI To Market"
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "rgba(22,61,38,.55)", marginBottom: 5 }}>Website</div>
+              <input
+                value={bv.website}
+                onChange={e => setBv({ ...bv, website: e.target.value })}
+                style={{ ...ta, resize: undefined, padding: "10px 12px" }}
+                placeholder="https://aitomarketgroup.com/"
+              />
+            </div>
+          </div>
+          <div style={{ fontSize: 11, color: "rgba(22,61,38,.5)", lineHeight: 1.5 }}>
+            The company name is injected at the top of every generation prompt. Add wrong variants (AITOM, AI2M) to the Never Use list below so the brand voice checker flags them in drafts.
+          </div>
+        </div>
 
         {/* Brand description */}
         <div>
