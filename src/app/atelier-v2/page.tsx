@@ -2587,35 +2587,6 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           const pendingCards = draftCards!.filter(card => !isSent(card.opportunityId) && !hasArticleSaved(card.opportunityId) && !hasPlan(card.opportunityId));
           return (
             <>
-              {sentCards.length > 0 && (
-                <div style={{ marginBottom: 48 }}>
-                  <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
-                    <div>
-                      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.salmon, marginBottom: 8 }}>SENT TO SANITY</div>
-                      <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
-                        {sentCards.length} article{sentCards.length !== 1 ? "s" : ""} in review
-                      </h2>
-                    </div>
-                  </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
-                    {sentCards.map(card => {
-                      const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
-                      return (
-                        <DraftCardComponent
-                          key={card.opportunityId}
-                          card={card}
-                          onCreateArticle={() => onActivateCard(card.opportunityId)}
-                          onResume={onResumeChat}
-                          onRemove={() => onTrashCard?.(card.opportunityId)}
-                          activeUsers={activeUsers}
-                          hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
-                          sentToSanity
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
               {articleCards.length > 0 && (
                 <div style={{ marginBottom: 48 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
@@ -2639,6 +2610,35 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                           activeUsers={activeUsers}
                           hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
                           hasArticle
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {sentCards.length > 0 && (
+                <div style={{ marginBottom: 48 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.salmon, marginBottom: 8 }}>SENT TO SANITY</div>
+                      <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
+                        {sentCards.length} article{sentCards.length !== 1 ? "s" : ""} in review
+                      </h2>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
+                    {sentCards.map(card => {
+                      const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
+                      return (
+                        <DraftCardComponent
+                          key={card.opportunityId}
+                          card={card}
+                          onCreateArticle={() => onActivateCard(card.opportunityId)}
+                          onResume={onResumeChat}
+                          onRemove={() => onTrashCard?.(card.opportunityId)}
+                          activeUsers={activeUsers}
+                          hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
+                          sentToSanity
                         />
                       );
                     })}
