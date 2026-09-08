@@ -3927,14 +3927,16 @@ const PUBLISH_RULES = [
 function PublishScreen() {
   return (
     <div style={{ position: "relative" }}>
-      {/* Coming soon overlay */}
+      {/* Coming soon overlay — gradient over content */}
       <div style={{ position: "absolute", inset: 0, zIndex: 10, pointerEvents: "none", borderRadius: 16,
         background: "linear-gradient(160deg, rgba(247,245,242,0) 0%, rgba(247,245,242,.55) 40%, rgba(247,245,242,.88) 70%, rgba(247,245,242,.97) 100%)",
-      }}>
-        <div style={{ position: "absolute", bottom: 48, left: "50%", transform: "translateX(-50%)", textAlign: "center", pointerEvents: "auto" }}>
+      }} />
+      {/* Label — fixed so it's truly centered in the viewport */}
+      <div style={{ position: "fixed", inset: 0, zIndex: 11, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+        <div style={{ textAlign: "center", pointerEvents: "auto" }}>
           <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".2em", color: C.mid, marginBottom: 8 }}>COMING SOON</div>
-          <div style={{ fontSize: 22, fontWeight: 700, color: C.dark, letterSpacing: "-.3px", whiteSpace: "nowrap" }}>Publishing & integrations</div>
-          <div style={{ marginTop: 8, fontSize: 13, color: "rgba(22,61,38,.55)", fontWeight: 400 }}>This feature is in development. Stay tuned.</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: C.dark, letterSpacing: "-.4px" }}>Publishing & integrations</div>
+          <div style={{ marginTop: 10, fontSize: 13, color: "rgba(22,61,38,.55)", fontWeight: 400 }}>This feature is in development. Stay tuned.</div>
         </div>
       </div>
       {/* Page content — visible but locked */}
