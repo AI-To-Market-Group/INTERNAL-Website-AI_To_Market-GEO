@@ -1979,6 +1979,36 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       return;
     }
 
+    // Sent-to-Sanity cards: fetch the saved article from the server directly —
+    // skip outline generation entirely, no token cost, land on article step.
+    if (sentToSanityIds.has(activeCardId)) {
+      setEditorStep("article");
+      setArticleLoading(true);
+      setArticleError(null);
+      fetch(`/api/builder-sessions/${activeCardId}/restore-article`, { method: "POST" })
+        .then(async r => {
+          const data = await r.json() as {
+            article?: GeneratedArticle;
+            geoScore?: { score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number };
+            qualityFlags?: { section?: string; type: string; message: string }[];
+            error?: string;
+          };
+          if (r.ok && data.article) {
+            setArticleData(data.article);
+            setGeoScore(data.geoScore ?? null);
+            setQualityFlags(data.qualityFlags ?? []);
+            setSeoTitle(data.article.title?.slice(0, 60) ?? "");
+            setDraftSentAt(prev => prev ?? new Date().toISOString());
+            setDraftState("success");
+          } else {
+            setArticleError(data.error ?? "Could not load saved article");
+          }
+        })
+        .catch(() => setArticleError("Network error — could not load article"))
+        .finally(() => setArticleLoading(false));
+      return;
+    }
+
     const card = draftCards?.find(c => c.opportunityId === activeCardId);
 
     // If another team member saved a plan for this card, restore it (org-wide workspace)
