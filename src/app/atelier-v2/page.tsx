@@ -1403,7 +1403,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
 
       {/* Newsletter masthead */}
       <div className="v2-masthead" style={{ background: C.dark, padding: "28px 44px", borderRadius: "12px 12px 0 0" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".22em", color: C.salmon, marginBottom: 10 }}>AI TO MARKET · GEO CONTENT</div>
+        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".22em", color: C.salmon, marginBottom: 10 }}>AI To Market · Blog</div>
         <h1 style={{ margin: "0 0 10px", fontSize: 24, fontWeight: 700, lineHeight: 1.2, color: C.white, letterSpacing: "-.3px" }}>
           {article.title}
         </h1>
