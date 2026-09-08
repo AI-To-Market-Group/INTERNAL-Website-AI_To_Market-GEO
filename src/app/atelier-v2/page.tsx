@@ -4137,6 +4137,7 @@ function SettingsScreen() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [newPhrase, setNewPhrase] = useState("");
   const [newGuardrail, setNewGuardrail] = useState("");
 
@@ -4158,6 +4159,7 @@ function SettingsScreen() {
     try {
       await fetch("/api/brand-voice", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bv) });
       setSavedBv(bv);
+      setLastSavedAt(new Date());
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } finally {
@@ -4218,11 +4220,18 @@ function SettingsScreen() {
         </div>
 
         {/* Save */}
-        <div style={{ display: "flex", alignItems: "center", gap: 14, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
-          <button onClick={handleSave} disabled={saving || !isDirty} style={{ padding: "12px 28px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: (saving || !isDirty) ? "not-allowed" : "pointer", opacity: (saving || !isDirty) ? .35 : 1, transition: "opacity .15s" }}>
-            {saving ? "Saving…" : "Save brand voice"}
-          </button>
-          {saved && <span style={{ fontSize: 12, color: C.mid, fontWeight: 600 }}>Saved — next generation picks up changes</span>}
+        <div style={{ paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <button onClick={handleSave} disabled={saving || !isDirty} style={{ padding: "12px 28px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: (saving || !isDirty) ? "not-allowed" : "pointer", opacity: (saving || !isDirty) ? .35 : 1, transition: "opacity .15s" }}>
+              {saving ? "Saving…" : "Save brand voice"}
+            </button>
+            {saved && <span style={{ fontSize: 12, color: C.mid, fontWeight: 600 }}>Saved — next generation picks up changes</span>}
+          </div>
+          {lastSavedAt && (
+            <div style={{ marginTop: 8, fontSize: 11, color: "rgba(22,61,38,.45)" }}>
+              Last saved {lastSavedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {lastSavedAt.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}
+            </div>
+          )}
         </div>
       </div>
 
