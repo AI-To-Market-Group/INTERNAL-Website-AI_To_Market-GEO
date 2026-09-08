@@ -50,28 +50,58 @@ Respond with JSON only: { "paragraphs": ["Q: q1\\nA: a1", "Q: q2\\nA: a2"] }`,
 
 // ── GEO check fix prompts ────────────────────────────────────────────────────
 
-const GEO_FIX_PROMPTS: Record<string, string> = {
-  "Named sources": `You are a GEO content editor. The article needs more named source attributions.
-Find the section and paragraph most naturally suited to add "according to [Source, Year]" attribution to an existing claim.
-Pick one of: Gartner, McKinsey, Salesforce, LinkedIn, Forrester, IDC, HubSpot, Bain.
-Keep the rest of the paragraph intact — only add the attribution phrase.
-Respond with JSON only: { "sectionHeading": "<exact heading>", "paragraphId": <id>, "newText": "<full updated paragraph text>" }`,
+// Attribution format note: the GEO scorer's NAMED_SOURCE_RE matches these patterns:
+//   "according to Gartner (2024)"  "per McKinsey (2024)"  "Forrester (2024)"
+//   "LinkedIn 2024"  "(Bain, 2024)"  "— Gartner 2024"
+// The LLM MUST use one of those exact formats or the scorer will miss the match.
 
-  "Statistics with sources": `You are a GEO content editor. The article needs one more numeric statistic attributed to a named source.
-Find the section where a stat would land most naturally.
-Add a real, plausible B2B/AI/marketing statistic to the last paragraph of that section.
-Named sources only: Gartner, Salesforce, McKinsey, Forrester, IDC, HubSpot. Format: "per Source (Year)".
-Respond with JSON only: { "sectionHeading": "<exact heading>", "paragraphId": <id>, "newText": "<full updated paragraph text>" }`,
+const ATTRIBUTION_FORMAT_RULES = `
+ATTRIBUTION FORMAT — use one of these exactly (the scoring system only recognises these patterns):
+  • "According to Gartner (2024), ..."
+  • "per McKinsey (2025), ..."
+  • "Forrester (2024) found that ..."
+  • "LinkedIn (2024) reports ..."
+  • "... per IDC (2024)"
+  • "... (Bain, 2024)"
+Choose a source that fits the claim: Gartner/Forrester for tech/software adoption, McKinsey/Bain for strategy/ROI, LinkedIn/HubSpot for sales & marketing, IDC for market size, Salesforce for CRM/revenue data, Deloitte/PwC for enterprise transformation.
+Use 2024 or 2025 — never an older year.`;
+
+const SNIPPET_FORMAT_RULE = `
+Return the FULL updated paragraph text in "newText". For "snippet", copy the first 60 characters of the ORIGINAL paragraph verbatim (the system uses this to find the right paragraph — it must match exactly).`;
+
+const GEO_FIX_PROMPTS: Record<string, string> = {
+  "Named sources": `You are a GEO content editor improving a B2B article's source attribution so AI search engines will cite it.
+
+TASK: Find 2 paragraphs that make factual claims without a named source and embed an attribution into each sentence naturally — do NOT append a new sentence at the end.
+${ATTRIBUTION_FORMAT_RULES}
+${SNIPPET_FORMAT_RULE}
+
+Respond with JSON only:
+{ "snippetFixes": [
+  { "snippet": "<first 60 chars of original paragraph>", "newText": "<full paragraph with attribution embedded>" },
+  { "snippet": "<first 60 chars of another paragraph>", "newText": "<full paragraph with attribution embedded>" }
+] }`,
+
+  "Statistics with sources": `You are a GEO content editor strengthening a B2B article's data credibility.
+
+TASK: Find the paragraph best suited for a specific sourced statistic, then rewrite it to include one real, plausible numeric claim attributed to a named source. The stat must fit the paragraph's existing topic — no generic filler.
+${ATTRIBUTION_FORMAT_RULES}
+${SNIPPET_FORMAT_RULE}
+
+Respond with JSON only:
+{ "snippetFixes": [
+  { "snippet": "<first 60 chars of original paragraph>", "newText": "<full paragraph with the sourced stat naturally embedded>" }
+] }`,
 
   "Cited claims": `You are a GEO content editor. Add one cited claim to the article.
 Find the best paragraph to add "according to [Source], [claim]" or a brief quoted finding.
 Keep surrounding prose intact.
 Respond with JSON only: { "sectionHeading": "<exact heading>", "paragraphId": <id>, "newText": "<full updated paragraph text>" }`,
 
-  "AI-tell density": `You are a GEO content editor removing AI-generated phrasing from the article.
-Find the paragraph with the most AI-tell phrases (e.g. "thought leaders", "showcasing", "highlighting", "it is widely believed", "game-changing", "leveraging", "in today's landscape").
-Rewrite that paragraph in direct, specific language — concrete claims, specific tools/companies, no vague qualifiers.
-Respond with JSON only: { "sectionHeading": "<exact heading>", "paragraphId": <id>, "newText": "<full rewritten paragraph text>" }`,
+  "AI-tell density": `You are a GEO content editor removing ALL AI-generated phrasing from an article.
+Scan every paragraph for AI-tell words/phrases: "thought leaders", "showcasing", "highlighting", "game-changing", "leveraging", "in today's landscape", "it is widely believed", "unlock", "revolutionize", "harness", "cutting-edge", "empower", "transformative", "elevate", "seamlessly".
+Rewrite UP TO 3 paragraphs — the worst offenders — in direct, specific language: concrete claims, named tools or companies, no vague qualifiers. Leave all other paragraphs unchanged.
+Respond with JSON only: { "fixes": [{ "sectionHeading": "<exact section heading>", "paragraphId": <id>, "newText": "<full rewritten paragraph text>" }] }`,
 
   "FAQ fan-out coverage": `You are a GEO content editor. The FAQ section needs more Q/A pairs for AI fan-out coverage.
 Add 2 new Q/A pairs to the FAQ section. Format each as "Q: [question]\\nA: [2-3 sentence answer with a specific fact]".
@@ -137,8 +167,15 @@ export async function POST(req: NextRequest, { params }: Params2) {
     if (!checkLabel) return err("checkLabel required", 400);
 
     const system = GEO_FIX_PROMPTS[checkLabel] ?? GEO_FIX_PROMPTS["Statistics with sources"];
+    // Include enough paragraph text for the LLM to understand context and pick relevant sources.
+    // Snippet-based checks don't need [id:N] — include it only for legacy ID-based checks.
+    const usesSnippets = checkLabel === "Named sources" || checkLabel === "Statistics with sources";
     const articleSummary = sections.map(s =>
-      `Heading: "${s.heading}" (type: ${s.type})\nParagraphs:\n${s.content.paragraphs.map(p => `  [id:${p.id}] ${p.text.slice(0, 300)}`).join("\n")}`
+      `Section: "${s.heading}" (type: ${s.type})\nParagraphs:\n${s.content.paragraphs.map((p, i) =>
+        usesSnippets
+          ? `  ${i + 1}. ${p.text.slice(0, 500)}`
+          : `  [id:${p.id}] ${p.text.slice(0, 300)}`
+      ).join("\n")}`
     ).join("\n\n---\n\n");
 
     const userPrompt = `Article title: ${articleTitle}\n\n${articleSummary}`;
@@ -149,10 +186,38 @@ export async function POST(req: NextRequest, { params }: Params2) {
         paragraphId?: number;
         newText?: string;
         appendParagraphs?: string[];
+        // snippet-based matching (Named sources, Statistics with sources)
+        snippetFixes?: { snippet: string; newText: string }[];
       }>(system, userPrompt, "gpt-4o-mini", { userId: user.id, feature: "fix-geo-v2" });
 
+      // AI-tell: "fixes" array with sectionHeading + paragraphId
+      if (Array.isArray(result.fixes) && result.fixes.length > 0) {
+        return ok({ multifix: result.fixes });
+      }
+
+      // Named sources / Statistics: snippet-based paragraph matching across all sections
+      if (Array.isArray(result.snippetFixes) && result.snippetFixes.length > 0) {
+        const multifix: { sectionHeading: string; paragraphId: number; newText: string }[] = [];
+        for (const fix of result.snippetFixes) {
+          if (!fix.snippet || !fix.newText) continue;
+          const needle = fix.snippet.trim().toLowerCase().slice(0, 50);
+          for (const s of sections) {
+            const para = s.content.paragraphs.find(p =>
+              p.text.trimStart().toLowerCase().slice(0, 50).startsWith(needle.slice(0, 40))
+            );
+            if (para) { multifix.push({ sectionHeading: s.heading, paragraphId: para.id, newText: fix.newText }); break; }
+          }
+        }
+        if (multifix.length > 0) return ok({ multifix });
+      }
+
+      const headingMatch = (a: string, b: string) =>
+        a.trim().toLowerCase() === b.trim().toLowerCase() ||
+        a.trim().toLowerCase().includes(b.trim().toLowerCase()) ||
+        b.trim().toLowerCase().includes(a.trim().toLowerCase());
+
       const targetHeading = result.sectionHeading ?? sections[0]?.heading ?? "";
-      const targetSection = sections.find(s => s.heading === targetHeading) ?? sections[0];
+      const targetSection = sections.find(s => headingMatch(s.heading, targetHeading)) ?? sections[0];
 
       if (result.appendParagraphs?.length) {
         // FAQ fan-out: append new paragraphs

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useLayoutEffect } from "react";
 import { KeywordWorkspace } from "./components/KeywordWorkspace";
 import { useSettings } from "@/hooks/useSettings";
 
@@ -36,6 +36,7 @@ interface V2OutlineSection {
   order: number;
   type: string;
   title: string;
+  eyebrow?: string;
   description: string[];
   keywords: string[];
 }
@@ -48,16 +49,6 @@ interface SavedPlan {
   savedAt: string;
 }
 
-const SAVED_PLANS_KEY = "v2_saved_plans";
-
-function readSavedPlans(): SavedPlan[] {
-  try { return JSON.parse(localStorage.getItem(SAVED_PLANS_KEY) ?? "[]") as SavedPlan[]; }
-  catch { return []; }
-}
-function writeSavedPlans(plans: SavedPlan[]) {
-  try { localStorage.setItem(SAVED_PLANS_KEY, JSON.stringify(plans)); }
-  catch {}
-}
 
 // ─── Per-card autosave cache ──────────────────────────────────────────────────
 
@@ -79,6 +70,7 @@ interface V2CardCache {
   articleFinalised?: boolean;
   seoExcerpt?: string;
   seoFocusKeyword?: string;
+  draftSentAt?: string;
   savedAt: string;
 }
 
@@ -115,11 +107,8 @@ function sectionSlug(heading: string): string {
   return "nl-sec-" + heading.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 60);
 }
 
-function creditBarColor(pct: number): string {
-  if (pct >= 100) return C.red;
-  if (pct >= 80) return "#F5A623";
-  return C.salmon;
-}
+// Bar uses a fixed gradient track; fill width reveals it left-to-right
+const CREDIT_BAR_GRADIENT = "linear-gradient(to right, #39FF14 0%, #FFD700 50%, #FF2020 100%)";
 
 // ─── Nav definition ───────────────────────────────────────────────────────────
 
@@ -249,18 +238,22 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
 
       {/* Nav */}
       <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {NAV_ITEMS.map(([key, label, d, badge]) => (
-          <button
-            key={key}
-            onClick={() => setScreen(key)}
-            title={collapsed ? label : undefined}
-            style={{ display: "flex", alignItems: "center", gap: collapsed ? 0 : 11, justifyContent: collapsed ? "center" : "flex-start", width: "100%", textAlign: "left", padding: collapsed ? "10px 0" : "9px 12px", borderRadius: 8, fontSize: 13, fontWeight: screen === key ? 600 : 400, background: screen === key ? "rgba(255,255,255,.16)" : "transparent", color: C.white, border: "none", cursor: "pointer" }}
-          >
-            <svg viewBox="0 0 20 20" width="16" height="16" style={{ flexShrink: 0, opacity: screen === key ? 1 : .6 }}><path d={d} fill="currentColor" /></svg>
-            {!collapsed && <span style={{ flex: 1, whiteSpace: "nowrap" }}>{label}</span>}
-            {!collapsed && badge && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "rgba(255,255,255,.16)" }}>{badge}</span>}
-          </button>
-        ))}
+        {NAV_ITEMS.map(([key, label, d, badge]) => {
+          const isActive = screen === key;
+          return (
+            <button
+              key={key}
+              onClick={() => setScreen(key)}
+              title={collapsed ? label : undefined}
+              className={`v2-nav-btn${isActive ? " v2-nav-active" : ""}${collapsed ? " v2-nav-collapsed" : ""}`}
+              style={{ display: "flex", alignItems: "center", gap: collapsed ? 0 : 11, justifyContent: collapsed ? "center" : "flex-start", width: "100%", textAlign: "left", padding: collapsed ? "10px 0" : "9px 12px", borderRadius: 8, fontSize: 13, fontWeight: isActive ? 600 : 400, background: isActive ? "rgba(255,255,255,.16)" : "transparent", color: C.white, border: "none", cursor: "pointer" }}
+            >
+              <svg viewBox="0 0 20 20" width="16" height="16" className="v2-nav-icon" style={{ flexShrink: 0, opacity: isActive ? 1 : .6 }}><path d={d} fill="currentColor" /></svg>
+              {!collapsed && <span className="v2-nav-label" style={{ flex: 1, whiteSpace: "nowrap" }}>{label}</span>}
+              {!collapsed && badge && <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 20, background: "rgba(255,255,255,.16)", transition: "transform .14s ease" }} className="v2-nav-label">{badge}</span>}
+            </button>
+          );
+        })}
       </nav>
 
       {/* Credits — click opens AI Usage page */}
@@ -272,7 +265,7 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
         {collapsed ? (
           <div style={{ display: "flex", justifyContent: "center" }}>
             <div style={{ width: 34, height: 6, borderRadius: 4, background: "rgba(255,255,255,.18)", overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${creditPct}%`, background: creditBarColor(creditPct) }} />
+              <div style={{ height: "100%", width: `${creditPct}%`, background: CREDIT_BAR_GRADIENT, backgroundSize: `${(10000 / Math.max(creditPct, 0.1)).toFixed(0)}% 100%` }} />
             </div>
           </div>
         ) : (
@@ -282,7 +275,7 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
           >
             <div style={{ fontSize: 11, fontWeight: 600, lineHeight: 1.5 }}>Monthly generation credits</div>
             <div style={{ height: 6, borderRadius: 4, background: "rgba(255,255,255,.18)", margin: "10px 0 6px", overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${creditPct}%`, background: creditBarColor(creditPct), transition: "background .3s" }} />
+              <div style={{ height: "100%", width: `${creditPct}%`, background: CREDIT_BAR_GRADIENT, backgroundSize: `${(10000 / Math.max(creditPct, 0.1)).toFixed(0)}% 100%`, transition: "width .3s" }} />
             </div>
             <div style={{ fontSize: 11, fontWeight: 400, opacity: .7 }}>{creditLabel}</div>
           </div>
@@ -989,21 +982,23 @@ function UserAvatar({ email, size = 24 }: { email: string; size?: number }) {
   );
 }
 
-function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers }: {
+function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity }: {
   card: DraftCard;
   onCreateArticle: () => void;
   onResume?: () => void;
   onRemove?: () => void;
   activeUsers?: PresenceUser[];
+  hasSavedPlan?: boolean;
+  sentToSanity?: boolean;
 }) {
   const rawScore = card.brief.predictedScore ? parseInt(card.brief.predictedScore) : NaN;
   const scoreNum = isNaN(rawScore) ? null : rawScore;
   const hasActive = activeUsers && activeUsers.length > 0;
 
   return (
-    <div style={{ padding: 24, border: `1px solid ${hasActive ? "rgba(24,95,0,.35)" : C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", height: 300, position: "relative", boxShadow: hasActive ? "0 0 0 2px rgba(24,95,0,.12)" : "none" }}>
-      {/* X remove button */}
-      {onRemove && (
+    <div style={{ padding: 24, border: `1px solid ${hasActive ? "rgba(24,95,0,.35)" : C.border}`, borderRadius: 12, background: hasActive ? "rgba(24,95,0,.04)" : C.white, display: "flex", flexDirection: "column", height: 300, position: "relative", boxShadow: hasActive ? "0 0 0 2px rgba(24,95,0,.18)" : "none" }}>
+      {/* X remove button — hidden when locked */}
+      {onRemove && !hasActive && (
         <button
           onClick={e => { e.stopPropagation(); onRemove(); }}
           title="Remove"
@@ -1015,7 +1010,23 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
 
       {/* Header: badge + score */}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 16, paddingRight: onRemove ? 28 : 0 }}>
-        <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: C.mid, background: "rgba(24,95,0,.1)", padding: "4px 9px", borderRadius: 20 }}>READY TO BUILD</span>
+        {hasActive ? (
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: C.mid, background: "rgba(24,95,0,.12)", padding: "4px 9px", borderRadius: 20 }}>
+            🔒 {activeUsers![0].user_email.split("@")[0].toUpperCase()} IS EDITING
+          </span>
+        ) : sentToSanity ? (
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.13)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
+            <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 5l2.5 2.5 4.5-4.5"/></svg>
+            SENT TO SANITY
+          </span>
+        ) : hasSavedPlan ? (
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.12)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
+            <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 5l2.5 2.5 4.5-4.5"/></svg>
+            PLAN SAVED
+          </span>
+        ) : (
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#888", background: "#E8E8E8", padding: "4px 9px", borderRadius: 20 }}>READY TO BUILD</span>
+        )}
         {scoreNum !== null && (
           <div style={{ textAlign: "right", flexShrink: 0 }}>
             <div style={{ fontSize: 22, fontWeight: 700, lineHeight: 1, color: scoreColor(scoreNum) }}>{scoreNum}</div>
@@ -1066,12 +1077,38 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
 
       {/* Actions */}
       <div style={{ display: "flex", gap: 8 }}>
-        <button
-          onClick={onCreateArticle}
-          style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
-        >
-          {hasActive ? "Open (someone is here)" : "Create Article"}
-        </button>
+        {sentToSanity ? (
+          <button
+            onClick={onCreateArticle}
+            style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
+          >
+            View Article
+          </button>
+        ) : hasSavedPlan && !hasActive ? (
+          <>
+            <button
+              onClick={onCreateArticle}
+              style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
+            >
+              Resume Plan
+            </button>
+            <button
+              onClick={onCreateArticle}
+              title="Regenerate from scratch"
+              style={{ padding: "11px 14px", borderRadius: 8, background: "transparent", color: C.muted, fontSize: 12, fontWeight: 500, border: `1px solid ${C.border}`, cursor: "pointer", whiteSpace: "nowrap" }}
+            >
+              Regenerate
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={onCreateArticle}
+            disabled={hasActive}
+            style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: hasActive ? "rgba(22,61,38,.25)" : C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: hasActive ? "not-allowed" : "pointer", opacity: hasActive ? 0.8 : 1 }}
+          >
+            {hasActive ? "🔒 Locked" : "Create Article"}
+          </button>
+        )}
       </div>
     </div>
   );
@@ -1081,7 +1118,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
 
 interface ArticleParagraph { id: number; text: string; }
 interface ArticleSectionContent { paragraphs: ArticleParagraph[]; bullets: string[]; }
-interface GeneratedSection { order: number; type: string; heading: string; content: ArticleSectionContent; }
+interface GeneratedSection { order: number; type: string; heading: string; eyebrow?: string; content: ArticleSectionContent; }
 interface GeneratedArticle { title: string; sections: GeneratedSection[]; }
 
 // ─── Newsletter article renderer ──────────────────────────────────────────────
@@ -1096,23 +1133,94 @@ function ImgPlaceholder({ height = 200 }: { height?: number }) {
   );
 }
 
-function WhatItMeansBlock({ bullets }: { bullets: string[] }) {
-  if (!bullets.length) return null;
-  return (
-    <div style={{ margin: "22px 0 0", padding: "16px 20px", background: "rgba(22,61,38,.04)", borderLeft: `3px solid ${C.mid}`, borderRadius: "0 6px 6px 0" }}>
-      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 10 }}>WHAT IT MEANS</div>
-      {bullets.map((b, i) => (
-        <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: i < bullets.length - 1 ? 7 : 0 }}>
-          <div style={{ width: 12, height: 1.5, background: C.mid, marginTop: 9, flexShrink: 0 }} />
-          <div style={{ fontSize: 13, fontWeight: 400, lineHeight: 1.6, color: "rgba(22,61,38,.75)" }}>{b}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 // Renders a paragraph that may contain LLM-emitted HTML (lists, bold, etc.)
 const HTML_TAG_RE = /<[a-z][\s\S]*?>/i;
+
+// ── AI-tell phrase replacement (mirrors geo-score.ts phrase lists) ─────────────
+function fixAiTells(text: string): string {
+  let t = text;
+  // Category 1: Significance inflation
+  const pairs: [RegExp, string][] = [
+    [/serves?\s+as\s+a\s+testament\s+to/gi, "demonstrates"],
+    [/stands?\s+as\s+a\s+testament\s+to/gi, "demonstrates"],
+    [/is\s+a\s+testament\s+to/gi, "demonstrates"],
+    [/marks?\s+a\s+pivotal\s+moment/gi, "represents a turning point"],
+    [/marks?\s+a\s+significant\s+shift/gi, "signals a shift"],
+    [/represents?\s+a\s+significant\s+milestone/gi, "is a milestone"],
+    [/underscores?\s+its\s+importance/gi, "matters"],
+    [/underscores?\s+the\s+importance\s+of/gi, "highlights"],
+    [/highlights?\s+the\s+significance\s+of/gi, "shows the significance of"],
+    [/highlights?\s+the\s+need\s+for/gi, "shows the need for"],
+    [/reinforces?\s+the\s+notion\s+that/gi, "confirms that"],
+    [/demonstrates?\s+the\s+value\s+of/gi, "shows the value of"],
+    [/emphasizes?\s+the\s+need\s+for/gi, "shows the need for"],
+    [/speaks\s+volumes/gi, "reveals much"],
+    [/paves?\s+the\s+way\s+for/gi, "enables"],
+    [/brings?\s+to\s+light/gi, "reveals"],
+    [/sheds?\s+light\s+on/gi, "clarifies"],
+    [/serves?\s+as\s+a\s+reminder/gi, "reminds us"],
+    // Category 2: Dangling participials (comma-attached trailing clauses)
+    [/,\s*highlighting\b/gi, ". This highlights"],
+    [/,\s*underscoring\b/gi, ". This underscores"],
+    [/,\s*reflecting\b/gi, ", which reflects"],
+    [/,\s*showcasing\b/gi, ", showing"],
+    [/,\s*demonstrating\b/gi, ". This demonstrates"],
+    [/,\s*emphasizing\b/gi, ". This emphasizes"],
+    [/,\s*illustrating\b/gi, ". This illustrates"],
+    [/,\s*reinforcing\b/gi, ". This reinforces"],
+    [/,\s*signaling\b/gi, ". This signals"],
+    // Category 3: Vague attribution
+    [/industry\s+observers\s+have\s+noted/gi, "reports show"],
+    [/industry\s+observers\s+note/gi, "reports show"],
+    [/experts\s+say/gi, "data shows"],
+    [/experts\s+note/gi, "practitioners note"],
+    [/experts\s+agree/gi, "the data shows"],
+    [/many\s+experts/gi, "practitioners"],
+    [/thought\s+leaders/gi, "senior practitioners"],
+    [/it\s+is\s+widely\s+believed/gi, "evidence shows"],
+    [/it\s+is\s+well\s+known/gi, "data confirms"],
+    [/it\s+is\s+widely\s+recognized/gi, "data shows"],
+    [/the\s+consensus\s+is/gi, "data suggests"],
+    [/many\s+believe/gi, "evidence suggests"],
+    [/analysts\s+note/gi, "per industry research"],
+    [/analysts\s+say/gi, "per industry research"],
+    // Category 4: Signposting
+    [/let['']s\s+dive\s+in[,.]?\s*/gi, ""],
+    [/let\s+us\s+dive\s+in[,.]?\s*/gi, ""],
+    [/let['']s\s+dive\s+into\b/gi, "looking at"],
+    [/let\s+us\s+dive\s+into\b/gi, "looking at"],
+    [/let['']s\s+explore\b/gi, "here's what matters:"],
+    [/let\s+us\s+explore\b/gi, "here's what matters:"],
+    [/let['']s\s+take\s+a\s+look\b/gi, "looking at the data"],
+    [/let\s+us\s+take\s+a\s+look\b/gi, "looking at the data"],
+    [/here['']s\s+what\s+you\s+need\s+to\s+know[,:]?\s*/gi, ""],
+    [/here\s+is\s+what\s+you\s+need\s+to\s+know[,:]?\s*/gi, ""],
+    [/here['']s\s+everything\s+you\s+need\s+to\s+know[,:]?\s*/gi, ""],
+    [/here\s+is\s+everything\s+you\s+need\s+to\s+know[,:]?\s*/gi, ""],
+    [/we['']ll\s+cover\b/gi, "this covers"],
+    [/we\s+will\s+cover\b/gi, "this covers"],
+    [/we['']ll\s+explore\b/gi, "this examines"],
+    [/we\s+will\s+explore\b/gi, "this examines"],
+    [/without\s+further\s+ado[,.]?\s*/gi, ""],
+    [/keep\s+reading\s+to\b/gi, "below,"],
+    [/read\s+on\s+to\s+learn\b/gi, "below,"],
+    // Category 5: Restatement openers
+    [/this\s+section\s+covers[^.]{0,80}\.\s*/gi, ""],
+    [/this\s+section\s+explains[^.]{0,80}\.\s*/gi, ""],
+    [/this\s+section\s+will\s+cover[^.]{0,80}\.\s*/gi, ""],
+    [/this\s+section\s+walks\s+you\s+through[^.]{0,80}\.\s*/gi, ""],
+    [/in\s+this\s+section,?\s+we[^.]{0,80}\.\s*/gi, ""],
+    [/this\s+article\s+explores[^.]{0,80}\.\s*/gi, ""],
+    [/this\s+article\s+covers[^.]{0,80}\.\s*/gi, ""],
+    [/this\s+guide\s+covers[^.]{0,80}\.\s*/gi, ""],
+    [/this\s+guide\s+walks\s+you\s+through[^.]{0,80}\.\s*/gi, ""],
+    [/this\s+piece\s+covers[^.]{0,80}\.\s*/gi, ""],
+    [/this\s+post\s+covers[^.]{0,80}\.\s*/gi, ""],
+  ];
+  for (const [re, rep] of pairs) t = t.replace(re, rep);
+  return t;
+}
 function richPara(text: string, style: React.CSSProperties, key: number | string) {
   if (HTML_TAG_RE.test(text)) {
     return <div key={key} className="v2-rich" style={style} dangerouslySetInnerHTML={{ __html: text }} />;
@@ -1120,13 +1228,94 @@ function richPara(text: string, style: React.CSSProperties, key: number | string
   return <p key={key} style={style}>{text}</p>;
 }
 
-function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches }: {
+// Generic inline-editable element — heading, bullet, FAQ question/answer, etc.
+function EditableText({ text, as: Tag = "span", style, className, onSave }: {
+  text: string;
+  as?: "span" | "div" | "p" | "h2" | "h3";
+  style?: React.CSSProperties;
+  className?: string;
+  onSave?: (newText: string) => void;
+}) {
+  const elRef = useRef<HTMLElement>(null);
+  const isFocusedRef = useRef(false);
+
+  useLayoutEffect(() => {
+    if (!elRef.current || isFocusedRef.current) return;
+    if (elRef.current.innerText !== text) elRef.current.innerText = text;
+  }, [text]);
+
+  return (
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    <Tag ref={elRef as React.RefObject<any>} contentEditable suppressContentEditableWarning className={className}
+      style={{ outline: "none", cursor: "text", borderRadius: 3, ...style }}
+      onFocus={() => { isFocusedRef.current = true; }}
+      onBlur={(e: React.FocusEvent<HTMLElement>) => {
+        isFocusedRef.current = false;
+        const newText = (e.currentTarget as HTMLElement).innerText.trim();
+        if (newText !== text) onSave?.(newText);
+      }}
+    />
+  );
+}
+
+// Inline-editable paragraph — uses contentEditable so text stays in natural flow (no box/scroll)
+function EditablePara({ text, style, paraKey, sectionOrder, paraId, onEditParagraph }: {
+  text: string;
+  style: React.CSSProperties;
+  paraKey: number | string;
+  sectionOrder: number;
+  paraId: number;
+  onEditParagraph?: (sectionOrder: number, paraId: number, text: string) => void;
+}) {
+  const isHTML = HTML_TAG_RE.test(text);
+  const elRef = useRef<HTMLElement>(null);
+  // Tracks whether the element currently has focus so useLayoutEffect never
+  // overwrites the user's in-progress edits during a parent re-render.
+  const isFocusedRef = useRef(false);
+
+  // Sync prop → DOM only when the element is NOT being edited.
+  useLayoutEffect(() => {
+    if (!elRef.current || isFocusedRef.current) return;
+    if (isHTML) { if (elRef.current.innerHTML !== text) elRef.current.innerHTML = text; }
+    else { if (elRef.current.innerText !== text) elRef.current.innerText = text; }
+  }, [text, isHTML]);
+
+  const handleFocus = (e: React.FocusEvent<HTMLElement>) => {
+    isFocusedRef.current = true;
+    e.currentTarget.style.background = "rgba(22,61,38,.04)";
+  };
+
+  const handleBlur = (e: React.FocusEvent<HTMLElement>) => {
+    isFocusedRef.current = false;
+    const newText = isHTML ? e.currentTarget.innerHTML : e.currentTarget.innerText;
+    if (newText !== text) onEditParagraph?.(sectionOrder, paraId, newText);
+    e.currentTarget.style.background = "";
+  };
+
+  const shared = {
+    contentEditable: true as const,
+    suppressContentEditableWarning: true,
+    style: { ...style, cursor: "text", outline: "none", borderRadius: 4 } as React.CSSProperties,
+    onFocus: handleFocus,
+    onBlur: handleBlur,
+    onMouseEnter: (e: React.MouseEvent<HTMLElement>) => { e.currentTarget.style.background = "rgba(22,61,38,.04)"; },
+    onMouseLeave: (e: React.MouseEvent<HTMLElement>) => { if (document.activeElement !== e.currentTarget) e.currentTarget.style.background = ""; },
+  };
+
+  if (isHTML) return <div key={paraKey} {...shared} ref={elRef as React.RefObject<HTMLDivElement>} className="v2-rich" />;
+  return <p key={paraKey} {...shared} ref={elRef as React.RefObject<HTMLParagraphElement>} />;
+}
+
+function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet }: {
   article: GeneratedArticle;
   outline: V2OutlineSection[];
   onScore: () => void;
   onPublish: () => void;
   highlightedSectionId?: string | null;
   brandVoiceMatches?: string[];
+  onEditParagraph?: (sectionOrder: number, paraId: number, text: string) => void;
+  onEditHeading?: (sectionOrder: number, heading: string) => void;
+  onEditBullet?: (sectionOrder: number, bulletIdx: number, text: string) => void;
 }) {
   const { sections } = article;
   const [subEmail, setSubEmail] = useState("");
@@ -1191,20 +1380,21 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
     }
   }
 
-  function getOutlineDesc(sectionIdx: number): string[] {
-    return outline[sectionIdx]?.description ?? [];
-  }
-
-  const hlStyle = (heading: string): React.CSSProperties =>
+const hlStyle = (heading: string): React.CSSProperties =>
     highlightedSectionId === sectionSlug(heading)
       ? { outline: "2.5px solid #F5A623", borderRadius: 8, transition: "outline .1s" }
       : {};
 
-  const intro = sections.find(s => s.type === "introduction");
-  const statsSection = sections.find(s => s.type === "stats");
-  const faqSection = sections.find(s => s.type === "faq");
-  const conclusion = sections.find(s => s.type === "conclusion");
-  const body = sections.filter(s => !["introduction", "stats", "faq", "conclusion"].includes(s.type));
+  const isFaq = (s: GeneratedSection) =>
+    /^faq$/i.test(s.type) || /frequently.asked/i.test(s.type) || /frequently asked/i.test(s.heading);
+  const isSpecial = (s: GeneratedSection) =>
+    /^(introduction|stats|conclusion)$/i.test(s.type) || isFaq(s);
+
+  const intro = sections.find(s => /^introduction$/i.test(s.type));
+  const statsSection = sections.find(s => /^stats$/i.test(s.type));
+  const faqSection = sections.find(isFaq);
+  const conclusion = sections.find(s => /^conclusion$/i.test(s.type));
+  const body = sections.filter(s => !isSpecial(s));
 
   const divider = <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "40px 0" }} />;
 
@@ -1244,12 +1434,11 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
           const idx = sections.indexOf(intro);
           return (
             <div id={sectionSlug(intro.heading)} style={{ marginBottom: 8, scrollMarginTop: 32, ...hlStyle(intro.heading) }}>
-              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.salmon, marginBottom: 14 }}>LEAD ITEM</div>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.salmon, marginBottom: 14 }}>{intro.eyebrow || "LEAD ITEM"}</div>
               <h2 style={{ margin: "0 0 18px", fontSize: 21, fontWeight: 700, lineHeight: 1.25, letterSpacing: "-.3px", color: C.dark }}>{intro.heading}</h2>
               {intro.content.paragraphs.map((p, i) =>
-                richPara(p.text, { margin: i < intro.content.paragraphs.length - 1 ? "0 0 15px" : 0, fontSize: 15, fontWeight: 400, lineHeight: 1.7, color: "#222" }, p.id)
+                <EditablePara key={p.id} text={p.text} style={{ margin: i < intro.content.paragraphs.length - 1 ? "0 0 15px" : 0, fontSize: 15, fontWeight: 400, lineHeight: 1.7, color: "#222" }} paraKey={p.id} sectionOrder={intro.order} paraId={p.id} onEditParagraph={onEditParagraph} />
               )}
-              <WhatItMeansBlock bullets={getOutlineDesc(idx)} />
             </div>
           );
         })()}
@@ -1262,11 +1451,11 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
               {divider}
               <ImgPlaceholder height={170} />
               <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 12 }}>
-                {s.type.replace(/_/g, " ").toUpperCase()}
+                {s.eyebrow || s.type.replace(/_/g, " ").toUpperCase()}
               </div>
               <h3 style={{ margin: "0 0 16px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-.2px", color: C.dark }}>{s.heading}</h3>
               {s.content.paragraphs.map((p, i) =>
-                richPara(p.text, { margin: i < s.content.paragraphs.length - 1 ? "0 0 14px" : 0, fontSize: 15, fontWeight: 400, lineHeight: 1.7, color: "#222" }, p.id)
+                <EditablePara key={p.id} text={p.text} style={{ margin: i < s.content.paragraphs.length - 1 ? "0 0 14px" : 0, fontSize: 15, fontWeight: 400, lineHeight: 1.7, color: "#222" }} paraKey={p.id} sectionOrder={s.order} paraId={p.id} onEditParagraph={onEditParagraph} />
               )}
               {s.content.bullets.length > 0 && (
                 <ul style={{ margin: "14px 0 0", paddingLeft: 22, display: "flex", flexDirection: "column", gap: 7 }}>
@@ -1275,7 +1464,6 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
                   ))}
                 </ul>
               )}
-              <WhatItMeansBlock bullets={getOutlineDesc(idx)} />
             </div>
           );
         })}
@@ -1314,39 +1502,51 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
         {faqSection && (() => {
           // Parse "Q: ...\nA: ..." format produced by the LLM
           const faqItems = faqSection.content.paragraphs.map((p, i) => {
-            const m = p.text.match(/^Q:\s*([\s\S]+?)\s*\n+A:\s*([\s\S]+)$/i);
+            // Strip outer HTML wrapper tags the LLM sometimes emits
+            const raw = p.text.replace(/^<p>/i, "").replace(/<\/p>$/i, "").trim();
+            // Match "Q: <question>\n\nA: <answer>" or "Q: <question> A: <answer>" (same line)
+            const m = raw.match(/^Q:\s*([\s\S]+?)\s*(?:\n+|\s{2,})A:\s*([\s\S]+)$/i)
+              ?? raw.match(/^Q:\s*(.+?)\s+A:\s*([\s\S]+)$/i);
             if (m) return { id: p.id, question: m[1].trim(), answer: m[2].trim() };
-            // Fallback: split on "\nA:" in case newline is missing
-            const splitIdx = p.text.search(/\nA:\s/i);
+            // Fallback: split on any "A:" boundary
+            const splitIdx = raw.search(/(?:\n|^)A:\s/im);
             if (splitIdx !== -1) {
-              const q = p.text.slice(0, splitIdx).replace(/^Q:\s*/i, "").trim();
-              const a = p.text.slice(splitIdx).replace(/^\nA:\s*/i, "").trim();
+              const q = raw.slice(0, splitIdx).replace(/^Q:\s*/i, "").trim();
+              const a = raw.slice(splitIdx).replace(/^A:\s*/i, "").trim();
               return { id: p.id, question: q, answer: a };
             }
-            // Plain paragraph: use as answer, label as Question N
-            return { id: p.id, question: `Question ${i + 1}`, answer: p.text };
+            // Last resort: whole paragraph is the answer
+            return { id: p.id, question: `Question ${i + 1}`, answer: raw };
           });
           return (
             <div id={sectionSlug(faqSection.heading)} style={{ scrollMarginTop: 32, ...hlStyle(faqSection.heading) }}>
               {divider}
-              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.mid, marginBottom: 14 }}>FREQUENTLY ASKED</div>
-              <h3 style={{ margin: "0 0 22px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, color: C.dark }}>{faqSection.heading}</h3>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.mid, marginBottom: 18 }}>FREQUENTLY ASKED QUESTIONS</div>
               <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
                 {faqItems.map((item, i) => {
                   const open = faqOpenIdx === i;
                   return (
                     <div key={item.id} style={{ borderBottom: i < faqItems.length - 1 ? `1px solid ${C.border}` : "none" }}>
-                      <button
-                        onClick={() => setFaqOpenIdx(open ? null : i)}
-                        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "16px 20px", background: open ? C.faint : "transparent", border: "none", cursor: "pointer", textAlign: "left", transition: "background .15s" }}
-                      >
-                        <span style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.45, color: C.dark }}>{item.question}</span>
-                        <span style={{ width: 22, height: 22, flexShrink: 0, borderRadius: "50%", border: `1.5px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, lineHeight: 1, color: C.mid, transition: "transform .18s", transform: open ? "rotate(45deg)" : "none", userSelect: "none" }}>+</span>
-                      </button>
+                      {/* Row: editable question + separate toggle button */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "16px 20px", background: open ? C.faint : "transparent", transition: "background .15s" }}>
+                        <EditableText
+                          text={item.question}
+                          as="span"
+                          style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.45, color: C.dark, flex: 1 }}
+                          onSave={newQ => onEditParagraph?.(faqSection.order, item.id, `Q: ${newQ}\n\nA: ${item.answer}`)}
+                        />
+                        <button
+                          onClick={() => setFaqOpenIdx(open ? null : i)}
+                          style={{ width: 22, height: 22, flexShrink: 0, borderRadius: "50%", border: `1.5px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, lineHeight: 1, color: C.mid, background: "transparent", cursor: "pointer", transition: "transform .18s", transform: open ? "rotate(45deg)" : "none", userSelect: "none" }}
+                        >+</button>
+                      </div>
                       {open && item.answer && (
-                        <div style={{ padding: "2px 20px 18px", fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: C.muted }}>
-                          {item.answer}
-                        </div>
+                        <EditableText
+                          text={item.answer}
+                          as="div"
+                          style={{ padding: "2px 20px 18px", fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: C.muted }}
+                          onSave={newA => onEditParagraph?.(faqSection.order, item.id, `Q: ${item.question}\n\nA: ${newA}`)}
+                        />
                       )}
                     </div>
                   );
@@ -1358,24 +1558,41 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
 
         {/* Conclusion / Key takeaways */}
         {conclusion && (() => {
-          const idx = sections.indexOf(conclusion);
-          const fallbackBullets = getOutlineDesc(idx);
-          const takeaways = conclusion.content.bullets.length > 0 ? conclusion.content.bullets : fallbackBullets;
+          // Gather bullets — prefer the bullets array, then extract <li> from HTML paragraph
+          let takeaways = conclusion.content.bullets.filter(b => b.trim());
+          if (takeaways.length === 0 && conclusion.content.paragraphs.length > 0) {
+            const pText = conclusion.content.paragraphs[0].text;
+            if (/<li/i.test(pText)) {
+              // Pull text out of each <li>…</li>
+              takeaways = (pText.match(/<li[^>]*>([\s\S]*?)<\/li>/gi) ?? [])
+                .map(li => li.replace(/<\/?li[^>]*>/gi, "").replace(/<[^>]+>/g, "").trim())
+                .filter(Boolean);
+            } else {
+              // Plain paragraph — split on sentence endings as fallback bullets
+              takeaways = [pText.replace(/<[^>]+>/g, "").trim()].filter(Boolean);
+            }
+          }
+          const bulletStyle: React.CSSProperties = { fontSize: 14, fontWeight: 400, lineHeight: 1.6, color: "rgba(255,255,255,.85)" };
           return (
             <div id={sectionSlug(conclusion.heading)} style={{ scrollMarginTop: 32, ...hlStyle(conclusion.heading) }}>
               {divider}
               <div style={{ background: C.dark, borderRadius: 12, padding: "32px 36px" }}>
                 <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.salmon, marginBottom: 14 }}>KEY TAKEAWAYS</div>
-                <h3 style={{ margin: "0 0 18px", fontSize: 18, fontWeight: 700, color: C.white, lineHeight: 1.3 }}>{conclusion.heading}</h3>
-                {conclusion.content.paragraphs.length > 0 && (
-                  <p style={{ margin: "0 0 18px", fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: "rgba(255,255,255,.72)" }}>
-                    {conclusion.content.paragraphs[0].text}
-                  </p>
-                )}
+                <EditableText
+                  text={conclusion.heading}
+                  as="h3"
+                  style={{ margin: "0 0 22px", fontSize: 18, fontWeight: 700, color: C.white, lineHeight: 1.3 }}
+                  onSave={newH => onEditHeading?.(conclusion.order, newH)}
+                />
                 {takeaways.map((b, i) => (
-                  <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: i < takeaways.length - 1 ? 12 : 0 }}>
-                    <div style={{ width: 16, height: 1.5, background: C.salmon, marginTop: 9, flexShrink: 0 }} />
-                    <div style={{ fontSize: 14, fontWeight: 400, lineHeight: 1.6, color: "rgba(255,255,255,.8)" }}>{b}</div>
+                  <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: i < takeaways.length - 1 ? 13 : 0 }}>
+                    <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.salmon, marginTop: 5, flexShrink: 0 }} />
+                    <EditableText
+                      text={b}
+                      as="div"
+                      style={bulletStyle}
+                      onSave={newB => onEditBullet?.(conclusion.order, i, newB)}
+                    />
                   </div>
                 ))}
               </div>
@@ -1493,8 +1710,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [expandedSection, setExpandedSection] = useState<number | null>(null);
   const [editingTitles, setEditingTitles] = useState<Record<number, string>>({});
   const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
+  const [sentToSanityIds, setSentToSanityIds] = useState<Set<string>>(new Set());
   const [savePulse, setSavePulse] = useState(false);
-  const [articleSavePulse, setArticleSavePulse] = useState(false);
+  const [isSaved, setIsSaved] = useState(false);
+  const [autoSaving, setAutoSaving] = useState(false);
   const [bvExpanded, setBvExpanded] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
@@ -1505,6 +1724,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const prevCardIdRef = useRef<string | null>(null);
   const preloadedPlanRef = useRef<{ outline: V2OutlineSection[]; title: string; brief: BriefFields } | null>(null);
   const metadataAutoFetchRef = useRef(false);
+  const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Article generation state ────────────────────────────────────────────────
   const [articleData, setArticleData] = useState<GeneratedArticle | null>(null);
@@ -1527,6 +1747,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   // ── Publish state ──────────────────────────────────────────────────────────
   const [draftState, setDraftState] = useState<"idle"|"loading"|"success"|"error">("idle");
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [draftSentAt, setDraftSentAt] = useState<string | null>(null);
   const [liveState, setLiveState] = useState<"idle"|"loading"|"success"|"error">("idle");
   const [liveError, setLiveError] = useState<string | null>(null);
   const [liveUrl, setLiveUrl] = useState<string | null>(null);
@@ -1553,6 +1774,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       const data = await res.json() as { error?: string };
       if (!res.ok) { setDraftState("error"); setDraftError(data.error ?? "Failed to save draft"); return; }
       setDraftState("success");
+      setDraftSentAt(new Date().toISOString());
+      if (activeCardId) setSentToSanityIds(prev => new Set([...prev, activeCardId]));
     } catch {
       setDraftState("error");
       setDraftError("Network error — please try again");
@@ -1579,8 +1802,26 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     }
   }
 
-  // ── Load saved plans from localStorage on mount ────────────────────────────
-  useEffect(() => { setSavedPlans(readSavedPlans()); }, []);
+  // ── Load saved plans from Supabase on mount (org-wide) ────────────────────
+  useEffect(() => {
+    fetch("/api/saved-plans")
+      .then(r => r.json())
+      .then((plans: SavedPlan[]) => { if (Array.isArray(plans)) setSavedPlans(plans); })
+      .catch(() => {});
+    // Load builder sessions to find which cards have been sent to Sanity
+    fetch("/api/builder-sessions")
+      .then(r => r.json())
+      .then((sessions: { opportunityId?: string; sentToWordPressAt?: string | null }[]) => {
+        if (!Array.isArray(sessions)) return;
+        const sent = new Set(
+          sessions
+            .filter(s => s.opportunityId && s.sentToWordPressAt)
+            .map(s => s.opportunityId!)
+        );
+        setSentToSanityIds(sent);
+      })
+      .catch(() => {});
+  }, []);
 
   // ── Autosave: persist editor state per card so refresh restores correctly ──
   // Runs on every state change — no early-exit guard so even small changes are saved.
@@ -1602,9 +1843,31 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       articleFinalised,
       seoExcerpt,
       seoFocusKeyword,
+      draftSentAt: draftSentAt ?? undefined,
       savedAt: new Date().toISOString(),
     });
   }, [activeCardId, editorStep, outline, articleTitle, articleData, geoScore, qualityFlags, brandVoiceStatus, seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags, articleFinalised, seoExcerpt, seoFocusKeyword]);
+
+  // ── Debounced Supabase auto-save: fires 3 s after articleData last changed ─
+  useEffect(() => {
+    if (!activeCardId || !articleData) return;
+    if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current);
+    setAutoSaving(true);
+    setIsSaved(false);
+    autoSaveTimerRef.current = setTimeout(async () => {
+      try {
+        await fetch(`/api/builder-sessions/${activeCardId}/save-article`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ article: articleData }),
+        });
+        setIsSaved(true);
+      } catch { /* non-fatal */ } finally {
+        setAutoSaving(false);
+      }
+    }, 3000);
+    return () => { if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current); };
+  }, [activeCardId, articleData]);
 
   // ── Generate outline when a card is activated ──────────────────────────────
   useEffect(() => {
@@ -1700,6 +1963,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         setArticleFinalised(cached.articleFinalised ?? false);
         setSeoExcerpt(cached.seoExcerpt ?? "");
         setSeoFocusKeyword(cached.seoFocusKeyword ?? "");
+        if (cached.draftSentAt) { setDraftSentAt(cached.draftSentAt); setDraftState("success"); }
         setArticleLoading(false);
         setArticleError(null);
       }
@@ -1707,6 +1971,20 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     }
 
     const card = draftCards?.find(c => c.opportunityId === activeCardId);
+
+    // If another team member saved a plan for this card, restore it (org-wide workspace)
+    const sharedPlan = savedPlans?.find(p => p.opportunityId === activeCardId);
+    if (sharedPlan) {
+      setEditorStep("plan");
+      setOutline(sharedPlan.outline);
+      setArticleTitle(sharedPlan.articleTitle);
+      setEditingTitles({});
+      setExpandedSection(null);
+      setOutlineError(null);
+      setOutlineLoading(false);
+      return;
+    }
+
     setEditorStep("plan");
     setOutline([]);
     setEditingTitles({});
@@ -1730,10 +2008,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       })
       .catch((e: unknown) => setOutlineError(e instanceof Error ? e.message : String(e)))
       .finally(() => setOutlineLoading(false));
-  }, [activeCardId, draftCards]);
+  }, [activeCardId, draftCards, savedPlans]);
 
-  // ── Save current plan ──────────────────────────────────────────────────────
-  function handleSavePlan() {
+  // ── Save current plan (org-wide via Supabase) ─────────────────────────────
+  async function handleSavePlan() {
     if (!activeCardId || outline.length === 0) return;
     const card = draftCards?.find(c => c.opportunityId === activeCardId);
     const finalOutline = outline.map((s, i) => ({
@@ -1747,12 +2025,14 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       brief: card?.brief ?? {},
       savedAt: new Date().toISOString(),
     };
-    const existing = readSavedPlans();
-    const updated = [plan, ...existing.filter(p => p.opportunityId !== activeCardId)];
-    writeSavedPlans(updated);
-    setSavedPlans(updated);
+    setSavedPlans(prev => [plan, ...prev.filter(p => p.opportunityId !== activeCardId)]);
     setSavePulse(true);
     setTimeout(() => setSavePulse(false), 1400);
+    await fetch("/api/saved-plans", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(plan),
+    }).catch(() => {});
   }
 
   // ── Resume a saved plan ────────────────────────────────────────────────────
@@ -1763,10 +2043,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   }
 
   // ── Delete a saved plan ────────────────────────────────────────────────────
-  function handleDeleteSavedPlan(opportunityId: string) {
-    const updated = savedPlans.filter(p => p.opportunityId !== opportunityId);
-    writeSavedPlans(updated);
-    setSavedPlans(updated);
+  async function handleDeleteSavedPlan(opportunityId: string) {
+    setSavedPlans(prev => prev.filter(p => p.opportunityId !== opportunityId));
+    await fetch(`/api/saved-plans/${opportunityId}`, { method: "DELETE" }).catch(() => {});
   }
 
   // ── Helper: get the (possibly edited) title for a section ─────────────────
@@ -1859,7 +2138,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   // ── Rescore GEO + brand voice from saved article (no article regen) ─────────
   const [rescoring, setRescoring] = useState(false);
 
-  async function rescoreGeo() {
+  async function rescoreGeo(overrideArticle?: typeof articleData) {
     if (!activeCardId || rescoring) return;
     setRescoring(true);
     try {
@@ -1867,7 +2146,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         method: "POST",
         headers: { "Content-Type": "application/json" },
         // Send the live v2 article so the server doesn't fall back to stale Supabase blocks
-        body: JSON.stringify({ article: articleData }),
+        body: JSON.stringify({ article: overrideArticle ?? articleData }),
       });
       // ok() returns data directly — no { data: ... } wrapper
       const data = await res.json() as { geoScore?: typeof geoScore; brandVoiceStatus?: typeof brandVoiceStatus; error?: string };
@@ -1934,6 +2213,26 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   async function autoFixGeoCheck(checkLabel: string, checkIdx: number) {
     if (!activeCardId || !articleData || fixingCheckIdx !== null) return;
     setFixingCheckIdx(checkIdx);
+
+    // AI-tell density: replace known phrases directly — no LLM needed, guaranteed to fix
+    if (checkLabel === "AI-tell density") {
+      try {
+        const fixedSections = articleData.sections.map(s => ({
+          ...s,
+          content: {
+            ...s.content,
+            paragraphs: s.content.paragraphs.map(p => ({ ...p, text: fixAiTells(p.text) })),
+          },
+        }));
+        const fixedArticle = { ...articleData, sections: fixedSections };
+        setArticleData(fixedArticle);
+        setExpandedCheckIdx(null);
+        await rescoreGeo(fixedArticle);
+      } catch { /* non-fatal */ }
+      finally { setFixingCheckIdx(null); }
+      return;
+    }
+
     try {
       const res = await fetch(`/api/builder-sessions/${activeCardId}/fix-section-v2`, {
         method: "POST",
@@ -1945,17 +2244,40 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           sections: articleData.sections,
         }),
       });
-      const data = await res.json() as { sectionHeading?: string; paragraphs?: { id: number; text: string }[]; error?: string };
-      if (res.ok && data.paragraphs?.length && data.sectionHeading) {
-        const { sectionHeading, paragraphs } = data as { sectionHeading: string; paragraphs: { id: number; text: string }[] };
-        setArticleData(prev => !prev ? prev : ({
-          ...prev,
-          sections: prev.sections.map(s =>
-            s.heading === sectionHeading ? { ...s, content: { ...s.content, paragraphs } } : s
-          ),
-        }));
+      const data = await res.json() as {
+        sectionHeading?: string;
+        paragraphs?: { id: number; text: string }[];
+        multifix?: { sectionHeading: string; paragraphId: number; newText: string }[];
+        error?: string;
+      };
+      const headingMatch = (a: string, b: string) =>
+        a.trim().toLowerCase() === b.trim().toLowerCase() ||
+        a.trim().toLowerCase().includes(b.trim().toLowerCase()) ||
+        b.trim().toLowerCase().includes(a.trim().toLowerCase());
+
+      if (res.ok && data.multifix?.length) {
+        const updatedSections = articleData.sections.map(s => {
+          const fixes = data.multifix!.filter(f => headingMatch(s.heading, f.sectionHeading));
+          if (!fixes.length) return s;
+          const updatedParas = s.content.paragraphs.map(p => {
+            const fix = fixes.find(f => f.paragraphId === p.id);
+            return fix ? { ...p, text: fix.newText } : p;
+          });
+          return { ...s, content: { ...s.content, paragraphs: updatedParas } };
+        });
+        const updatedArticle = { ...articleData, sections: updatedSections };
+        setArticleData(updatedArticle);
         setExpandedCheckIdx(null);
-        void rescoreGeo();
+        await rescoreGeo(updatedArticle);
+      } else if (res.ok && data.paragraphs?.length && data.sectionHeading) {
+        const { sectionHeading, paragraphs } = data as { sectionHeading: string; paragraphs: { id: number; text: string }[] };
+        const updatedSections = articleData.sections.map(s =>
+          headingMatch(s.heading, sectionHeading) ? { ...s, content: { ...s.content, paragraphs } } : s
+        );
+        const updatedArticle = { ...articleData, sections: updatedSections };
+        setArticleData(updatedArticle);
+        setExpandedCheckIdx(null);
+        await rescoreGeo(updatedArticle);
       }
     } catch { /* non-fatal */ }
     finally { setFixingCheckIdx(null); }
@@ -2200,30 +2522,70 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           </div>
         )}
 
-        {/* ── All opportunities section ── */}
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 28 }}>
-          <div>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 8 }}>ALL OPPORTUNITIES</div>
-            <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
-              {draftCards!.length} brief{draftCards!.length !== 1 ? "s" : ""} ready to build
-            </h2>
-          </div>
-        </div>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
-          {draftCards!.map(card => {
-            const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
-            return (
-              <DraftCardComponent
-                key={card.opportunityId}
-                card={card}
-                onCreateArticle={() => onActivateCard(card.opportunityId)}
-                onResume={onResumeChat}
-                onRemove={() => onTrashCard?.(card.opportunityId)}
-                activeUsers={activeUsers}
-              />
-            );
-          })}
-        </div>
+        {/* ── Sent to Sanity + All opportunities ── */}
+        {(() => {
+          const isSent      = (id: string) => sentToSanityIds.has(id) || !!readCardCache(id)?.draftSentAt;
+          const hasPlan     = (id: string) => savedPlans.some(p => p.opportunityId === id);
+          const sentCards    = draftCards!.filter(card => isSent(card.opportunityId));
+          const pendingCards = draftCards!.filter(card => !isSent(card.opportunityId) && !hasPlan(card.opportunityId));
+          return (
+            <>
+              {sentCards.length > 0 && (
+                <div style={{ marginBottom: 48 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.salmon, marginBottom: 8 }}>SENT TO SANITY</div>
+                      <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
+                        {sentCards.length} article{sentCards.length !== 1 ? "s" : ""} in review
+                      </h2>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
+                    {sentCards.map(card => {
+                      const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
+                      return (
+                        <DraftCardComponent
+                          key={card.opportunityId}
+                          card={card}
+                          onCreateArticle={() => onActivateCard(card.opportunityId)}
+                          onResume={onResumeChat}
+                          onRemove={() => onTrashCard?.(card.opportunityId)}
+                          activeUsers={activeUsers}
+                          hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
+                          sentToSanity
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 28 }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 8 }}>ALL OPPORTUNITIES</div>
+                  <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
+                    {pendingCards.length} brief{pendingCards.length !== 1 ? "s" : ""} ready to build
+                  </h2>
+                </div>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
+                {pendingCards.map(card => {
+                  const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
+                  return (
+                    <DraftCardComponent
+                      key={card.opportunityId}
+                      card={card}
+                      onCreateArticle={() => onActivateCard(card.opportunityId)}
+                      onResume={onResumeChat}
+                      onRemove={() => onTrashCard?.(card.opportunityId)}
+                      activeUsers={activeUsers}
+                      hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
+                    />
+                  );
+                })}
+              </div>
+            </>
+          );
+        })()}
       </div>
     );
   }
@@ -2468,7 +2830,15 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                           {section.description.map((line, li) => (
                             <div key={li} style={{ display: "flex", gap: 10, alignItems: "flex-start", marginBottom: 6 }}>
                               <div style={{ width: 14, height: 1.5, background: C.mid, marginTop: 9, flexShrink: 0 }} />
-                              <div style={{ fontSize: 12, fontWeight: 400, lineHeight: 1.55, color: "rgba(22,61,38,.72)" }}>{line}</div>
+                              <textarea
+                                value={line}
+                                onChange={e => {
+                                  const val = e.target.value;
+                                  setOutline(prev => prev.map((s, i) => i !== idx ? s : ({ ...s, description: s.description.map((d, di) => di === li ? val : d) })));
+                                }}
+                                rows={Math.max(1, Math.ceil(line.length / 72))}
+                                style={{ flex: 1, fontSize: 12, fontWeight: 400, lineHeight: 1.55, color: "rgba(22,61,38,.72)", border: "none", background: "transparent", outline: "none", resize: "none", padding: 0, fontFamily: "inherit", width: "100%" }}
+                              />
                             </div>
                           ))}
                           {section.keywords.length > 0 && (
@@ -2517,8 +2887,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   </svg>
                 </button>
               )}
-              {/* Load from server when no cache — article was saved to Supabase */}
-              {activeCardId && !readCardCache(activeCardId)?.articleData && (
+              {/* Load from server — only shown when card was previously sent to Sanity (server has the article) */}
+              {activeCardId && !readCardCache(activeCardId)?.articleData && sentToSanityIds.has(activeCardId) && (
                 <button
                   disabled={restoring}
                   onClick={async () => {
@@ -2638,6 +3008,47 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   ? (brandVoiceStatus.residuals?.flatMap(r => r.violations.map(v => v.match)) ?? [])
                   : []
               }
+              onEditParagraph={(sectionOrder, paraId, text) => {
+                setIsSaved(false);
+                setArticleData(prev => !prev ? prev : ({
+                  ...prev,
+                  sections: prev.sections.map(s => s.order !== sectionOrder ? s : ({
+                    ...s,
+                    content: {
+                      ...s.content,
+                      paragraphs: s.content.paragraphs.map(p => p.id !== paraId ? p : { ...p, text }),
+                    },
+                  })),
+                }));
+              }}
+              onEditHeading={(sectionOrder, heading) => {
+                setIsSaved(false);
+                setArticleData(prev => !prev ? prev : ({
+                  ...prev,
+                  sections: prev.sections.map(s => s.order !== sectionOrder ? s : { ...s, heading }),
+                }));
+              }}
+              onEditBullet={(sectionOrder, bulletIdx, text) => {
+                setIsSaved(false);
+                setArticleData(prev => !prev ? prev : ({
+                  ...prev,
+                  sections: prev.sections.map(s => {
+                    if (s.order !== sectionOrder) return s;
+                    // Normalise: if bullets are empty (old data stored in paragraphs), derive them first
+                    let bullets = [...s.content.bullets];
+                    if (bullets.length === 0 && s.content.paragraphs.length > 0) {
+                      const pText = s.content.paragraphs[0].text;
+                      bullets = /<li/i.test(pText)
+                        ? (pText.match(/<li[^>]*>([\s\S]*?)<\/li>/gi) ?? [])
+                            .map(li => li.replace(/<\/?li[^>]*>/gi, "").replace(/<[^>]+>/g, "").trim())
+                            .filter(Boolean)
+                        : [pText.replace(/<[^>]+>/g, "").trim()].filter(Boolean);
+                    }
+                    bullets[bulletIdx] = text;
+                    return { ...s, content: { ...s.content, bullets } };
+                  }),
+                }));
+              }}
             />
 
             {/* Right: panels */}
@@ -3027,16 +3438,20 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ article: articleData }),
                       }).catch(() => {/* non-fatal */});
-                      setArticleSavePulse(true);
-                      setTimeout(() => setArticleSavePulse(false), 1500);
+                      setIsSaved(true);
                     }}
                     disabled={!articleData}
-                    style={{ width: "100%", padding: "10px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700, border: `1.5px solid ${articleSavePulse ? C.mid : C.border}`, background: articleSavePulse ? "rgba(24,95,0,.07)" : C.faint, color: articleSavePulse ? C.mid : C.dark, cursor: !articleData ? "default" : "pointer", opacity: !articleData ? 0.45 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, transition: "border-color .2s, background .2s, color .2s" }}
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 8, fontSize: 12, fontWeight: 700, border: `1.5px solid ${isSaved ? C.mid : C.border}`, background: isSaved ? "rgba(24,95,0,.07)" : C.faint, color: isSaved ? C.mid : C.dark, cursor: !articleData ? "default" : "pointer", opacity: !articleData ? 0.45 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, transition: "border-color .2s, background .2s, color .2s" }}
                   >
-                    {articleSavePulse ? (
+                    {isSaved ? (
                       <>
                         <svg viewBox="0 0 12 12" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6l3 3 5-5"/></svg>
-                        Saved!
+                        Saved
+                      </>
+                    ) : autoSaving ? (
+                      <>
+                        <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ opacity: 0.5 }}><path d="M11 13H3a1 1 0 01-1-1V2a1 1 0 011-1h6l3 3v8a1 1 0 01-1 1z"/><path d="M9 13V8H5v5M5 1v4h4"/></svg>
+                        Auto-saving…
                       </>
                     ) : (
                       <>
@@ -3519,6 +3934,7 @@ function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChang
   const [days, setDays] = useState(30);
   const [lastRefreshed, setLastRefreshed] = useState<Date | null>(null);
   const [budgetInput, setBudgetInput] = useState(String(budget));
+  const [hoveredBar, setHoveredBar] = useState<{ idx: number; date: string; usd: number; calls: number } | null>(null);
 
   // Sync budget from server on mount
   useEffect(() => {
@@ -3632,24 +4048,154 @@ function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChang
             return null;
           })()}
 
-          {/* Daily chart */}
-          {data.byDay.length > 0 && (
-            <div style={{ padding: "20px 24px", background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 24 }}>
-              <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", opacity: .55, marginBottom: 16 }}>DAILY SPEND</div>
-              <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 72 }}>
-                {data.byDay.map(d => {
-                  const pct = (d.estimatedUsd / maxDayUsd) * 100;
-                  const label = d.date.slice(5);
-                  return (
-                    <div key={d.date} title={`${label}: ${fmtUsd(d.estimatedUsd)}`} style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", gap: 4, height: "100%", justifyContent: "flex-end" }}>
-                      <div style={{ width: "100%", height: `${Math.max(pct, 2)}%`, background: C.mid, borderRadius: "3px 3px 0 0", opacity: .75 }} />
-                      {data.byDay.length <= 10 && <div style={{ fontSize: 9, color: C.muted, lineHeight: 1 }}>{label}</div>}
+          {/* Daily chart — full date range, zero-filled for days with no data */}
+          {(() => {
+            const fullRange: { date: string; estimatedUsd: number; calls: number }[] = [];
+            const today = new Date();
+            for (let i = days - 1; i >= 0; i--) {
+              const d = new Date(today);
+              d.setDate(d.getDate() - i);
+              const dateStr = d.toISOString().slice(0, 10);
+              const found = data.byDay.find(b => b.date === dateStr);
+              fullRange.push({ date: dateStr, estimatedUsd: found?.estimatedUsd ?? 0, calls: (found as { calls?: number })?.calls ?? 0 });
+            }
+            const rangeMax = Math.max(...fullRange.map(d => d.estimatedUsd), 0.000001);
+            const labelEvery = days <= 7 ? 1 : days <= 30 ? 5 : 10;
+            const barGap = days > 30 ? 2 : 3;
+            return (
+              <div style={{ padding: "20px 24px", background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 24 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", opacity: .55 }}>DAILY SPEND</div>
+                  <div style={{ fontSize: 11, color: C.muted }}>
+                    {fullRange.filter(d => d.estimatedUsd > 0).length} active days · peak {fmtUsd(rangeMax)}
+                  </div>
+                </div>
+
+                {/* Bars + tooltip */}
+                <div style={{ position: "relative" }}>
+                  {/* Custom tooltip */}
+                  {hoveredBar && (
+                    <div style={{
+                      position: "absolute",
+                      bottom: "calc(100% + 8px)",
+                      left: `clamp(0px, calc(${(hoveredBar.idx / fullRange.length) * 100}% - 60px), calc(100% - 130px))`,
+                      background: C.dark,
+                      color: C.white,
+                      borderRadius: 8,
+                      padding: "8px 12px",
+                      fontSize: 12,
+                      fontWeight: 500,
+                      whiteSpace: "nowrap",
+                      pointerEvents: "none",
+                      zIndex: 10,
+                      boxShadow: "0 4px 12px rgba(0,0,0,.18)",
+                      lineHeight: 1.6,
+                    }}>
+                      <div style={{ fontWeight: 700, marginBottom: 2 }}>{hoveredBar.date}</div>
+                      {hoveredBar.usd > 0 ? (
+                        <>
+                          <div style={{ color: "rgba(255,255,255,.85)" }}>{fmtUsd(hoveredBar.usd)}</div>
+                          <div style={{ color: "rgba(255,255,255,.55)", fontSize: 11 }}>{hoveredBar.calls} call{hoveredBar.calls !== 1 ? "s" : ""}</div>
+                        </>
+                      ) : (
+                        <div style={{ color: "rgba(255,255,255,.45)" }}>No usage</div>
+                      )}
                     </div>
-                  );
-                })}
+                  )}
+
+                  {/* Bar columns */}
+                  <div
+                    style={{ display: "flex", alignItems: "flex-end", gap: barGap, height: 110 }}
+                    onMouseLeave={() => setHoveredBar(null)}
+                  >
+                    {fullRange.map((d, i) => {
+                      const pct = (d.estimatedUsd / rangeMax) * 100;
+                      const hasData = d.estimatedUsd > 0;
+                      const isHovered = hoveredBar?.idx === i;
+                      return (
+                        <div
+                          key={d.date}
+                          onMouseEnter={() => setHoveredBar({ idx: i, date: d.date, usd: d.estimatedUsd, calls: d.calls })}
+                          style={{ flex: 1, height: "100%", display: "flex", flexDirection: "column", justifyContent: "flex-end", cursor: "default" }}
+                        >
+                          <div style={{
+                            width: "100%",
+                            height: hasData ? `${Math.max(pct, 4)}%` : "2px",
+                            background: hasData ? (isHovered ? C.dark : C.mid) : (isHovered ? "rgba(22,61,38,.2)" : "rgba(22,61,38,.1)"),
+                            borderRadius: "3px 3px 0 0",
+                            transition: "background .1s, height .1s",
+                          }} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Date axis — absolutely positioned so labels never get clipped by bar width */}
+                <div style={{ borderTop: `1px solid ${C.border}`, marginTop: 0 }} />
+                <div style={{ position: "relative", height: 24, marginTop: 2 }}>
+                  {(() => {
+                    // Build label positions as % of total width
+                    type LabelPos = { pct: number; text: string; key: string; bold?: boolean };
+                    const labels: LabelPos[] = [];
+                    const n = fullRange.length;
+
+                    if (days <= 7) {
+                      // Every day
+                      fullRange.forEach((d, i) => {
+                        labels.push({ pct: (i + 0.5) / n * 100, text: d.date.slice(5), key: d.date });
+                      });
+                    } else if (days <= 30) {
+                      // Every 5 days + last
+                      fullRange.forEach((d, i) => {
+                        if (i === 0 || i % 5 === 0 || i === n - 1)
+                          labels.push({ pct: (i + 0.5) / n * 100, text: d.date.slice(5), key: d.date });
+                      });
+                    } else {
+                      // 90d: month start markers + first + last day of range
+                      fullRange.forEach((d, i) => {
+                        const dt = new Date(d.date + "T00:00:00");
+                        const isMonthStart = dt.getDate() === 1;
+                        const isFirst = i === 0;
+                        const isLast = i === n - 1;
+                        if (isMonthStart || isFirst || isLast) {
+                          const text = isMonthStart
+                            ? dt.toLocaleString("default", { month: "short" })
+                            : d.date.slice(5);
+                          labels.push({ pct: (i + 0.5) / n * 100, text, key: d.date });
+                        }
+                      });
+                    }
+
+                    // Hovered bar label overrides — show exact date
+                    const hoveredLabel = hoveredBar
+                      ? { pct: (hoveredBar.idx + 0.5) / n * 100, text: hoveredBar.date.slice(5), key: "hover", bold: true }
+                      : null;
+
+                    return [...labels, ...(hoveredLabel ? [hoveredLabel] : [])].map(l => (
+                      <span
+                        key={l.key}
+                        style={{
+                          position: "absolute",
+                          left: `${l.pct}%`,
+                          transform: "translateX(-50%)",
+                          fontSize: 10,
+                          fontWeight: l.bold ? 700 : 400,
+                          color: l.bold ? C.dark : C.muted,
+                          whiteSpace: "nowrap",
+                          userSelect: "none",
+                          lineHeight: 1,
+                          top: 4,
+                        }}
+                      >
+                        {l.text}
+                      </span>
+                    ));
+                  })()}
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           {/* Feature breakdown */}
           {data.byFeature.length > 0 ? (
@@ -3729,7 +4275,7 @@ function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChang
                 {(() => {
                   const activeBudget = parseInt(budgetInput, 10) || budget;
                   const pct = Math.min(((data?.totalCalls ?? 0) / activeBudget) * 100, 100);
-                  return <div style={{ height: "100%", width: `${pct}%`, background: creditBarColor(pct), borderRadius: 4, transition: "width .3s, background .3s" }} />;
+                  return <div style={{ height: "100%", width: `${pct}%`, background: CREDIT_BAR_GRADIENT, backgroundSize: `${(10000 / Math.max(pct, 0.1)).toFixed(0)}% 100%`, borderRadius: 4, transition: "width .3s" }} />;
                 })()}
               </div>
               <div style={{ fontSize: 12, color: C.muted, whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>
@@ -3943,7 +4489,10 @@ export default function AtelierV2Page() {
     setScreen("editor");
   }
 
-  function handleActivateCard(id: string) { setActiveCardId(id); }
+  function handleActivateCard(id: string) {
+    if (presenceData.some(u => u.active_card_id === id)) return;
+    setActiveCardId(id);
+  }
 
   function handleBackToCards() {
     setActiveCardId(null);
@@ -4035,11 +4584,74 @@ export default function AtelierV2Page() {
         .v2-rich li { margin-bottom: 5px; font-size: inherit; line-height: 1.65; color: inherit; }
         .v2-rich strong, .v2-rich b { font-weight: 600; }
         .v2-rich em, .v2-rich i { font-style: italic; }
+        .v2-rich--inv li { color: rgba(255,255,255,.8); }
+        .v2-rich--inv ul { list-style: none; margin-left: 0; padding-left: 0; }
+        .v2-rich--inv ul li { padding-left: 20px; position: relative; }
+        .v2-rich--inv ul li::before { content: ""; position: absolute; left: 0; top: 7px; width: 7px; height: 7px; border-radius: 50%; background: #F88379; }
+
+        /* Sidebar nav item hover animations */
+        .v2-nav-btn {
+          transition: background .14s ease, transform .13s ease;
+          position: relative;
+        }
+
+        /* ── Expanded (text + icon) ───────────────────────────── */
+        .v2-nav-btn::before {
+          content: "";
+          position: absolute;
+          left: 0; top: 20%; bottom: 20%;
+          width: 2.5px;
+          border-radius: 0 2px 2px 0;
+          background: rgba(255,255,255,.0);
+          transition: background .14s ease, top .14s ease, bottom .14s ease;
+        }
+        .v2-nav-btn:not(.v2-nav-collapsed):not(.v2-nav-active):hover {
+          background: rgba(255,255,255,.08) !important;
+        }
+        .v2-nav-btn:not(.v2-nav-collapsed):not(.v2-nav-active):hover::before {
+          background: rgba(255,255,255,.3);
+          top: 25%; bottom: 25%;
+        }
+        .v2-nav-btn:not(.v2-nav-collapsed):not(.v2-nav-active):hover .v2-nav-icon {
+          opacity: 0.9 !important;
+          transform: translateX(2px);
+        }
+        .v2-nav-btn:not(.v2-nav-collapsed):not(.v2-nav-active):hover .v2-nav-label {
+          transform: translateX(2px);
+        }
+        .v2-nav-active:not(.v2-nav-collapsed)::before {
+          background: rgba(255,255,255,.55);
+          top: 18%; bottom: 18%;
+        }
+
+        /* ── Collapsed (icon only) ────────────────────────────── */
+        .v2-nav-btn.v2-nav-collapsed:not(.v2-nav-active):hover {
+          background: rgba(255,255,255,.1) !important;
+        }
+        .v2-nav-btn.v2-nav-collapsed:not(.v2-nav-active):hover .v2-nav-icon {
+          opacity: 1 !important;
+          transform: translateY(-2px) scale(1.18);
+          filter: drop-shadow(0 2px 4px rgba(0,0,0,.25));
+        }
+        .v2-nav-btn.v2-nav-collapsed:active { transform: scale(0.92); }
+
+        /* ── Shared ───────────────────────────────────────────── */
+        .v2-nav-btn:not(.v2-nav-collapsed):active { transform: scale(0.97); }
+        .v2-nav-icon {
+          transition: opacity .14s ease, transform .16s cubic-bezier(.34,1.56,.64,1), filter .14s ease;
+        }
+        .v2-nav-label {
+          transition: transform .14s ease;
+        }
       `}</style>
 
       <Sidebar
         screen={screen}
-        setScreen={setScreen}
+        setScreen={(s: Screen) => {
+          // Clicking "Draft editor" from inside an article returns to the card grid
+          if (s === "editor") setActiveCardId(null);
+          setScreen(s);
+        }}
         collapsed={collapsed}
         onToggle={() => setCollapsed(c => !c)}
         creditPct={creditPct}

@@ -55,6 +55,11 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   try {
     const { documentId, studioUrl } = await publishToSanity(session, wpMetadata);
+    // Mark session as sent in Supabase so the card grid can show it in "Sent to Sanity"
+    try {
+      const { updateSession } = await import("@/lib/builder-sessions-store");
+      await updateSession(user.id, opportunityId, { sentToWordPressAt: new Date().toISOString() });
+    } catch { /* non-fatal — publish succeeded, just couldn't stamp the session */ }
     return Response.json({ id: documentId, studioUrl, status: "draft" });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
