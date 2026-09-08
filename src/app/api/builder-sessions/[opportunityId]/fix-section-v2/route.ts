@@ -186,6 +186,8 @@ export async function POST(req: NextRequest, { params }: Params2) {
         paragraphId?: number;
         newText?: string;
         appendParagraphs?: string[];
+        // AI-tell density: array of per-paragraph fixes
+        fixes?: { sectionHeading: string; paragraphId: number; newText: string }[];
         // snippet-based matching (Named sources, Statistics with sources)
         snippetFixes?: { snippet: string; newText: string }[];
       }>(system, userPrompt, "gpt-4o-mini", { userId: user.id, feature: "fix-geo-v2" });
