@@ -310,8 +310,8 @@ function EyebrowLabel({ children }: { children: React.ReactNode }) {
   return <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid }}>{children}</div>;
 }
 
-function StageChip({ label, bg }: { label: string; bg: string }) {
-  return <span style={{ fontSize: 11, fontWeight: 600, padding: "4px 9px", borderRadius: 20, border: "1px solid rgba(22,61,38,.2)", background: bg }}>{label}</span>;
+function StageChip({ label, bg, color, borderColor }: { label: string; bg: string; color?: string; borderColor?: string }) {
+  return <span style={{ fontSize: 11, fontWeight: 600, padding: "4px 9px", borderRadius: 20, border: `1px solid ${borderColor ?? "rgba(22,61,38,.2)"}`, background: bg, color: color ?? "inherit" }}>{label}</span>;
 }
 
 // ─── Dashboard screen ─────────────────────────────────────────────────────────
@@ -927,22 +927,29 @@ function QueueScreen({ onEditor, onGenerate }: { onEditor: () => void; onGenerat
         </div>
         {QUEUE_ROWS_DATA.map((q, i) => {
           const isSelected = selected.includes(i);
-          const fill = q.stage === "Needs review" ? C.red : q.pct === 100 ? C.mid : C.dark;
-          const stageBg = q.stage === "Needs review" ? "rgba(249,57,67,.08)" : q.stage === "Approved" ? "rgba(24,95,0,.1)" : "rgba(22,61,38,.05)";
+          const isNeedsReview = q.stage === "Needs review";
+          const isApproved = q.stage === "Approved";
+          const fill = isNeedsReview ? C.red : C.dark;
+          const stageBg = isNeedsReview ? "rgba(249,57,67,.06)" : isApproved ? "rgba(22,61,38,.07)" : "rgba(22,61,38,.04)";
+          const stageColor = isNeedsReview ? C.red : isApproved ? C.mid : "rgba(22,61,38,.7)";
+          const stageBorder = isNeedsReview ? "rgba(249,57,67,.28)" : isApproved ? "rgba(22,61,38,.35)" : "rgba(22,61,38,.18)";
+          const actionColor = q.action === "Review" ? C.red : q.action === "Open" ? C.dark : C.mid;
           return (
             <div key={q.prompt} style={{ display: "grid", gridTemplateColumns: "28px 2.2fr 1.1fr 1fr 1.4fr 80px", gap: 16, alignItems: "center", padding: "15px 20px", borderTop: "1px solid rgba(22,61,38,.08)" }}>
-              <button onClick={() => toggleSelect(i)} style={{ width: 16, height: 16, borderRadius: 4, border: "1px solid rgba(22,61,38,.3)", background: isSelected ? C.dark : "transparent", cursor: "pointer", flexShrink: 0 }} />
-              <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.4 }}>{q.prompt}</div>
+              <button onClick={() => toggleSelect(i)} style={{ width: 18, height: 18, borderRadius: 5, border: isSelected ? "none" : "1.5px solid rgba(22,61,38,.3)", background: isSelected ? C.dark : "transparent", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {isSelected && <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>}
+              </button>
+              <div style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.4, color: "#1a1a1a" }}>{q.prompt}</div>
               <div style={{ fontSize: 11, fontWeight: 600, color: C.mid }}>{q.cluster}</div>
-              <div><StageChip label={q.stage} bg={stageBg} /></div>
+              <div><StageChip label={q.stage} bg={stageBg} color={stageColor} borderColor={stageBorder} /></div>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ flex: 1, height: 6, borderRadius: 4, background: "rgba(22,61,38,.1)", overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${q.pct}%`, background: fill }} />
+                  <div style={{ height: "100%", width: `${q.pct}%`, background: fill, transition: "width .3s ease" }} />
                 </div>
-                <div style={{ fontSize: 11, fontWeight: 600, width: 32, textAlign: "right" }}>{q.pct}%</div>
+                <div style={{ fontSize: 11, fontWeight: 600, width: 34, textAlign: "right", color: "rgba(22,61,38,.6)" }}>{q.pct}%</div>
               </div>
               <div style={{ textAlign: "right" }}>
-                <button onClick={onEditor} style={{ fontSize: 11, fontWeight: 600, color: C.mid, background: "none", border: "none", cursor: "pointer" }}>{q.action}</button>
+                <button onClick={onEditor} style={{ fontSize: 11, fontWeight: 700, color: actionColor, background: "none", border: "none", cursor: "pointer" }}>{q.action}</button>
               </div>
             </div>
           );
