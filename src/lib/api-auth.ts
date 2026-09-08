@@ -5,6 +5,7 @@
  */
 
 import { createClient } from "@/lib/supabase/server";
+import { supabaseAdmin } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 
 export async function getAuthUser() {
@@ -31,4 +32,35 @@ export async function requireUser(): Promise<
     };
   }
   return { user: { id: user.id, email: user.email }, error: null };
+}
+
+/** Returns the role of the authenticated user, or null if not in team_members. */
+export async function getUserRole(userId: string): Promise<"admin" | "editor" | null> {
+  const { data } = await supabaseAdmin
+    .from("team_members")
+    .select("role")
+    .eq("id", userId)
+    .single();
+  if (!data) return null;
+  return data.role as "admin" | "editor";
+}
+
+/** Returns `{ user }` or `{ error }` (401/403). Requires admin role. */
+export async function requireAdmin(): Promise<
+  | { user: { id: string; email?: string }; error: null }
+  | { user: null; error: NextResponse }
+> {
+  const { user, error } = await requireUser();
+  if (error) return { user: null, error };
+  const role = await getUserRole(user.id);
+  if (role !== "admin") {
+    return {
+      user: null,
+      error: NextResponse.json(
+        { error: "Forbidden — admin access required", code: "FORBIDDEN" },
+        { status: 403 }
+      ),
+    };
+  }
+  return { user, error: null };
 }

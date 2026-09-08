@@ -6,7 +6,7 @@ import { useSettings } from "@/hooks/useSettings";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Screen = "dashboard" | "generate" | "queue" | "editor" | "score" | "keywords" | "publish" | "analytics" | "settings" | "usage" | "trash";
+type Screen = "dashboard" | "generate" | "queue" | "editor" | "score" | "keywords" | "publish" | "analytics" | "settings" | "usage" | "trash" | "team";
 type FlowMode = "wizard" | "single" | "chat" | "keywords";
 type VizMode = "ring" | "bars" | "grid";
 type DataState = "normal" | "empty" | "loading";
@@ -140,6 +140,7 @@ const NAV_ITEMS: [Screen, string, string, string][] = [
   ["publish",    "Publishing",    "M10 2l5 6h-3v6H8V8H5zM4 16h12v2H4z", ""],
   ["analytics",  "Visibility",    "M3 15h3V8H3zM8 15h3V3H8zM13 15h3v-7h-3z", ""],
   ["settings",   "Brand voice",   "M10 6a4 4 0 100 8 4 4 0 000-8zM9 2h2v3H9zM9 15h2v3H9zM2 9h3v2H2zM15 9h3v2h-3z", ""],
+  ["team",       "Team",          "M7 10a3 3 0 100-6 3 3 0 000 6zM1 18v-2a5 5 0 0110 0v2H1zM16 10a3 3 0 10-2-5.83M14 18v-2a5 5 0 00-3-4.58", ""],
   ["trash",      "Trash",         "M7 3h6v2H7zM3 5h14v2H3zM5 7h10l-1 10H6L5 7z", ""],
 ];
 
@@ -155,6 +156,7 @@ const SCREEN_HEAD: Record<Screen, [string, string, string]> = {
   settings:   ["CONFIGURATION",  "Brand voice",                       "Every generation inherits these rules. Change them once."],
   usage:      ["USAGE",          "AI spend & token usage",            "Token consumption and estimated cost across all features."],
   trash:      ["TRASH",          "Deleted briefs",                    "Removed cards. Restore them to the editor or delete permanently."],
+  team:       ["TEAM",           "Members & access",                  "Invite teammates, assign roles, and manage permissions."],
 };
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
@@ -4354,7 +4356,256 @@ function EditableList({ items, onChange, placeholder }: {
   );
 }
 
-function SettingsScreen() {
+// ─── TeamScreen ───────────────────────────────────────────────────────────────
+
+interface TeamMember {
+  id: string;
+  email: string;
+  full_name: string | null;
+  role: "admin" | "editor";
+  created_at: string;
+}
+
+function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
+  const [members, setMembers] = useState<TeamMember[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteRole, setInviteRole] = useState<"admin" | "editor">("editor");
+  const [inviting, setInviting] = useState(false);
+  const [inviteMsg, setInviteMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [actionMsg, setActionMsg] = useState<string | null>(null);
+
+  const isAdmin = userRole === "admin";
+
+  function loadMembers() {
+    setLoading(true);
+    fetch("/api/team")
+      .then(r => r.ok ? r.json() : [])
+      .then((data: TeamMember[]) => setMembers(data))
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }
+  useEffect(loadMembers, []);
+
+  async function handleInvite() {
+    if (!inviteEmail.trim()) return;
+    setInviting(true);
+    setInviteMsg(null);
+    try {
+      const res = await fetch("/api/team", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: inviteEmail.trim(), role: inviteRole }),
+      });
+      if (res.ok) {
+        setInviteMsg({ ok: true, text: `Invite sent to ${inviteEmail.trim()}` });
+        setInviteEmail("");
+        loadMembers();
+      } else {
+        const d = await res.json() as { error?: string };
+        setInviteMsg({ ok: false, text: d.error ?? "Failed to send invite" });
+      }
+    } finally {
+      setInviting(false);
+    }
+  }
+
+  async function handleRoleChange(memberId: string, newRole: "admin" | "editor") {
+    const res = await fetch(`/api/team/${memberId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role: newRole }),
+    });
+    if (res.ok) {
+      setMembers(prev => prev.map(m => m.id === memberId ? { ...m, role: newRole } : m));
+    } else {
+      const d = await res.json() as { error?: string };
+      setActionMsg(d.error ?? "Failed to change role");
+      setTimeout(() => setActionMsg(null), 3000);
+    }
+  }
+
+  async function handleRemove(memberId: string, email: string) {
+    if (!confirm(`Remove ${email} from the team?`)) return;
+    const res = await fetch(`/api/team/${memberId}`, { method: "DELETE" });
+    if (res.ok) {
+      setMembers(prev => prev.filter(m => m.id !== memberId));
+    } else {
+      const d = await res.json() as { error?: string };
+      setActionMsg(d.error ?? "Failed to remove member");
+      setTimeout(() => setActionMsg(null), 3000);
+    }
+  }
+
+  const roleBadge = (role: "admin" | "editor") => (
+    <span style={{
+      display: "inline-flex", alignItems: "center", padding: "2px 8px",
+      borderRadius: 20, fontSize: 11, fontWeight: 700, letterSpacing: ".06em",
+      background: role === "admin" ? "rgba(22,61,38,.12)" : "rgba(22,61,38,.05)",
+      color: role === "admin" ? C.mid : "rgba(22,61,38,.5)",
+      border: role === "admin" ? "1px solid rgba(22,61,38,.2)" : "1px solid rgba(22,61,38,.1)",
+    }}>
+      {role.toUpperCase()}
+    </span>
+  );
+
+  const initials = (m: TeamMember) => {
+    const name = m.full_name ?? m.email;
+    return name.split(/[\s@.]+/).map(s => s[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
+  };
+
+  if (loading) return (
+    <ComboLoader
+      stages={["Load", "Parse", "Ready"]}
+      phases={[
+        { label: "Loading team", text: "Fetching team members..." },
+        { label: "Parsing roles", text: "Reading member roles and access levels..." },
+        { label: "Ready", text: "✓  Team loaded" },
+      ]}
+    />
+  );
+
+  return (
+    <div style={{ maxWidth: 720, display: "flex", flexDirection: "column", gap: 32 }}>
+
+      {actionMsg && (
+        <div style={{ padding: "10px 16px", borderRadius: 8, background: "rgba(249,57,67,.08)", border: "1px solid rgba(249,57,67,.2)", color: C.red, fontSize: 13 }}>
+          {actionMsg}
+        </div>
+      )}
+
+      {/* Member list */}
+      <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ padding: "14px 20px", borderBottom: `1px solid ${C.border}`, background: "rgba(22,61,38,.02)" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid }}>
+            MEMBERS — {members.length}
+          </div>
+        </div>
+
+        {members.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: "rgba(22,61,38,.4)", fontSize: 13 }}>
+            No team members yet. Invite someone below.
+          </div>
+        ) : (
+          <div>
+            {members.map((m, i) => (
+              <div key={m.id} style={{
+                display: "flex", alignItems: "center", gap: 16, padding: "14px 20px",
+                borderBottom: i < members.length - 1 ? `1px solid ${C.border}` : "none",
+              }}>
+                {/* Avatar */}
+                <div style={{
+                  width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
+                  background: "rgba(22,61,38,.12)", display: "flex", alignItems: "center", justifyContent: "center",
+                  fontSize: 12, fontWeight: 700, color: C.mid, letterSpacing: ".02em",
+                }}>
+                  {initials(m)}
+                </div>
+
+                {/* Info */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {m.full_name && (
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.dark, marginBottom: 2 }}>{m.full_name}</div>
+                  )}
+                  <div style={{ fontSize: 12, color: C.mid }}>{m.email}</div>
+                </div>
+
+                {/* Role badge / selector */}
+                {isAdmin ? (
+                  <select
+                    value={m.role}
+                    onChange={e => handleRoleChange(m.id, e.target.value as "admin" | "editor")}
+                    style={{
+                      padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(22,61,38,.2)",
+                      background: C.white, fontSize: 12, fontWeight: 600, color: C.dark, cursor: "pointer",
+                    }}
+                  >
+                    <option value="editor">Editor</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                ) : roleBadge(m.role)}
+
+                {/* Remove button — admin only, can't remove self */}
+                {isAdmin && (
+                  <button
+                    onClick={() => handleRemove(m.id, m.email)}
+                    title="Remove member"
+                    style={{
+                      width: 28, height: 28, borderRadius: "50%", border: "1px solid rgba(249,57,67,.3)",
+                      background: "rgba(249,57,67,.07)", color: C.red, cursor: "pointer",
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      fontSize: 14, fontWeight: 700, flexShrink: 0,
+                    }}
+                  >×</button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Invite form — admin only */}
+      {isAdmin && (
+        <div style={{ padding: 24, borderRadius: 12, border: `1px solid ${C.border}`, background: C.white }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 16 }}>INVITE MEMBER</div>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto auto", gap: 10, alignItems: "center" }}>
+            <input
+              type="email"
+              placeholder="colleague@company.com"
+              value={inviteEmail}
+              onChange={e => setInviteEmail(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && handleInvite()}
+              style={{ padding: "10px 14px", border: "1px solid rgba(22,61,38,.22)", borderRadius: 8, fontSize: 13, color: C.dark, background: C.white, outline: "none", fontFamily: "inherit" }}
+            />
+            <select
+              value={inviteRole}
+              onChange={e => setInviteRole(e.target.value as "admin" | "editor")}
+              style={{ padding: "10px 12px", border: "1px solid rgba(22,61,38,.22)", borderRadius: 8, fontSize: 13, color: C.dark, background: C.white, cursor: "pointer", fontFamily: "inherit" }}
+            >
+              <option value="editor">Editor</option>
+              <option value="admin">Admin</option>
+            </select>
+            <button
+              onClick={handleInvite}
+              disabled={inviting || !inviteEmail.trim()}
+              style={{
+                padding: "10px 20px", borderRadius: 8, background: C.dark, color: C.white,
+                fontSize: 13, fontWeight: 600, border: "none",
+                cursor: (inviting || !inviteEmail.trim()) ? "not-allowed" : "pointer",
+                opacity: (inviting || !inviteEmail.trim()) ? .4 : 1, whiteSpace: "nowrap",
+              }}
+            >
+              {inviting ? "Sending…" : "Send invite"}
+            </button>
+          </div>
+
+          {inviteMsg && (
+            <div style={{ marginTop: 10, fontSize: 12, fontWeight: 600, color: inviteMsg.ok ? C.mid : C.red }}>
+              {inviteMsg.text}
+            </div>
+          )}
+
+          <div style={{ marginTop: 14, fontSize: 11, color: "rgba(22,61,38,.45)", lineHeight: 1.6 }}>
+            The invitee receives a magic-link email from Supabase. They can set a password on first login.
+            <br />
+            <strong>Editors</strong> can generate, draft, and manage the batch queue. <strong>Admins</strong> can also edit brand voice, publish to Sanity, and manage team members.
+          </div>
+        </div>
+      )}
+
+      {!isAdmin && (
+        <div style={{ padding: "10px 16px", borderRadius: 8, background: "rgba(22,61,38,.04)", border: "1px solid rgba(22,61,38,.1)", fontSize: 12, color: C.mid }}>
+          You have editor access. Contact an admin to invite new members or change roles.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SettingsScreen ──────────────────────────────────────────────────────────
+
+function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
   const [bv, setBv] = useState<BrandVoiceData | null>(null);
   const [savedBv, setSavedBv] = useState<BrandVoiceData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -4490,20 +4741,28 @@ function SettingsScreen() {
           <EditableList items={bv.preferred_style} onChange={preferred_style => setBv({ ...bv, preferred_style })} placeholder="Add a style preference…" />
         </div>
 
-        {/* Save */}
-        <div style={{ paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-            <button onClick={handleSave} disabled={saving || !isDirty} style={{ padding: "12px 28px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: (saving || !isDirty) ? "not-allowed" : "pointer", opacity: (saving || !isDirty) ? .35 : 1, transition: "opacity .15s" }}>
-              {saving ? "Saving…" : "Save brand voice"}
-            </button>
-            {saved && <span style={{ fontSize: 12, color: C.mid, fontWeight: 600 }}>Saved — next generation picks up changes</span>}
-          </div>
-          {lastSavedAt && (
-            <div style={{ marginTop: 8, fontSize: 11, color: "rgba(22,61,38,.45)" }}>
-              Last saved {lastSavedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {lastSavedAt.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}
+        {/* Save — admin only */}
+        {userRole === "admin" ? (
+          <div style={{ paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <button onClick={handleSave} disabled={saving || !isDirty} style={{ padding: "12px 28px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: (saving || !isDirty) ? "not-allowed" : "pointer", opacity: (saving || !isDirty) ? .35 : 1, transition: "opacity .15s" }}>
+                {saving ? "Saving…" : "Save brand voice"}
+              </button>
+              {saved && <span style={{ fontSize: 12, color: C.mid, fontWeight: 600 }}>Saved — next generation picks up changes</span>}
             </div>
-          )}
-        </div>
+            {lastSavedAt && (
+              <div style={{ marginTop: 8, fontSize: 11, color: "rgba(22,61,38,.45)" }}>
+                Last saved {lastSavedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {lastSavedAt.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div style={{ paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+            <div style={{ padding: "10px 16px", borderRadius: 8, background: "rgba(22,61,38,.05)", border: "1px solid rgba(22,61,38,.12)", fontSize: 12, color: C.mid }}>
+              You have view-only access to brand voice settings. Ask an admin to make changes.
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ── Right column ── */}
@@ -5223,6 +5482,17 @@ export default function AtelierV2Page() {
     window.history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : ""));
   }, [screen, activeCardId]);
 
+  // ── Current user role ─────────────────────────────────────────────────────────
+  const [userRole, setUserRole] = useState<"admin" | "editor" | null>(null);
+  useEffect(() => {
+    fetch("/api/team/me")
+      .then(r => r.ok ? r.json() : null)
+      .then((d: { role?: string } | null) => {
+        if (d?.role === "admin" || d?.role === "editor") setUserRole(d.role);
+      })
+      .catch(() => {});
+  }, []);
+
   // ── Batch queue ───────────────────────────────────────────────────────────────
   const [batchQueueEntries, setBatchQueueEntries] = useState<BatchQueueEntry[]>([]);
   useEffect(() => { setBatchQueueEntries(readBatchQueue()); }, []);
@@ -5469,9 +5739,10 @@ export default function AtelierV2Page() {
           {screen === "keywords"   && <KeywordsScreen />}
           {screen === "publish"    && <PublishScreen />}
           {screen === "analytics"  && <AnalyticsScreen />}
-          {screen === "settings"   && <SettingsScreen />}
+          {screen === "settings"   && <SettingsScreen userRole={userRole} />}
           {screen === "usage"      && <UsageScreen budget={budget} onBudgetChange={handleBudgetChange} />}
           {screen === "trash"      && <TrashScreen trashedCards={trashedCards} onRestore={handleRestoreCard} onDeletePermanently={handleDeletePermanently} onEmptyTrash={handleEmptyTrash} />}
+          {screen === "team"       && <TeamScreen userRole={userRole} />}
         </div>
       </main>
     </div>
