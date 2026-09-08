@@ -1,4 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireUser } from "@/lib/api-auth";
+import { logAiUsage } from "@/lib/ai-usage-logger";
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 const PALETTE = ["#F7F5F2", "#163D26", "#185F00", "#FFFFFF", "#F93943", "#F88379"] as const;
@@ -79,7 +81,9 @@ function extractSvgBlock(raw: string): string | null {
   return match ? match[0] : null;
 }
 
-async function callClaude(prompt: string): Promise<string> {
+const CLAUDE_MODEL = "claude-sonnet-5";
+
+async function callClaude(prompt: string): Promise<{ text: string; inputTokens: number; outputTokens: number }> {
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) throw new Error("ANTHROPIC_API_KEY not set");
 
@@ -91,7 +95,7 @@ async function callClaude(prompt: string): Promise<string> {
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-5",
+      model: CLAUDE_MODEL,
       max_tokens: 3500,
       system: "You are an editorial SVG diagram designer for a B2B AI publication. You create clean narrative scene diagrams as raw SVG — no markdown, no explanation, no code fences. Use monospace text labels, simple flat icons built from rect/circle/path, and a structured layout.",
       messages: [{ role: "user", content: prompt }],
@@ -105,11 +109,19 @@ async function callClaude(prompt: string): Promise<string> {
 
   const data = (await res.json()) as {
     content?: { type: string; text?: string }[];
+    usage?: { input_tokens?: number; output_tokens?: number };
   };
-  return (data.content?.find(b => b.type === "text")?.text ?? "").trim();
+  return {
+    text: (data.content?.find(b => b.type === "text")?.text ?? "").trim(),
+    inputTokens: data.usage?.input_tokens ?? 0,
+    outputTokens: data.usage?.output_tokens ?? 0,
+  };
 }
 
 export async function POST(req: NextRequest) {
+  const { user, error: authError } = await requireUser();
+  if (authError) return authError;
+
   try {
     const { heading, sectionType, summary } = (await req.json()) as {
       heading?: string;
@@ -124,7 +136,8 @@ export async function POST(req: NextRequest) {
     const prompt = buildPrompt(heading ?? "", sectionType ?? "section", summary ?? "");
 
     for (let attempt = 0; attempt < 2; attempt++) {
-      const raw = await callClaude(prompt);
+      const { text: raw, inputTokens, outputTokens } = await callClaude(prompt);
+      logAiUsage({ userId: user.id, feature: "illustration-claude", model: CLAUDE_MODEL, inputTokens, outputTokens });
       const svg = extractSvgBlock(raw);
       if (!svg) {
         console.warn(`[illustration-claude] Attempt ${attempt + 1}: no <svg> block`);

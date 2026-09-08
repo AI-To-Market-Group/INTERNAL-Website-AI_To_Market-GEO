@@ -4100,7 +4100,8 @@ const FEATURE_NAMES: Record<string, string> = {
   "content-forge/create":       "Content Forge — Create",
   "content-forge/blog":         "Content Forge — Blog",
   "content-forge/linkedin":     "Content Forge — LinkedIn",
-  "illustration":               "Illustration Generation",
+  "illustration":               "Illustration — OpenAI",
+  "illustration-claude":        "Illustration — Claude (SVG)",
   "article-outline":            "Article Outline",
   "article-draft":              "Article Draft",
   "article-refine":             "Article Refine",
@@ -4479,7 +4480,7 @@ function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChang
           </div>
 
           <div style={{ marginTop: 20, textAlign: "center", fontSize: 11, color: C.muted }}>
-            Token counts are exact values from the API. Costs use OpenAI list pricing — verify at platform.openai.com/usage.
+            Token counts are exact values from the API. OpenAI costs: platform.openai.com/usage · Anthropic costs: platform.claude.com/settings/usage · Image/vision tokens billed at the same rate as text.
           </div>
         </>
       )}
