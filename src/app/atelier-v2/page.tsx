@@ -135,7 +135,7 @@ const NAV_ITEMS: [Screen, string, string, string][] = [
   ["generate",   "New article",   "M10 2l1.8 5.2L17 9l-5.2 1.8L10 16l-1.8-5.2L3 9l5.2-1.8z", ""],
   ["queue",      "Batch queue",   "M3 4h14v2H3zM3 9h14v2H3zM3 14h10v2H3z", ""],
   ["editor",     "Draft editor",  "M4 3h8l4 4v10H4z", ""],
-  ["score",      "GEO score",     "M10 2a8 8 0 108 8h-8z", ""],
+  // ["score",      "GEO score",     "M10 2a8 8 0 108 8h-8z", ""], // score lives inside the article editor
   ["keywords",   "Prompt library","M2 8l6-6h8v8l-6 6zM12 5h2v2h-2z", ""],
   ["publish",    "Publishing",    "M10 2l5 6h-3v6H8V8H5zM4 16h12v2H4z", ""],
   ["analytics",  "Visibility",    "M3 15h3V8H3zM8 15h3V3H8zM13 15h3v-7h-3z", ""],
@@ -1114,7 +1114,7 @@ function QueueScreen({
                   <button onClick={() => void buildArticle(entry)} style={{ fontSize: 11, fontWeight: 700, color: C.red, background: "none", border: "none", cursor: "pointer" }}>Retry</button>
                 )}
                 {!isDone && !isBuilding && (
-                  <button onClick={() => { onRemoveFromBatchQueue(entry.id); setSelected(prev => prev.filter(x => x !== entry.id)); }} title="Remove from queue" style={{ fontSize: 14, fontWeight: 400, color: "rgba(22,61,38,.3)", background: "none", border: "none", cursor: "pointer", lineHeight: 1 }}>×</button>
+                  <button onClick={() => { onRemoveFromBatchQueue(entry.id); setSelected(prev => prev.filter(x => x !== entry.id)); }} title="Remove from queue" style={{ width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid rgba(249,57,67,.35)`, background: "rgba(249,57,67,.07)", color: C.red, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
                 )}
               </div>
             </div>
@@ -5465,7 +5465,7 @@ export default function AtelierV2Page() {
           {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} />}
           {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} batchQueueEntries={batchQueueEntries} onRemoveFromBatchQueue={handleRemoveFromBatchQueue} onActivateCard={handleActivateCard} />}
           {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} newCardId={newCardId} batchQueuedIds={batchQueueEntries.map(e => e.id)} onSendToBatchQueue={handleSendToBatchQueue} />}
-          {screen === "score"      && <ScoreScreen onEditor={go("editor")} />}
+          {/* {screen === "score" && <ScoreScreen onEditor={go("editor")} />} — score lives inside the article editor */}
           {screen === "keywords"   && <KeywordsScreen />}
           {screen === "publish"    && <PublishScreen />}
           {screen === "analytics"  && <AnalyticsScreen />}
