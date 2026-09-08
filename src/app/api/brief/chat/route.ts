@@ -24,9 +24,22 @@ interface BriefChatResponse {
   readyToGenerate: boolean;
 }
 
-const SYSTEM = `You are a brief-building assistant inside a GEO content tool (Generative Engine Optimization). Your job is to gather just enough context, synthesize a clear brief, and move to generation quickly. You are decisive — you do not keep asking the same question.
+export async function POST(req: NextRequest) {
+  const { user, error } = await requireUser();
+  if (error) return error;
 
-Brand voice context: ${getBrandVoiceCompact()}
+  const budget = await checkBudget(user.id);
+  if (!budget.allowed) {
+    return err(
+      `Monthly call limit reached (${budget.count} of ${budget.budget}). Update your limit in AI Usage.`,
+      429,
+      "BUDGET_EXCEEDED"
+    );
+  }
+
+  const system = `You are a brief-building assistant inside a GEO content tool (Generative Engine Optimization). Your job is to gather just enough context, synthesize a clear brief, and move to generation quickly. You are decisive — you do not keep asking the same question.
+
+Brand voice context: ${await getBrandVoiceCompact()}
 
 CRITICAL RULE — HOW TO HANDLE USER AFFIRMATIONS:
 If the user says "yes", "yes go ahead", "go ahead", "sure", "yep", "ok", "sounds good", or any similar confirmation, treat it as approval of whatever you most recently proposed. Do NOT ask the same question again. Move forward immediately — confirm what you are locking in and declare ready.
@@ -68,19 +81,6 @@ You MUST return valid JSON only — no markdown, no code fences. Exact shape:
   "readyToGenerate": false
 }`;
 
-export async function POST(req: NextRequest) {
-  const { user, error } = await requireUser();
-  if (error) return error;
-
-  const budget = await checkBudget(user.id);
-  if (!budget.allowed) {
-    return err(
-      `Monthly call limit reached (${budget.count} of ${budget.budget}). Update your limit in AI Usage.`,
-      429,
-      "BUDGET_EXCEEDED"
-    );
-  }
-
   try {
     const body = (await req.json()) as { messages?: unknown };
     const messages = Array.isArray(body.messages) ? (body.messages as ChatMessage[]) : [];
@@ -95,7 +95,7 @@ export async function POST(req: NextRequest) {
 
     const userPrompt = `Conversation so far:\n\n${conversationText}\n\nRespond to the latest user message. Return JSON only.`;
 
-    const result = await chatJson<BriefChatResponse>(SYSTEM, userPrompt, undefined, {
+    const result = await chatJson<BriefChatResponse>(system, userPrompt, undefined, {
       userId: user.id,
       feature: "brief-chat",
     });

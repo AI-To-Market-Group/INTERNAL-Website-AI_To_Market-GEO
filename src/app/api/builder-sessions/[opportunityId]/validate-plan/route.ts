@@ -309,7 +309,7 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const system = `You are a GEO (Generative Engine Optimization) content writer. Write in English. Output a full article as JSON only (no markdown). Goal: produce content AI search engines (ChatGPT, Perplexity, Claude, Gemini) will cite as authoritative.
 
-${getBrandVoicePrompt()}
+${await getBrandVoicePrompt()}
 
 Return valid JSON in this exact shape:
 {

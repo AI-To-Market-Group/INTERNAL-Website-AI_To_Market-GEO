@@ -228,7 +228,7 @@ RULE 2 — CONTRACTIONS (expand every one)
 "that's" → "that is" or "that has", "we're" → "we are", "they've" → "they have", etc.
 
 RULE 3 — FORBIDDEN PHRASES (rephrase or remove)
-${BRAND_VOICE.forbidden_phrases.map((p) => `"${p}"`).join(", ")}
+${BRAND_VOICE.forbidden_phrases.map((p: string) => `"${p}"`).join(", ")}
 
 RULE 4 — EM-DASHES AND EN-DASHES (replace with standard punctuation)
 Replace every em-dash (—) and en-dash (–) with the punctuation that fits the context:

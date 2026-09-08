@@ -4047,64 +4047,192 @@ function AnalyticsScreen() {
   );
 }
 
-// ─── Settings screen ──────────────────────────────────────────────────────────
+// ─── Brand voice screen ───────────────────────────────────────────────────────
 
-const BANNED_WORDS = ["unlock", "game changer", "revolutionary", "leverage", "supercharge", "seamless"];
-const GUARDRAILS = [
-  { label: "Never claim a number without a source",          box: C.dark },
-  { label: "No product mentions before the final section",   box: C.dark },
-  { label: "Flag any sentence over 30 words",                box: "transparent" },
-];
+interface BrandVoiceData {
+  brand_description: string;
+  audience: string;
+  tone: string[];
+  preferred_style: string[];
+  forbidden_phrases: string[];
+  guardrails: { label: string; active: boolean }[];
+}
+
+function EditableList({ items, onChange, placeholder }: {
+  items: string[];
+  onChange: (items: string[]) => void;
+  placeholder: string;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [editIdx, setEditIdx] = useState<number | null>(null);
+  const [editVal, setEditVal] = useState("");
+
+  function remove(i: number) { onChange(items.filter((_, idx) => idx !== i)); }
+  function commitAdd() {
+    const v = draft.trim();
+    if (v) onChange([...items, v]);
+    setDraft(""); setAdding(false);
+  }
+  function commitEdit(i: number) {
+    const v = editVal.trim();
+    if (v) onChange(items.map((it, idx) => idx === i ? v : it));
+    setEditIdx(null); setEditVal("");
+  }
+
+  const ta: React.CSSProperties = { width: "100%", padding: "8px 10px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 6, fontSize: 13, lineHeight: 1.55, color: C.dark, background: C.bg, resize: "vertical", outline: "none", fontFamily: "inherit" };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+      {items.map((item, i) => (
+        <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          {editIdx === i ? (
+            <>
+              <textarea rows={2} value={editVal} onChange={e => setEditVal(e.target.value)} style={{ ...ta, flex: 1 }} autoFocus />
+              <button onClick={() => commitEdit(i)} style={{ padding: "6px 12px", borderRadius: 6, background: C.dark, color: C.white, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer", whiteSpace: "nowrap" }}>Save</button>
+              <button onClick={() => setEditIdx(null)} style={{ padding: "6px 10px", borderRadius: 6, background: "transparent", color: C.muted, fontSize: 11, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer" }}>Cancel</button>
+            </>
+          ) : (
+            <>
+              <div style={{ flex: 1, fontSize: 13, lineHeight: 1.55, color: C.dark, padding: "7px 0" }}>{item}</div>
+              <button onClick={() => { setEditIdx(i); setEditVal(item); }} style={{ padding: "4px 8px", borderRadius: 5, background: "transparent", color: C.muted, fontSize: 11, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer", flexShrink: 0 }}>Edit</button>
+              <button onClick={() => remove(i)} style={{ padding: "4px 8px", borderRadius: 5, background: "transparent", color: C.red, fontSize: 11, fontWeight: 600, border: `1px solid rgba(249,57,67,.3)`, cursor: "pointer", flexShrink: 0 }}>×</button>
+            </>
+          )}
+        </div>
+      ))}
+      {adding ? (
+        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+          <textarea rows={2} value={draft} onChange={e => setDraft(e.target.value)} placeholder={placeholder} style={{ ...ta, flex: 1 }} autoFocus />
+          <button onClick={commitAdd} style={{ padding: "6px 12px", borderRadius: 6, background: C.dark, color: C.white, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer", whiteSpace: "nowrap" }}>Add</button>
+          <button onClick={() => { setAdding(false); setDraft(""); }} style={{ padding: "6px 10px", borderRadius: 6, background: "transparent", color: C.muted, fontSize: 11, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer" }}>Cancel</button>
+        </div>
+      ) : (
+        <button onClick={() => setAdding(true)} style={{ alignSelf: "flex-start", padding: "5px 12px", borderRadius: 6, background: "transparent", color: C.mid, fontSize: 11, fontWeight: 700, border: `1px dashed rgba(22,61,38,.3)`, cursor: "pointer", letterSpacing: ".04em" }}>+ Add</button>
+      )}
+    </div>
+  );
+}
 
 function SettingsScreen() {
+  const [bv, setBv] = useState<BrandVoiceData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [newPhrase, setNewPhrase] = useState("");
+  const [newGuardrail, setNewGuardrail] = useState("");
+
+  useEffect(() => {
+    fetch("/api/brand-voice")
+      .then(r => r.ok ? r.json() : null)
+      .then((data: BrandVoiceData | null) => { if (data) setBv(data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleSave() {
+    if (!bv) return;
+    setSaving(true);
+    try {
+      await fetch("/api/brand-voice", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bv) });
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function addPhrase() {
+    const v = newPhrase.trim().toLowerCase();
+    if (!v || !bv) return;
+    setBv({ ...bv, forbidden_phrases: [...bv.forbidden_phrases, v] });
+    setNewPhrase("");
+  }
+
+  function addGuardrail() {
+    const v = newGuardrail.trim();
+    if (!v || !bv) return;
+    setBv({ ...bv, guardrails: [...bv.guardrails, { label: v, active: true }] });
+    setNewGuardrail("");
+  }
+
+  const fieldLabel = (t: string) => (
+    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 10 }}>{t}</div>
+  );
+  const ta: React.CSSProperties = { width: "100%", padding: 14, border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, lineHeight: 1.6, color: C.dark, background: C.bg, resize: "vertical", outline: "none", fontFamily: "inherit" };
+
+  if (loading) return <div style={{ padding: 48, color: C.muted, fontSize: 13 }}>Loading brand voice…</div>;
+  if (!bv) return <div style={{ padding: 48, color: C.red, fontSize: 13 }}>Could not load brand voice settings.</div>;
+
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 32, alignItems: "start" }}>
-      <section style={{ padding: 32, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
-        <h2 style={{ margin: "0 0 24px", fontSize: 18, fontWeight: 600 }}>Brand voice</h2>
-        <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
-          <div>
-            <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>HOUSE DESCRIPTION</label>
-            <textarea rows={4} defaultValue="Calm, premium, declarative. We explain before we sell. No hype, no exclamation marks, no jargon we would not say out loud to a CFO." style={{ width: "100%", padding: 14, border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, fontWeight: 400, lineHeight: 1.6, color: C.dark, background: C.bg, resize: "vertical", outline: "none" }} />
-          </div>
-          {VOICE_DIALS.map(v => (
-            <div key={v.label}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 600, marginBottom: 10 }}>
-                <span>{v.label}</span><span style={{ fontWeight: 400, color: "rgba(22,61,38,.65)" }}>{v.value}</span>
-              </div>
-              <div style={{ height: 6, borderRadius: 4, background: "rgba(22,61,38,.1)", position: "relative" }}>
-                <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${v.pct}%`, background: C.dark, borderRadius: 4 }} />
-                <div style={{ position: "absolute", left: `${v.pct}%`, top: -5, width: 16, height: 16, marginLeft: -8, borderRadius: "50%", background: C.white, border: `2px solid ${C.dark}` }} />
-              </div>
+    <div style={{ maxWidth: 760, display: "flex", flexDirection: "column", gap: 36 }}>
+
+      {/* Brand description */}
+      <div>
+        {fieldLabel("BRAND DESCRIPTION")}
+        <textarea rows={3} value={bv.brand_description} onChange={e => setBv({ ...bv, brand_description: e.target.value })} style={ta} />
+      </div>
+
+      {/* Audience */}
+      <div>
+        {fieldLabel("AUDIENCE")}
+        <textarea rows={3} value={bv.audience} onChange={e => setBv({ ...bv, audience: e.target.value })} style={ta} />
+      </div>
+
+      {/* Tone */}
+      <div>
+        {fieldLabel("TONE")}
+        <EditableList items={bv.tone} onChange={tone => setBv({ ...bv, tone })} placeholder="Add a tone rule…" />
+      </div>
+
+      {/* Style preferences */}
+      <div>
+        {fieldLabel("STYLE PREFERENCES")}
+        <EditableList items={bv.preferred_style} onChange={preferred_style => setBv({ ...bv, preferred_style })} placeholder="Add a style preference…" />
+      </div>
+
+      {/* Never use */}
+      <div>
+        {fieldLabel("NEVER USE")}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+          {bv.forbidden_phrases.map(w => (
+            <span key={w} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 11px", borderRadius: 20, border: "1px solid rgba(22,61,38,.2)", fontSize: 12, fontWeight: 600 }}>
+              {w}
+              <button onClick={() => setBv({ ...bv, forbidden_phrases: bv.forbidden_phrases.filter(p => p !== w) })} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.45)", fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
+            </span>
+          ))}
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={newPhrase} onChange={e => setNewPhrase(e.target.value)} onKeyDown={e => e.key === "Enter" && addPhrase()} placeholder="Add phrase…" style={{ flex: 1, padding: "8px 12px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 12, outline: "none", background: C.bg, color: C.dark, fontFamily: "inherit" }} />
+          <button onClick={addPhrase} style={{ padding: "8px 16px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
+        </div>
+      </div>
+
+      {/* Guardrails */}
+      <div>
+        {fieldLabel("GUARDRAILS")}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
+          {bv.guardrails.map((g, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <input type="checkbox" checked={g.active} onChange={e => setBv({ ...bv, guardrails: bv.guardrails.map((gr, idx) => idx === i ? { ...gr, active: e.target.checked } : gr) })} style={{ width: 16, height: 16, accentColor: C.dark, cursor: "pointer", flexShrink: 0 }} />
+              <span style={{ flex: 1, fontSize: 13, lineHeight: 1.5 }}>{g.label}</span>
+              <button onClick={() => setBv({ ...bv, guardrails: bv.guardrails.filter((_, idx) => idx !== i) })} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.35)", fontSize: 14, padding: "0 4px" }}>×</button>
             </div>
           ))}
-          <div>
-            <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>NEVER USE</label>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {BANNED_WORDS.map(w => (
-                <span key={w} style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 11px", borderRadius: 20, border: "1px solid rgba(22,61,38,.2)", fontSize: 12, fontWeight: 600 }}>{w}<span style={{ fontSize: 12, fontWeight: 400, color: "rgba(22,61,38,.5)" }}>×</span></span>
-              ))}
-            </div>
-          </div>
         </div>
-      </section>
-      <aside style={{ display: "flex", flexDirection: "column", gap: 16, position: "sticky", top: 180 }}>
-        <div style={{ padding: 22, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
-          <EyebrowLabel>SAMPLE SENTENCE</EyebrowLabel>
-          <p style={{ margin: "14px 0 0", fontSize: 13, fontWeight: 400, lineHeight: 1.6 }}>Answer engines cite sources that state a position in one sentence. Most B2B blogs take four paragraphs to get there.</p>
-          <div style={{ marginTop: 16, fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.6)" }}>Regenerated from your current dials.</div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input value={newGuardrail} onChange={e => setNewGuardrail(e.target.value)} onKeyDown={e => e.key === "Enter" && addGuardrail()} placeholder="Add guardrail…" style={{ flex: 1, padding: "8px 12px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 12, outline: "none", background: C.bg, color: C.dark, fontFamily: "inherit" }} />
+          <button onClick={addGuardrail} style={{ padding: "8px 16px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
         </div>
-        <div style={{ padding: 22, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
-          <EyebrowLabel>GUARDRAILS</EyebrowLabel>
-          <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-            {GUARDRAILS.map(g => (
-              <div key={g.label} style={{ display: "flex", alignItems: "flex-start", gap: 11 }}>
-                <span style={{ width: 16, height: 16, flexShrink: 0, marginTop: 1, borderRadius: 4, border: "1px solid rgba(22,61,38,.3)", background: g.box, display: "inline-block" }} />
-                <div style={{ fontSize: 12, fontWeight: 400, lineHeight: 1.5 }}>{g.label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </aside>
+      </div>
+
+      {/* Save */}
+      <div style={{ display: "flex", alignItems: "center", gap: 14, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+        <button onClick={handleSave} disabled={saving} style={{ padding: "12px 28px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: saving ? "not-allowed" : "pointer", opacity: saving ? .6 : 1 }}>
+          {saving ? "Saving…" : "Save brand voice"}
+        </button>
+        {saved && <span style={{ fontSize: 12, color: C.mid, fontWeight: 600 }}>Saved — next generation picks up changes</span>}
+      </div>
     </div>
   );
 }

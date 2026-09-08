@@ -74,7 +74,7 @@ async function shortenPass(
 
   const system = `You are a concise editorial editor. Shorten the provided sections to meet their word budgets.
 
-${getBrandVoiceCompact()}
+${await getBrandVoiceCompact()}
 
 Rules:
 - Shorten by removing redundancy, trimming wordy phrases, and tightening sentences
