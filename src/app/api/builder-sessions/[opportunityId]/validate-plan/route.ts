@@ -40,6 +40,7 @@ function mockArticleResponse(
     order: i + 1,
     type: sec.type ?? "section",
     heading: sec.title,
+    eyebrow: undefined,
     content: {
       paragraphs: [
         {
@@ -169,6 +170,7 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
         order: sections.length + 1,
         type: "faq",
         heading: "Frequently Asked Questions",
+        eyebrow: undefined,
         content: { paragraphs: orphanFaq, bullets: [] },
       });
     }
