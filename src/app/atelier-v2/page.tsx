@@ -4080,35 +4080,52 @@ function EditableList({ items, onChange, placeholder }: {
     setEditIdx(null); setEditVal("");
   }
 
-  const ta: React.CSSProperties = { width: "100%", padding: "8px 10px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 6, fontSize: 13, lineHeight: 1.55, color: "#1a1a1a", background: C.white, resize: "vertical", outline: "none", fontFamily: "inherit" };
+  const ta: React.CSSProperties = { width: "100%", padding: "10px 12px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 7, fontSize: 13, lineHeight: 1.6, color: "#1a1a1a", background: C.white, resize: "vertical", outline: "none", fontFamily: "inherit" };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+    <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, background: C.white, overflow: "hidden" }}>
       {items.map((item, i) => (
-        <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "8px 0", borderBottom: "1px solid rgba(22,61,38,.07)" }}>
+        <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "14px 16px", borderBottom: `1px solid rgba(22,61,38,.07)` }}>
+          {/* Number badge */}
+          <div style={{ flexShrink: 0, width: 22, height: 22, borderRadius: "50%", background: "rgba(22,61,38,.07)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: C.mid, marginTop: 1 }}>{i + 1}</div>
+
           {editIdx === i ? (
-            <>
-              <textarea rows={2} value={editVal} onChange={e => setEditVal(e.target.value)} style={{ ...ta, flex: 1 }} autoFocus />
-              <button onClick={() => commitEdit(i)} style={{ padding: "6px 12px", borderRadius: 6, background: C.dark, color: C.white, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer", whiteSpace: "nowrap" }}>Save</button>
-              <button onClick={() => setEditIdx(null)} style={{ padding: "6px 10px", borderRadius: 6, background: "transparent", color: C.muted, fontSize: 11, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer" }}>Cancel</button>
-            </>
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
+              <textarea rows={2} value={editVal} onChange={e => setEditVal(e.target.value)} style={{ ...ta }} autoFocus />
+              <div style={{ display: "flex", gap: 7 }}>
+                <button onClick={() => commitEdit(i)} style={{ padding: "5px 14px", borderRadius: 6, background: C.dark, color: C.white, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer" }}>Save</button>
+                <button onClick={() => { setEditIdx(null); setEditVal(""); }} style={{ padding: "5px 12px", borderRadius: 6, background: "transparent", color: C.muted, fontSize: 11, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer" }}>Cancel</button>
+              </div>
+            </div>
           ) : (
             <>
-              <div style={{ flex: 1, fontSize: 13, lineHeight: 1.6, color: "#1a1a1a", fontWeight: 400 }}>{item}</div>
-              <button onClick={() => { setEditIdx(i); setEditVal(item); }} style={{ padding: "4px 8px", borderRadius: 5, background: "transparent", color: C.muted, fontSize: 11, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer", flexShrink: 0 }}>Edit</button>
-              <button onClick={() => remove(i)} style={{ padding: "4px 8px", borderRadius: 5, background: "transparent", color: C.red, fontSize: 11, fontWeight: 600, border: `1px solid rgba(249,57,67,.3)`, cursor: "pointer", flexShrink: 0 }}>×</button>
+              <div style={{ flex: 1, fontSize: 13, lineHeight: 1.6, color: "#1a1a1a", fontWeight: 400, paddingTop: 2 }}>{item}</div>
+              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                <button onClick={() => { setEditIdx(i); setEditVal(item); }} title="Edit" style={{ width: 28, height: 28, borderRadius: 6, background: "transparent", border: `1px solid ${C.border}`, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.muted }}>
+                  <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M11.5 2.5a1.414 1.414 0 0 1 2 2L5 13H3v-2L11.5 2.5z"/></svg>
+                </button>
+                <button onClick={() => remove(i)} title="Remove" style={{ width: 28, height: 28, borderRadius: 6, background: "transparent", border: "1px solid rgba(249,57,67,.25)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.red }}>
+                  <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>
+                </button>
+              </div>
             </>
           )}
         </div>
       ))}
+
       {adding ? (
-        <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-          <textarea rows={2} value={draft} onChange={e => setDraft(e.target.value)} placeholder={placeholder} style={{ ...ta, flex: 1 }} autoFocus />
-          <button onClick={commitAdd} style={{ padding: "6px 12px", borderRadius: 6, background: C.dark, color: C.white, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer", whiteSpace: "nowrap" }}>Add</button>
-          <button onClick={() => { setAdding(false); setDraft(""); }} style={{ padding: "6px 10px", borderRadius: 6, background: "transparent", color: C.muted, fontSize: 11, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer" }}>Cancel</button>
+        <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8, background: "rgba(22,61,38,.02)" }}>
+          <textarea rows={2} value={draft} onChange={e => setDraft(e.target.value)} placeholder={placeholder} style={{ ...ta }} autoFocus />
+          <div style={{ display: "flex", gap: 7 }}>
+            <button onClick={commitAdd} style={{ padding: "5px 14px", borderRadius: 6, background: C.dark, color: C.white, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
+            <button onClick={() => { setAdding(false); setDraft(""); }} style={{ padding: "5px 12px", borderRadius: 6, background: "transparent", color: C.muted, fontSize: 11, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer" }}>Cancel</button>
+          </div>
         </div>
       ) : (
-        <button onClick={() => setAdding(true)} style={{ alignSelf: "flex-start", padding: "5px 12px", borderRadius: 6, background: "transparent", color: C.mid, fontSize: 11, fontWeight: 700, border: `1px dashed rgba(22,61,38,.3)`, cursor: "pointer", letterSpacing: ".04em" }}>+ Add</button>
+        <button onClick={() => setAdding(true)} style={{ width: "100%", padding: "11px 16px", textAlign: "left", background: "transparent", border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700, color: C.mid, letterSpacing: ".04em", display: "flex", alignItems: "center", gap: 7 }}>
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M8 2v12M2 8h12"/></svg>
+          Add rule
+        </button>
       )}
     </div>
   );
