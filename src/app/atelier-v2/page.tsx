@@ -982,7 +982,7 @@ function UserAvatar({ email, size = 24 }: { email: string; size?: number }) {
   );
 }
 
-function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity, hasArticle }: {
+function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity, hasArticle, isNew }: {
   card: DraftCard;
   onCreateArticle: () => void;
   onResume?: () => void;
@@ -991,13 +991,20 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
   hasSavedPlan?: boolean;
   sentToSanity?: boolean;
   hasArticle?: boolean;
+  isNew?: boolean;
 }) {
   const rawScore = card.brief.predictedScore ? parseInt(card.brief.predictedScore) : NaN;
   const scoreNum = isNaN(rawScore) ? null : rawScore;
   const hasActive = activeUsers && activeUsers.length > 0;
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isNew || !cardRef.current) return;
+    cardRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [isNew]);
 
   return (
-    <div style={{ padding: 24, border: `1px solid ${hasActive ? "rgba(22,61,38,.22)" : C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", height: 300, position: "relative", opacity: hasActive ? 0.62 : 1, transition: "opacity .15s ease", cursor: hasActive ? "not-allowed" : "default" }}>
+    <div ref={cardRef} style={{ padding: 24, border: `1px solid ${isNew ? "#2ECC71" : hasActive ? "rgba(22,61,38,.22)" : C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", height: 300, position: "relative", opacity: hasActive ? 0.62 : 1, transition: "opacity .15s ease", cursor: hasActive ? "not-allowed" : "default", animation: isNew ? "card-new-glow 3.5s ease forwards" : undefined }}>
       {/* X remove button — hidden when locked */}
       {onRemove && !hasActive && (
         <button
@@ -1794,7 +1801,7 @@ function sectionTypeStyle(type: string) {
 
 // ─── Editor screen ────────────────────────────────────────────────────────────
 
-function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, sidebarCollapsed }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; sidebarCollapsed?: boolean }) {
+function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, sidebarCollapsed, newCardId }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; sidebarCollapsed?: boolean; newCardId?: string | null }) {
   // ── Plan step state ────────────────────────────────────────────────────────
   type EditorStep = "plan" | "article";
   const [editorStep, setEditorStep] = useState<EditorStep>("plan");
@@ -2700,6 +2707,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                           activeUsers={activeUsers}
                           hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
                           hasArticle
+                          isNew={card.opportunityId === newCardId}
                         />
                       );
                     })}
@@ -2755,6 +2763,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                       onRemove={() => onTrashCard?.(card.opportunityId)}
                       activeUsers={activeUsers}
                       hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
+                      isNew={card.opportunityId === newCardId}
                     />
                   );
                 })}
@@ -4688,6 +4697,13 @@ export default function AtelierV2Page() {
   const [draftCards, setDraftCards] = useState<DraftCard[]>([]);
   const [trashedCards, setTrashedCards] = useState<DraftCard[]>([]);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
+  const [newCardId, setNewCardId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!newCardId) return;
+    const t = setTimeout(() => setNewCardId(null), 4000);
+    return () => clearTimeout(t);
+  }, [newCardId]);
   const [generateDefaultFlow, setGenerateDefaultFlow] = useState<FlowMode>("wizard");
   const [presenceData, setPresenceData] = useState<PresenceUser[]>([]);
   const { data: settings } = useSettings();
@@ -4782,7 +4798,8 @@ export default function AtelierV2Page() {
       if (prev.some(c => c.opportunityId === opportunityId)) return prev;
       return [{ opportunityId, brief, createdAt: new Date().toISOString() }, ...prev];
     });
-    setActiveCardId(opportunityId);
+    setActiveCardId(null);
+    setNewCardId(opportunityId);
     setScreen("editor");
   }
 
@@ -4872,6 +4889,11 @@ export default function AtelierV2Page() {
         * { box-sizing: border-box; }
         @keyframes pulse { 0%,100%{opacity:.35}50%{opacity:.7} }
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes card-new-glow {
+          0%   { box-shadow: 0 0 0 3px rgba(46,204,113,.55), 0 0 18px rgba(46,204,113,.25); border-color: #2ECC71; }
+          65%  { box-shadow: 0 0 0 5px rgba(46,204,113,.18), 0 0 28px rgba(46,204,113,.12); border-color: rgba(46,204,113,.6); }
+          100% { box-shadow: none; border-color: rgba(22,61,38,.12); }
+        }
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: rgba(22,61,38,.06); border-radius: 8px; }
         ::-webkit-scrollbar-thumb { background: rgba(22,61,38,.28); border-radius: 8px; }
@@ -4963,7 +4985,7 @@ export default function AtelierV2Page() {
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}
           {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} />}
           {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} />}
-          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} />}
+          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} newCardId={newCardId} />}
           {screen === "score"      && <ScoreScreen onEditor={go("editor")} />}
           {screen === "keywords"   && <KeywordsScreen />}
           {screen === "publish"    && <PublishScreen />}
