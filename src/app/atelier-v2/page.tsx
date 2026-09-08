@@ -4186,10 +4186,30 @@ function SettingsScreen() {
   );
   const ta: React.CSSProperties = { width: "100%", padding: 14, border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, lineHeight: 1.6, color: "#1a1a1a", background: C.white, resize: "vertical", outline: "none", fontFamily: "inherit" };
 
-  if (loading) return <div style={{ padding: 48, color: C.muted, fontSize: 13 }}>Loading brand voice…</div>;
+  if (loading) return (
+    <ComboLoader
+      stages={["Fetch", "Parse", "Ready"]}
+      phases={[
+        { label: "Loading brand voice", text: "Fetching your brand voice settings from the database...\nReading tone rules and style preferences..." },
+        { label: "Parsing configuration", text: "Preparing forbidden phrases list...\nLoading guardrails and audience definition..." },
+        { label: "Almost ready", text: "✓  Brand description\n✓  Audience\n✓  Tone rules\n✓  Style preferences\n✓  Guardrails" },
+      ]}
+    />
+  );
   if (!bv) return <div style={{ padding: 48, color: C.red, fontSize: 13 }}>Could not load brand voice settings.</div>;
 
   return (
+    <>
+    {saving && (
+      <ComboLoader
+        stages={["Validate", "Save", "Cache"]}
+        phases={[
+          { label: "Validating changes", text: "Checking brand description...\nVerifying tone rules and forbidden phrases..." },
+          { label: "Saving to database", text: "Writing updated brand voice settings...\nAll generation routes will inherit these changes." },
+          { label: "Busting cache", text: "✓  Cache invalidated\n✓  Next generation picks up new rules\n✓  Brand voice updated" },
+        ]}
+      />
+    )}
     <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 40, alignItems: "start" }}>
 
       {/* ── Left column ── */}
@@ -4275,6 +4295,7 @@ function SettingsScreen() {
       </div>
 
     </div>
+    </>
   );
 }
 
@@ -4822,7 +4843,8 @@ function ComboLoader({ stages, phases }: {
   const progressPct = Math.min(100, Math.round(((phaseIdx + phaseProgress) / stages.length) * 100));
 
   return (
-    <div style={{ maxWidth: 640 }}>
+    <div style={{ position: "fixed", inset: 0, zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(247,245,242,.82)", backdropFilter: "blur(4px)" }}>
+    <div style={{ width: "100%", maxWidth: 540, padding: "0 24px" }}>
       {/* Stage pills */}
       <div style={{ display: "flex", borderRadius: 10, border: "1.5px solid rgba(22,61,38,.15)", overflow: "hidden", marginBottom: 16 }}>
         {stages.map((s, i) => {
@@ -4869,6 +4891,7 @@ function ComboLoader({ stages, phases }: {
           {progressPct}%
         </span>
       </div>
+    </div>
     </div>
   );
 }
