@@ -982,7 +982,7 @@ function UserAvatar({ email, size = 24 }: { email: string; size?: number }) {
   );
 }
 
-function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity }: {
+function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity, hasArticle }: {
   card: DraftCard;
   onCreateArticle: () => void;
   onResume?: () => void;
@@ -990,6 +990,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
   activeUsers?: PresenceUser[];
   hasSavedPlan?: boolean;
   sentToSanity?: boolean;
+  hasArticle?: boolean;
 }) {
   const rawScore = card.brief.predictedScore ? parseInt(card.brief.predictedScore) : NaN;
   const scoreNum = isNaN(rawScore) ? null : rawScore;
@@ -1018,6 +1019,11 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.13)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
             <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 5l2.5 2.5 4.5-4.5"/></svg>
             SENT TO SANITY
+          </span>
+        ) : hasArticle ? (
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.1)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
+            <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 5l2.5 2.5 4.5-4.5"/></svg>
+            ARTICLE SAVED
           </span>
         ) : hasSavedPlan ? (
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.12)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
@@ -1077,7 +1083,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
 
       {/* Actions */}
       <div style={{ display: "flex", gap: 8 }}>
-        {sentToSanity ? (
+        {(sentToSanity || hasArticle) ? (
           <button
             onClick={onCreateArticle}
             style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
@@ -1720,6 +1726,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [editingTitles, setEditingTitles] = useState<Record<number, string>>({});
   const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
   const [sentToSanityIds, setSentToSanityIds] = useState<Set<string>>(new Set());
+  const [withArticleIds, setWithArticleIds] = useState<Set<string>>(new Set());
   const [savePulse, setSavePulse] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [autoSaving, setAutoSaving] = useState(false);
@@ -1819,10 +1826,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       .then(r => r.json())
       .then((plans: SavedPlan[]) => { if (Array.isArray(plans)) setSavedPlans(plans); })
       .catch(() => {});
-    // Load builder sessions to find which cards have been sent to Sanity
+    // Load builder sessions to find which cards have been sent to Sanity or have a saved article
     fetch("/api/builder-sessions")
       .then(r => r.json())
-      .then((sessions: { opportunityId?: string; sentToWordPressAt?: string | null }[]) => {
+      .then((sessions: { opportunityId?: string; sentToWordPressAt?: string | null; currentStep?: number }[]) => {
         if (!Array.isArray(sessions)) return;
         const sent = new Set(
           sessions
@@ -1830,6 +1837,13 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
             .map(s => s.opportunityId!)
         );
         setSentToSanityIds(sent);
+        // Cards with a generated article (step 2+) that haven't been sent to Sanity yet
+        const withArticle = new Set(
+          sessions
+            .filter(s => s.opportunityId && (s.currentStep ?? 1) >= 2 && !s.sentToWordPressAt)
+            .map(s => s.opportunityId!)
+        );
+        setWithArticleIds(withArticle);
       })
       .catch(() => {});
   }, []);
@@ -1981,9 +1995,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       return;
     }
 
-    // Sent-to-Sanity cards: fetch the saved article from the server directly —
+    // Sent-to-Sanity OR article-saved cards: fetch from server directly —
     // skip outline generation entirely, no token cost, land on article step.
-    if (sentToSanityIds.has(activeCardId)) {
+    if (sentToSanityIds.has(activeCardId) || withArticleIds.has(activeCardId)) {
       setEditorStep("article");
       setArticleLoading(true);
       setArticleError(null);
@@ -2049,7 +2063,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       })
       .catch((e: unknown) => setOutlineError(e instanceof Error ? e.message : String(e)))
       .finally(() => setOutlineLoading(false));
-  }, [activeCardId, draftCards, savedPlans]);
+  }, [activeCardId, draftCards, savedPlans, sentToSanityIds, withArticleIds]);
 
   // ── Save current plan (org-wide via Supabase) ─────────────────────────────
   async function handleSavePlan() {
@@ -2566,9 +2580,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         {/* ── Sent to Sanity + All opportunities ── */}
         {(() => {
           const isSent      = (id: string) => sentToSanityIds.has(id) || !!readCardCache(id)?.draftSentAt;
+          const hasArticleSaved = (id: string) => withArticleIds.has(id) || (!isSent(id) && !!readCardCache(id)?.articleData);
           const hasPlan     = (id: string) => savedPlans.some(p => p.opportunityId === id);
           const sentCards    = draftCards!.filter(card => isSent(card.opportunityId));
-          const pendingCards = draftCards!.filter(card => !isSent(card.opportunityId) && !hasPlan(card.opportunityId));
+          const articleCards = draftCards!.filter(card => !isSent(card.opportunityId) && hasArticleSaved(card.opportunityId));
+          const pendingCards = draftCards!.filter(card => !isSent(card.opportunityId) && !hasArticleSaved(card.opportunityId) && !hasPlan(card.opportunityId));
           return (
             <>
               {sentCards.length > 0 && (
@@ -2594,6 +2610,35 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                           activeUsers={activeUsers}
                           hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
                           sentToSanity
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {articleCards.length > 0 && (
+                <div style={{ marginBottom: 48 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 8 }}>ARTICLES IN PROGRESS</div>
+                      <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
+                        {articleCards.length} article{articleCards.length !== 1 ? "s" : ""} saved
+                      </h2>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
+                    {articleCards.map(card => {
+                      const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
+                      return (
+                        <DraftCardComponent
+                          key={card.opportunityId}
+                          card={card}
+                          onCreateArticle={() => onActivateCard(card.opportunityId)}
+                          onResume={onResumeChat}
+                          onRemove={() => onTrashCard?.(card.opportunityId)}
+                          activeUsers={activeUsers}
+                          hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
+                          hasArticle
                         />
                       );
                     })}
