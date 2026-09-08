@@ -1114,7 +1114,7 @@ function QueueScreen({
                   <button onClick={() => void buildArticle(entry)} style={{ fontSize: 11, fontWeight: 700, color: C.red, background: "none", border: "none", cursor: "pointer" }}>Retry</button>
                 )}
                 {!isDone && !isBuilding && (
-                  <button onClick={() => { onRemoveFromBatchQueue(entry.id); setSelected(prev => prev.filter(x => x !== entry.id)); }} title="Remove from queue" style={{ fontSize: 14, fontWeight: 400, color: "rgba(22,61,38,.3)", background: "none", border: "none", cursor: "pointer", lineHeight: 1 }}>×</button>
+                  <button onClick={() => { onRemoveFromBatchQueue(entry.id); setSelected(prev => prev.filter(x => x !== entry.id)); }} title="Remove from queue" style={{ width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid rgba(249,57,67,.35)`, background: "rgba(249,57,67,.07)", color: C.red, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
                 )}
               </div>
             </div>
