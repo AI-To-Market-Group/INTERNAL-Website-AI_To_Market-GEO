@@ -1495,8 +1495,8 @@ const hlStyle = (heading: string): React.CSSProperties =>
                 marginRight: imgLeft ? 28 : 0,
                 marginLeft: imgLeft ? 0 : 28,
                 marginBottom: 16,
-                width: 340,
-                height: sectionSvgs[s.order] ? 130 : 130,
+                width: 300,
+                height: 240,
                 borderRadius: 9,
                 background: "rgba(22,61,38,.04)",
                 border: "1px solid rgba(22,61,38,.1)",
@@ -1507,7 +1507,15 @@ const hlStyle = (heading: string): React.CSSProperties =>
                 overflow: "hidden",
               }}>
                 {sectionSvgs[s.order] ? (
-                  <div dangerouslySetInnerHTML={{ __html: sectionSvgs[s.order] }} style={{ lineHeight: 0, display: "block" }} />
+                  <div
+                    dangerouslySetInnerHTML={{
+                      __html: sectionSvgs[s.order]
+                        .replace(/width="340"/, 'width="300"')
+                        .replace(/height="130"/, 'height="240"')
+                        .replace(/viewBox="0 0 340 130"/, 'viewBox="0 0 340 130" preserveAspectRatio="xMidYMid meet"'),
+                    }}
+                    style={{ lineHeight: 0, display: "block", width: 300, height: 240 }}
+                  />
                 ) : (
                   <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(22,61,38,.22)" strokeWidth="1.5" strokeLinecap="round">
                     <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
@@ -4622,7 +4630,7 @@ function ComboLoader({ stages, phases }: {
   return (
     <div style={{ maxWidth: 640 }}>
       {/* Stage pills */}
-      <div style={{ display: "flex", borderRadius: 10, border: "1px solid rgba(22,61,38,.12)", overflow: "hidden", marginBottom: 16 }}>
+      <div style={{ display: "flex", borderRadius: 10, border: "1.5px solid rgba(22,61,38,.15)", overflow: "hidden", marginBottom: 16 }}>
         {stages.map((s, i) => {
           const isDone   = i < phaseIdx;
           const isActive = i === phaseIdx;
@@ -4635,9 +4643,9 @@ function ComboLoader({ stages, phases }: {
               fontWeight: 600,
               letterSpacing: ".04em",
               lineHeight: 1.3,
-              borderRight: i < stages.length - 1 ? "1px solid rgba(22,61,38,.12)" : "none",
-              background: isActive ? "#2ECC71" : isDone ? "rgba(46,204,113,.14)" : "rgba(22,61,38,.03)",
-              color: isActive ? "#0A2218" : isDone ? "#1B6B3A" : "rgba(22,61,38,.45)",
+              borderRight: i < stages.length - 1 ? "1px solid rgba(22,61,38,.15)" : "none",
+              background: isActive ? "#185F00" : isDone ? "rgba(24,95,0,.1)" : "transparent",
+              color: isActive ? "#FFFFFF" : isDone ? "#185F00" : "rgba(22,61,38,.38)",
               transition: "background .4s, color .4s",
             }}>{s}</div>
           );
@@ -4645,25 +4653,25 @@ function ComboLoader({ stages, phases }: {
       </div>
 
       {/* Stream box */}
-      <div style={{ background: "rgba(22,61,38,.04)", border: "1px solid rgba(22,61,38,.1)", borderRadius: 12, padding: "16px 18px", minHeight: 108 }}>
+      <div style={{ background: "#FFFFFF", border: "1.5px solid rgba(22,61,38,.14)", boxShadow: "0 1px 6px rgba(22,61,38,.06)", borderRadius: 12, padding: "16px 18px", minHeight: 108 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
-          <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#2ECC71", animation: "pulse 1.1s ease-in-out infinite" }} />
-          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".09em", textTransform: "uppercase" as const, color: "#2A6B45" }}>
+          <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#185F00", animation: "pulse 1.1s ease-in-out infinite" }} />
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".09em", textTransform: "uppercase" as const, color: "#185F00" }}>
             {phases[phaseIdx]?.label ?? ""}
           </span>
         </div>
-        <div style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace", fontSize: 12.5, lineHeight: 1.75, color: "rgba(22,61,38,.75)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        <div style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace", fontSize: 12.5, lineHeight: 1.75, color: "#163D26", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
           {displayed}
-          <span style={{ display: "inline-block", width: 2, height: 14, background: "#2ECC71", verticalAlign: "middle", marginLeft: 1, animation: "blink .65s step-end infinite" }} />
+          <span style={{ display: "inline-block", width: 2, height: 14, background: "#185F00", verticalAlign: "middle", marginLeft: 1, animation: "blink .65s step-end infinite" }} />
         </div>
       </div>
 
       {/* Progress bar + percentage */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14 }}>
         <div style={{ flex: 1, height: 3, background: "rgba(22,61,38,.1)", borderRadius: 99, overflow: "hidden" }}>
-          <div style={{ height: "100%", width: `${progressPct}%`, background: "linear-gradient(90deg,#2A6B45,#2ECC71)", borderRadius: 99, transition: "width .25s ease" }} />
+          <div style={{ height: "100%", width: `${progressPct}%`, background: "linear-gradient(90deg,#185F00,#50C878)", borderRadius: 99, transition: "width .25s ease" }} />
         </div>
-        <span style={{ fontSize: 12, fontWeight: 700, color: "#2ECC71", fontVariantNumeric: "tabular-nums", minWidth: 34, textAlign: "right" as const }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#185F00", fontVariantNumeric: "tabular-nums", minWidth: 34, textAlign: "right" as const }}>
           {progressPct}%
         </span>
       </div>
