@@ -4133,25 +4133,31 @@ function EditableList({ items, onChange, placeholder }: {
 
 function SettingsScreen() {
   const [bv, setBv] = useState<BrandVoiceData | null>(null);
+  const [savedBv, setSavedBv] = useState<BrandVoiceData | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [newPhrase, setNewPhrase] = useState("");
   const [newGuardrail, setNewGuardrail] = useState("");
 
+  const isDirty = bv !== null && savedBv !== null && JSON.stringify(bv) !== JSON.stringify(savedBv);
+
   useEffect(() => {
     fetch("/api/brand-voice")
       .then(r => r.ok ? r.json() : null)
-      .then((data: BrandVoiceData | null) => { if (data) setBv(data); })
+      .then((data: BrandVoiceData | null) => {
+        if (data) { setBv(data); setSavedBv(data); }
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
   async function handleSave() {
-    if (!bv) return;
+    if (!bv || !isDirty) return;
     setSaving(true);
     try {
       await fetch("/api/brand-voice", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bv) });
+      setSavedBv(bv);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } finally {
@@ -4213,7 +4219,7 @@ function SettingsScreen() {
 
         {/* Save */}
         <div style={{ display: "flex", alignItems: "center", gap: 14, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
-          <button onClick={handleSave} disabled={saving} style={{ padding: "12px 28px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: saving ? "not-allowed" : "pointer", opacity: saving ? .6 : 1 }}>
+          <button onClick={handleSave} disabled={saving || !isDirty} style={{ padding: "12px 28px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: (saving || !isDirty) ? "not-allowed" : "pointer", opacity: (saving || !isDirty) ? .35 : 1, transition: "opacity .15s" }}>
             {saving ? "Saving…" : "Save brand voice"}
           </button>
           {saved && <span style={{ fontSize: 12, color: C.mid, fontWeight: 600 }}>Saved — next generation picks up changes</span>}
