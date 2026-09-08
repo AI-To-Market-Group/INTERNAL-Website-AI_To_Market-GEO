@@ -1793,9 +1793,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
 
   async function publishLive() {
     if (!activeCardId || liveState === "loading") return;
-    // Must have a Sanity draft first
+    // Sanity draft must exist — never auto-send; user must click "Save as draft in Sanity" first
     if (draftState !== "success") {
-      await sendToDraftSanity();
+      setLiveState("error");
+      setLiveError("Save as draft in Sanity first before publishing live.");
+      return;
     }
     setLiveState("loading");
     setLiveError(null);
