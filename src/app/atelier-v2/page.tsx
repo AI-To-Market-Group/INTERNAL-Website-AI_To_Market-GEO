@@ -1025,7 +1025,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
           </span>
         ) : sentToSanity ? (
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.13)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
-            <svg viewBox="0 0 16 10" width="13" height="9" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 5l2.5 2.5 4.5-4.5"/><path d="M7.5 5l2.5 2.5 4.5-4.5"/></svg>
+            <svg viewBox="0 0 20 12" width="15" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 6l3 3 5.5-5.5"/><path d="M9 6l3 3 5.5-5.5"/></svg>
             SENT TO SANITY
           </span>
         ) : hasArticle ? (
@@ -1035,12 +1035,12 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
           </span>
         ) : hasSavedPlan ? (
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.12)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
-            <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="5" r="4"/><path d="M5 2.5V5l1.5 1.5"/></svg>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
             PLAN SAVED
           </span>
         ) : (
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#888", background: "#E8E8E8", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
-            <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="5" r="1.5"/><path d="M5 1v1M5 8v1M1 5h1M8 5h1M2.05 2.05l.7.7M7.25 7.25l.7.7M7.95 2.05l-.7.7M2.75 7.25l-.7.7"/></svg>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/></svg>
             READY TO BUILD
           </span>
         )}
