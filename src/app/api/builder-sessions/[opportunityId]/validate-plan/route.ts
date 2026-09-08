@@ -135,6 +135,25 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
     sec.content.bullets = [];
   }
 
+  // 3b. Conclusion with prose in paragraphs — extract as bullet sentences so the
+  //     renderer always gets content.bullets for the coral-dot list.
+  for (const sec of sections) {
+    if (!/^conclusion$/i.test(sec.type)) continue;
+    if ((sec.content.bullets ?? []).length > 0) continue; // already has bullets
+    if (sec.content.paragraphs.length === 0) continue;
+    const extracted: string[] = [];
+    for (const para of sec.content.paragraphs) {
+      const raw = para.text.replace(/<[^>]+>/g, "").trim();
+      if (!raw) continue;
+      const sentences = raw.split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+      extracted.push(...sentences);
+    }
+    if (extracted.length > 0) {
+      sec.content.bullets = extracted;
+      sec.content.paragraphs = [];
+    }
+  }
+
   // 4. True empty-section backfill: if a section is STILL empty (no paragraphs,
   //    no bullets), pull prose from the outline bullets so the section heading
   //    isn't followed by a void.

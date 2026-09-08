@@ -982,7 +982,7 @@ function UserAvatar({ email, size = 24 }: { email: string; size?: number }) {
   );
 }
 
-function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity }: {
+function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity, hasArticle }: {
   card: DraftCard;
   onCreateArticle: () => void;
   onResume?: () => void;
@@ -990,13 +990,14 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
   activeUsers?: PresenceUser[];
   hasSavedPlan?: boolean;
   sentToSanity?: boolean;
+  hasArticle?: boolean;
 }) {
   const rawScore = card.brief.predictedScore ? parseInt(card.brief.predictedScore) : NaN;
   const scoreNum = isNaN(rawScore) ? null : rawScore;
   const hasActive = activeUsers && activeUsers.length > 0;
 
   return (
-    <div style={{ padding: 24, border: `1px solid ${hasActive ? "rgba(24,95,0,.35)" : C.border}`, borderRadius: 12, background: hasActive ? "rgba(24,95,0,.04)" : C.white, display: "flex", flexDirection: "column", height: 300, position: "relative", boxShadow: hasActive ? "0 0 0 2px rgba(24,95,0,.18)" : "none" }}>
+    <div style={{ padding: 24, border: `1px solid ${hasActive ? "rgba(22,61,38,.22)" : C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", height: 300, position: "relative", opacity: hasActive ? 0.62 : 1, transition: "opacity .15s ease", cursor: hasActive ? "not-allowed" : "default" }}>
       {/* X remove button — hidden when locked */}
       {onRemove && !hasActive && (
         <button
@@ -1011,13 +1012,19 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
       {/* Header: badge + score */}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 16, paddingRight: onRemove ? 28 : 0 }}>
         {hasActive ? (
-          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: C.mid, background: "rgba(24,95,0,.12)", padding: "4px 9px", borderRadius: 20 }}>
-            🔒 {activeUsers![0].user_email.split("@")[0].toUpperCase()} IS EDITING
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "rgba(22,61,38,.55)", background: "rgba(22,61,38,.07)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
+            <svg viewBox="0 0 12 14" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="6" width="10" height="8" rx="1.5"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg>
+            IN USE
           </span>
         ) : sentToSanity ? (
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.13)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
             <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 5l2.5 2.5 4.5-4.5"/></svg>
             SENT TO SANITY
+          </span>
+        ) : hasArticle ? (
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.1)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
+            <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 5l2.5 2.5 4.5-4.5"/></svg>
+            ARTICLE SAVED
           </span>
         ) : hasSavedPlan ? (
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.12)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
@@ -1065,11 +1072,9 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
             )}
           </div>
           {hasActive && (
-            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.mid, animation: "pulse 2s infinite" }} />
-              <div style={{ display: "flex" }}>
-                {activeUsers!.slice(0, 3).map(u => <UserAvatar key={u.user_id} email={u.user_email} size={22} />)}
-              </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.mid, animation: "pulse 2s infinite", flexShrink: 0 }} />
+              <span style={{ fontSize: 10, fontWeight: 500, color: "rgba(22,61,38,.45)" }}>live</span>
             </div>
           )}
         </div>
@@ -1077,14 +1082,24 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
 
       {/* Actions */}
       <div style={{ display: "flex", gap: 8 }}>
-        {sentToSanity ? (
+        {hasActive ? (
+          <div style={{ flex: 1, padding: "10px 12px", borderRadius: 8, background: "rgba(22,61,38,.05)", border: "1px solid rgba(22,61,38,.12)", display: "flex", alignItems: "center", gap: 8 }}>
+            <svg viewBox="0 0 12 14" width="12" height="12" fill="none" stroke="rgba(22,61,38,.45)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><rect x="1" y="6" width="10" height="8" rx="1.5"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "rgba(22,61,38,.5)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {activeUsers!.map(u => u.user_email.split("@")[0]).join(", ")} editing
+            </span>
+            <div style={{ display: "flex", gap: -4 }}>
+              {activeUsers!.slice(0, 3).map(u => <UserAvatar key={u.user_id} email={u.user_email} size={20} />)}
+            </div>
+          </div>
+        ) : (sentToSanity || hasArticle) ? (
           <button
             onClick={onCreateArticle}
             style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
           >
             View Article
           </button>
-        ) : hasSavedPlan && !hasActive ? (
+        ) : hasSavedPlan ? (
           <>
             <button
               onClick={onCreateArticle}
@@ -1103,10 +1118,9 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
         ) : (
           <button
             onClick={onCreateArticle}
-            disabled={hasActive}
-            style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: hasActive ? "rgba(22,61,38,.25)" : C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: hasActive ? "not-allowed" : "pointer", opacity: hasActive ? 0.8 : 1 }}
+            style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
           >
-            {hasActive ? "🔒 Locked" : "Create Article"}
+            Create Article
           </button>
         )}
       </div>
@@ -1403,7 +1417,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
 
       {/* Newsletter masthead */}
       <div className="v2-masthead" style={{ background: C.dark, padding: "28px 44px", borderRadius: "12px 12px 0 0" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".22em", color: C.salmon, marginBottom: 10 }}>AI TO MARKET · GEO CONTENT</div>
+        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".22em", color: C.salmon, marginBottom: 10 }}>AI To Market · Blog</div>
         <h1 style={{ margin: "0 0 10px", fontSize: 24, fontWeight: 700, lineHeight: 1.2, color: C.white, letterSpacing: "-.3px" }}>
           {article.title}
         </h1>
@@ -1561,15 +1575,24 @@ const hlStyle = (heading: string): React.CSSProperties =>
           // Gather bullets — prefer the bullets array, then extract <li> from HTML paragraph
           let takeaways = conclusion.content.bullets.filter(b => b.trim());
           if (takeaways.length === 0 && conclusion.content.paragraphs.length > 0) {
-            const pText = conclusion.content.paragraphs[0].text;
-            if (/<li/i.test(pText)) {
-              // Pull text out of each <li>…</li>
-              takeaways = (pText.match(/<li[^>]*>([\s\S]*?)<\/li>/gi) ?? [])
-                .map(li => li.replace(/<\/?li[^>]*>/gi, "").replace(/<[^>]+>/g, "").trim())
-                .filter(Boolean);
-            } else {
-              // Plain paragraph — split on sentence endings as fallback bullets
-              takeaways = [pText.replace(/<[^>]+>/g, "").trim()].filter(Boolean);
+            // Try each paragraph; stop when we get bullets
+            for (const para of conclusion.content.paragraphs) {
+              const pText = para.text;
+              if (/<li/i.test(pText)) {
+                takeaways = (pText.match(/<li[^>]*>([\s\S]*?)<\/li>/gi) ?? [])
+                  .map(li => li.replace(/<\/?li[^>]*>/gi, "").replace(/<[^>]+>/g, "").trim())
+                  .filter(Boolean);
+                if (takeaways.length > 0) break;
+              } else {
+                // Split on sentence boundaries so each sentence becomes its own bullet
+                const sentences = pText
+                  .replace(/<[^>]+>/g, "")
+                  .trim()
+                  .split(/(?<=[.!?])\s+/)
+                  .map(s => s.trim())
+                  .filter(Boolean);
+                takeaways.push(...sentences);
+              }
             }
           }
           const bulletStyle: React.CSSProperties = { fontSize: 14, fontWeight: 400, lineHeight: 1.6, color: "rgba(255,255,255,.85)" };
@@ -1711,6 +1734,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [editingTitles, setEditingTitles] = useState<Record<number, string>>({});
   const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
   const [sentToSanityIds, setSentToSanityIds] = useState<Set<string>>(new Set());
+  const [withArticleIds, setWithArticleIds] = useState<Set<string>>(new Set());
   const [savePulse, setSavePulse] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [autoSaving, setAutoSaving] = useState(false);
@@ -1784,9 +1808,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
 
   async function publishLive() {
     if (!activeCardId || liveState === "loading") return;
-    // Must have a Sanity draft first
+    // Sanity draft must exist — never auto-send; user must click "Save as draft in Sanity" first
     if (draftState !== "success") {
-      await sendToDraftSanity();
+      setLiveState("error");
+      setLiveError("Save as draft in Sanity first before publishing live.");
+      return;
     }
     setLiveState("loading");
     setLiveError(null);
@@ -1808,10 +1834,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       .then(r => r.json())
       .then((plans: SavedPlan[]) => { if (Array.isArray(plans)) setSavedPlans(plans); })
       .catch(() => {});
-    // Load builder sessions to find which cards have been sent to Sanity
+    // Load builder sessions to find which cards have been sent to Sanity or have a saved article
     fetch("/api/builder-sessions")
       .then(r => r.json())
-      .then((sessions: { opportunityId?: string; sentToWordPressAt?: string | null }[]) => {
+      .then((sessions: { opportunityId?: string; sentToWordPressAt?: string | null; currentStep?: number }[]) => {
         if (!Array.isArray(sessions)) return;
         const sent = new Set(
           sessions
@@ -1819,6 +1845,13 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
             .map(s => s.opportunityId!)
         );
         setSentToSanityIds(sent);
+        // Cards with a generated article (step 2+) that haven't been sent to Sanity yet
+        const withArticle = new Set(
+          sessions
+            .filter(s => s.opportunityId && (s.currentStep ?? 1) >= 2 && !s.sentToWordPressAt)
+            .map(s => s.opportunityId!)
+        );
+        setWithArticleIds(withArticle);
       })
       .catch(() => {});
   }, []);
@@ -1970,6 +2003,36 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       return;
     }
 
+    // Sent-to-Sanity OR article-saved cards: fetch from server directly —
+    // skip outline generation entirely, no token cost, land on article step.
+    if (sentToSanityIds.has(activeCardId) || withArticleIds.has(activeCardId)) {
+      setEditorStep("article");
+      setArticleLoading(true);
+      setArticleError(null);
+      fetch(`/api/builder-sessions/${activeCardId}/restore-article`, { method: "POST" })
+        .then(async r => {
+          const data = await r.json() as {
+            article?: GeneratedArticle;
+            geoScore?: { score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number };
+            qualityFlags?: { section?: string; type: string; message: string }[];
+            error?: string;
+          };
+          if (r.ok && data.article) {
+            setArticleData(data.article);
+            setGeoScore(data.geoScore ?? null);
+            setQualityFlags(data.qualityFlags ?? []);
+            setSeoTitle(data.article.title?.slice(0, 60) ?? "");
+            setDraftSentAt(prev => prev ?? new Date().toISOString());
+            setDraftState("success");
+          } else {
+            setArticleError(data.error ?? "Could not load saved article");
+          }
+        })
+        .catch(() => setArticleError("Network error — could not load article"))
+        .finally(() => setArticleLoading(false));
+      return;
+    }
+
     const card = draftCards?.find(c => c.opportunityId === activeCardId);
 
     // If another team member saved a plan for this card, restore it (org-wide workspace)
@@ -2008,7 +2071,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       })
       .catch((e: unknown) => setOutlineError(e instanceof Error ? e.message : String(e)))
       .finally(() => setOutlineLoading(false));
-  }, [activeCardId, draftCards, savedPlans]);
+  }, [activeCardId, draftCards, savedPlans, sentToSanityIds, withArticleIds]);
 
   // ── Save current plan (org-wide via Supabase) ─────────────────────────────
   async function handleSavePlan() {
@@ -2525,11 +2588,42 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         {/* ── Sent to Sanity + All opportunities ── */}
         {(() => {
           const isSent      = (id: string) => sentToSanityIds.has(id) || !!readCardCache(id)?.draftSentAt;
+          const hasArticleSaved = (id: string) => withArticleIds.has(id) || (!isSent(id) && !!readCardCache(id)?.articleData);
           const hasPlan     = (id: string) => savedPlans.some(p => p.opportunityId === id);
           const sentCards    = draftCards!.filter(card => isSent(card.opportunityId));
-          const pendingCards = draftCards!.filter(card => !isSent(card.opportunityId) && !hasPlan(card.opportunityId));
+          const articleCards = draftCards!.filter(card => !isSent(card.opportunityId) && hasArticleSaved(card.opportunityId));
+          const pendingCards = draftCards!.filter(card => !isSent(card.opportunityId) && !hasArticleSaved(card.opportunityId) && !hasPlan(card.opportunityId));
           return (
             <>
+              {articleCards.length > 0 && (
+                <div style={{ marginBottom: 48 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 8 }}>ARTICLES IN PROGRESS</div>
+                      <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
+                        {articleCards.length} article{articleCards.length !== 1 ? "s" : ""} saved
+                      </h2>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
+                    {articleCards.map(card => {
+                      const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
+                      return (
+                        <DraftCardComponent
+                          key={card.opportunityId}
+                          card={card}
+                          onCreateArticle={() => onActivateCard(card.opportunityId)}
+                          onResume={onResumeChat}
+                          onRemove={() => onTrashCard?.(card.opportunityId)}
+                          activeUsers={activeUsers}
+                          hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
+                          hasArticle
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {sentCards.length > 0 && (
                 <div style={{ marginBottom: 48 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
@@ -3037,12 +3131,17 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                     // Normalise: if bullets are empty (old data stored in paragraphs), derive them first
                     let bullets = [...s.content.bullets];
                     if (bullets.length === 0 && s.content.paragraphs.length > 0) {
-                      const pText = s.content.paragraphs[0].text;
-                      bullets = /<li/i.test(pText)
-                        ? (pText.match(/<li[^>]*>([\s\S]*?)<\/li>/gi) ?? [])
+                      for (const para of s.content.paragraphs) {
+                        const pText = para.text;
+                        if (/<li/i.test(pText)) {
+                          bullets.push(...(pText.match(/<li[^>]*>([\s\S]*?)<\/li>/gi) ?? [])
                             .map(li => li.replace(/<\/?li[^>]*>/gi, "").replace(/<[^>]+>/g, "").trim())
-                            .filter(Boolean)
-                        : [pText.replace(/<[^>]+>/g, "").trim()].filter(Boolean);
+                            .filter(Boolean));
+                        } else {
+                          bullets.push(...pText.replace(/<[^>]+>/g, "").trim()
+                            .split(/(?<=[.!?])\s+/).map(s2 => s2.trim()).filter(Boolean));
+                        }
+                      }
                     }
                     bullets[bulletIdx] = text;
                     return { ...s, content: { ...s.content, bullets } };
