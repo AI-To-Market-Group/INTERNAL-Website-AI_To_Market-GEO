@@ -4165,74 +4165,83 @@ function SettingsScreen() {
   if (!bv) return <div style={{ padding: 48, color: C.red, fontSize: 13 }}>Could not load brand voice settings.</div>;
 
   return (
-    <div style={{ maxWidth: 760, display: "flex", flexDirection: "column", gap: 36 }}>
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 40, alignItems: "start" }}>
 
-      {/* Brand description */}
-      <div>
-        {fieldLabel("BRAND DESCRIPTION")}
-        <textarea rows={3} value={bv.brand_description} onChange={e => setBv({ ...bv, brand_description: e.target.value })} style={ta} />
-      </div>
+      {/* ── Left column ── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 36 }}>
 
-      {/* Audience */}
-      <div>
-        {fieldLabel("AUDIENCE")}
-        <textarea rows={3} value={bv.audience} onChange={e => setBv({ ...bv, audience: e.target.value })} style={ta} />
-      </div>
-
-      {/* Tone */}
-      <div>
-        {fieldLabel("TONE")}
-        <EditableList items={bv.tone} onChange={tone => setBv({ ...bv, tone })} placeholder="Add a tone rule…" />
-      </div>
-
-      {/* Style preferences */}
-      <div>
-        {fieldLabel("STYLE PREFERENCES")}
-        <EditableList items={bv.preferred_style} onChange={preferred_style => setBv({ ...bv, preferred_style })} placeholder="Add a style preference…" />
-      </div>
-
-      {/* Never use */}
-      <div>
-        {fieldLabel("NEVER USE")}
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
-          {bv.forbidden_phrases.map(w => (
-            <span key={w} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 11px", borderRadius: 20, border: "1px solid rgba(22,61,38,.2)", fontSize: 12, fontWeight: 600, color: "#1a1a1a", background: C.white }}>
-              {w}
-              <button onClick={() => setBv({ ...bv, forbidden_phrases: bv.forbidden_phrases.filter(p => p !== w) })} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.45)", fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
-            </span>
-          ))}
+        {/* Brand description */}
+        <div>
+          {fieldLabel("BRAND DESCRIPTION")}
+          <textarea rows={3} value={bv.brand_description} onChange={e => setBv({ ...bv, brand_description: e.target.value })} style={ta} />
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input value={newPhrase} onChange={e => setNewPhrase(e.target.value)} onKeyDown={e => e.key === "Enter" && addPhrase()} placeholder="Add phrase…" style={{ flex: 1, padding: "8px 12px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 12, outline: "none", background: C.white, color: "#1a1a1a", fontFamily: "inherit" }} />
-          <button onClick={addPhrase} style={{ padding: "8px 16px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
+
+        {/* Audience */}
+        <div>
+          {fieldLabel("AUDIENCE")}
+          <textarea rows={3} value={bv.audience} onChange={e => setBv({ ...bv, audience: e.target.value })} style={ta} />
+        </div>
+
+        {/* Tone */}
+        <div>
+          {fieldLabel("TONE")}
+          <EditableList items={bv.tone} onChange={tone => setBv({ ...bv, tone })} placeholder="Add a tone rule…" />
+        </div>
+
+        {/* Style preferences */}
+        <div>
+          {fieldLabel("STYLE PREFERENCES")}
+          <EditableList items={bv.preferred_style} onChange={preferred_style => setBv({ ...bv, preferred_style })} placeholder="Add a style preference…" />
+        </div>
+
+        {/* Save */}
+        <div style={{ display: "flex", alignItems: "center", gap: 14, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+          <button onClick={handleSave} disabled={saving} style={{ padding: "12px 28px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: saving ? "not-allowed" : "pointer", opacity: saving ? .6 : 1 }}>
+            {saving ? "Saving…" : "Save brand voice"}
+          </button>
+          {saved && <span style={{ fontSize: 12, color: C.mid, fontWeight: 600 }}>Saved — next generation picks up changes</span>}
         </div>
       </div>
 
-      {/* Guardrails */}
-      <div>
-        {fieldLabel("GUARDRAILS")}
-        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 12 }}>
-          {bv.guardrails.map((g, i) => (
-            <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-              <input type="checkbox" checked={g.active} onChange={e => setBv({ ...bv, guardrails: bv.guardrails.map((gr, idx) => idx === i ? { ...gr, active: e.target.checked } : gr) })} style={{ width: 16, height: 16, accentColor: C.dark, cursor: "pointer", flexShrink: 0 }} />
-              <span style={{ flex: 1, fontSize: 13, lineHeight: 1.5, color: "#1a1a1a" }}>{g.label}</span>
-              <button onClick={() => setBv({ ...bv, guardrails: bv.guardrails.filter((_, idx) => idx !== i) })} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.35)", fontSize: 14, padding: "0 4px" }}>×</button>
-            </div>
-          ))}
+      {/* ── Right column ── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 32, position: "sticky", top: 180 }}>
+
+        {/* Never use */}
+        <div style={{ padding: 20, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
+          {fieldLabel("NEVER USE")}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 14 }}>
+            {bv.forbidden_phrases.map(w => (
+              <span key={w} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 20, border: "1px solid rgba(22,61,38,.2)", fontSize: 12, fontWeight: 600, color: "#1a1a1a", background: C.bg }}>
+                {w}
+                <button onClick={() => setBv({ ...bv, forbidden_phrases: bv.forbidden_phrases.filter(p => p !== w) })} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.45)", fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
+              </span>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={newPhrase} onChange={e => setNewPhrase(e.target.value)} onKeyDown={e => e.key === "Enter" && addPhrase()} placeholder="Add phrase…" style={{ flex: 1, padding: "7px 10px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 7, fontSize: 12, outline: "none", background: C.white, color: "#1a1a1a", fontFamily: "inherit" }} />
+            <button onClick={addPhrase} style={{ padding: "7px 14px", borderRadius: 7, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
+          </div>
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input value={newGuardrail} onChange={e => setNewGuardrail(e.target.value)} onKeyDown={e => e.key === "Enter" && addGuardrail()} placeholder="Add guardrail…" style={{ flex: 1, padding: "8px 12px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 12, outline: "none", background: C.white, color: "#1a1a1a", fontFamily: "inherit" }} />
-          <button onClick={addGuardrail} style={{ padding: "8px 16px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
+
+        {/* Guardrails */}
+        <div style={{ padding: 20, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
+          {fieldLabel("GUARDRAILS")}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
+            {bv.guardrails.map((g, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <input type="checkbox" checked={g.active} onChange={e => setBv({ ...bv, guardrails: bv.guardrails.map((gr, idx) => idx === i ? { ...gr, active: e.target.checked } : gr) })} style={{ width: 16, height: 16, accentColor: C.dark, cursor: "pointer", flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: 12, lineHeight: 1.5, color: "#1a1a1a" }}>{g.label}</span>
+                <button onClick={() => setBv({ ...bv, guardrails: bv.guardrails.filter((_, idx) => idx !== i) })} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.35)", fontSize: 14, padding: "0 4px" }}>×</button>
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={newGuardrail} onChange={e => setNewGuardrail(e.target.value)} onKeyDown={e => e.key === "Enter" && addGuardrail()} placeholder="Add guardrail…" style={{ flex: 1, padding: "7px 10px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 7, fontSize: 12, outline: "none", background: C.white, color: "#1a1a1a", fontFamily: "inherit" }} />
+            <button onClick={addGuardrail} style={{ padding: "7px 14px", borderRadius: 7, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
+          </div>
         </div>
       </div>
 
-      {/* Save */}
-      <div style={{ display: "flex", alignItems: "center", gap: 14, paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
-        <button onClick={handleSave} disabled={saving} style={{ padding: "12px 28px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: saving ? "not-allowed" : "pointer", opacity: saving ? .6 : 1 }}>
-          {saving ? "Saving…" : "Save brand voice"}
-        </button>
-        {saved && <span style={{ fontSize: 12, color: C.mid, fontWeight: 600 }}>Saved — next generation picks up changes</span>}
-      </div>
     </div>
   );
 }
