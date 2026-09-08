@@ -1025,7 +1025,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
           </span>
         ) : sentToSanity ? (
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.13)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
-            <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 5l2.5 2.5 4.5-4.5"/></svg>
+            <svg viewBox="0 0 16 10" width="13" height="9" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 5l2.5 2.5 4.5-4.5"/><path d="M7.5 5l2.5 2.5 4.5-4.5"/></svg>
             SENT TO SANITY
           </span>
         ) : hasArticle ? (
