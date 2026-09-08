@@ -4248,7 +4248,7 @@ function SettingsScreen() {
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <input type="checkbox" checked={g.active} onChange={e => setBv({ ...bv, guardrails: bv.guardrails.map((gr, idx) => idx === i ? { ...gr, active: e.target.checked } : gr) })} style={{ width: 16, height: 16, accentColor: C.dark, cursor: "pointer", flexShrink: 0 }} />
                 <span style={{ flex: 1, fontSize: 12, lineHeight: 1.5, color: "#1a1a1a" }}>{g.label}</span>
-                <button onClick={() => setBv({ ...bv, guardrails: bv.guardrails.filter((_, idx) => idx !== i) })} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.35)", fontSize: 14, padding: "0 4px" }}>×</button>
+                <button onClick={() => setBv({ ...bv, guardrails: bv.guardrails.filter((_, idx) => idx !== i) })} style={{ background: "none", border: "none", cursor: "pointer", color: C.red, fontSize: 16, lineHeight: 1, padding: "0 4px" }}>×</button>
               </div>
             ))}
           </div>
