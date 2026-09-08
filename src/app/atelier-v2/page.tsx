@@ -1137,9 +1137,9 @@ interface GeneratedArticle { title: string; sections: GeneratedSection[]; }
 
 // ─── Newsletter article renderer ──────────────────────────────────────────────
 
-function ImgPlaceholder({ height = 200 }: { height?: number }) {
+function ImgPlaceholder({ height = 200, width }: { height?: number; width?: number }) {
   return (
-    <div style={{ width: "100%", height, background: "rgba(22,61,38,.07)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 28 }}>
+    <div style={{ width: width ?? "100%", flexShrink: 0, height, background: "rgba(22,61,38,.07)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(22,61,38,.22)" strokeWidth="1.5" strokeLinecap="round">
         <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
       </svg>
@@ -1320,7 +1320,7 @@ function EditablePara({ text, style, paraKey, sectionOrder, paraId, onEditParagr
   return <p key={paraKey} {...shared} ref={elRef as React.RefObject<HTMLParagraphElement>} />;
 }
 
-function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet }: {
+function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet, sidebarCollapsed }: {
   article: GeneratedArticle;
   outline: V2OutlineSection[];
   onScore: () => void;
@@ -1330,12 +1330,41 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
   onEditParagraph?: (sectionOrder: number, paraId: number, text: string) => void;
   onEditHeading?: (sectionOrder: number, heading: string) => void;
   onEditBullet?: (sectionOrder: number, bulletIdx: number, text: string) => void;
+  sidebarCollapsed?: boolean;
 }) {
   const { sections } = article;
   const [subEmail, setSubEmail] = useState("");
   const [subState, setSubState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [faqOpenIdx, setFaqOpenIdx] = useState<number | null>(0);
   const articleBodyRef = useRef<HTMLDivElement>(null);
+  const [sectionSvgs, setSectionSvgs] = useState<Record<number, string>>({});
+
+  // Fetch Claude-generated SVG illustrations for each body section
+  useEffect(() => {
+    const bodySections = sections.filter(s =>
+      !/^(introduction|stats|conclusion|faq)$/i.test(s.type) &&
+      !/frequently.asked/i.test(s.type) &&
+      !/frequently asked/i.test(s.heading)
+    );
+    if (!bodySections.length) return;
+    setSectionSvgs({});
+    bodySections.forEach(s => {
+      const summary = s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400);
+      fetch("/api/illustration-generate-claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ heading: s.heading, sectionType: s.type, summary }),
+      })
+        .then(r => r.json())
+        .then((data: { svgString?: string | null }) => {
+          if (data.svgString) {
+            setSectionSvgs(prev => ({ ...prev, [s.order]: data.svgString! }));
+          }
+        })
+        .catch(() => { /* silently keep placeholder */ });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [article.title]);
 
   // DOM-based brand voice violation highlighting — same approach as v1
   useEffect(() => {
@@ -1413,7 +1442,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
   const divider = <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "40px 0" }} />;
 
   return (
-    <div ref={articleBodyRef} style={{ maxWidth: 720, margin: 0 }}>
+    <div ref={articleBodyRef} style={{ maxWidth: sidebarCollapsed ? 900 : 720, margin: 0, transition: "max-width .22s ease" }}>
 
       {/* Newsletter masthead */}
       <div className="v2-masthead" style={{ background: C.dark, padding: "28px 44px", borderRadius: "12px 12px 0 0" }}>
@@ -1421,9 +1450,6 @@ const hlStyle = (heading: string): React.CSSProperties =>
         <h1 style={{ margin: "0 0 10px", fontSize: 24, fontWeight: 700, lineHeight: 1.2, color: C.white, letterSpacing: "-.3px" }}>
           {article.title}
         </h1>
-        <div style={{ fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.45)" }}>
-          {sections.length} sections · generated article
-        </div>
       </div>
 
       {/* Hero image */}
@@ -1457,27 +1483,52 @@ const hlStyle = (heading: string): React.CSSProperties =>
           );
         })()}
 
-        {/* Body sections */}
+        {/* Body sections — floated image so text wraps underneath if content is longer */}
         {body.map((s, bi) => {
-          const idx = sections.indexOf(s);
+          const imgLeft = bi % 2 === 0;
           return (
-            <div key={s.order} id={sectionSlug(s.heading)} style={{ scrollMarginTop: 32, ...hlStyle(s.heading) }}>
+            <div key={s.order} id={sectionSlug(s.heading)} style={{ scrollMarginTop: 32, overflow: "hidden", ...hlStyle(s.heading) }}>
               {divider}
-              <ImgPlaceholder height={170} />
-              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 12 }}>
+              {/* Floated illustration — text wraps around it and fills any space below */}
+              <div style={{
+                float: imgLeft ? "left" : "right",
+                marginRight: imgLeft ? 28 : 0,
+                marginLeft: imgLeft ? 0 : 28,
+                marginBottom: 16,
+                width: 340,
+                height: sectionSvgs[s.order] ? 130 : 130,
+                borderRadius: 9,
+                background: "rgba(22,61,38,.04)",
+                border: "1px solid rgba(22,61,38,.1)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+                overflow: "hidden",
+              }}>
+                {sectionSvgs[s.order] ? (
+                  <div dangerouslySetInnerHTML={{ __html: sectionSvgs[s.order] }} style={{ lineHeight: 0, display: "block" }} />
+                ) : (
+                  <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(22,61,38,.22)" strokeWidth="1.5" strokeLinecap="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
+                  </svg>
+                )}
+              </div>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 10 }}>
                 {s.eyebrow || s.type.replace(/_/g, " ").toUpperCase()}
               </div>
-              <h3 style={{ margin: "0 0 16px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-.2px", color: C.dark }}>{s.heading}</h3>
+              <h3 style={{ margin: "0 0 14px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-.2px", color: C.dark }}>{s.heading}</h3>
               {s.content.paragraphs.map((p, i) =>
-                <EditablePara key={p.id} text={p.text} style={{ margin: i < s.content.paragraphs.length - 1 ? "0 0 14px" : 0, fontSize: 15, fontWeight: 400, lineHeight: 1.7, color: "#222" }} paraKey={p.id} sectionOrder={s.order} paraId={p.id} onEditParagraph={onEditParagraph} />
+                <EditablePara key={p.id} text={p.text} style={{ margin: i < s.content.paragraphs.length - 1 ? "0 0 13px" : 0, fontSize: 14, fontWeight: 400, lineHeight: 1.7, color: "#222" }} paraKey={p.id} sectionOrder={s.order} paraId={p.id} onEditParagraph={onEditParagraph} />
               )}
               {s.content.bullets.length > 0 && (
-                <ul style={{ margin: "14px 0 0", paddingLeft: 22, display: "flex", flexDirection: "column", gap: 7 }}>
+                <ul style={{ margin: "12px 0 0", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 6 }}>
                   {s.content.bullets.map((b, i) => (
-                    <li key={i} style={{ fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: "#222" }}>{b}</li>
+                    <li key={i} style={{ fontSize: 13.5, fontWeight: 400, lineHeight: 1.65, color: "#222" }}>{b}</li>
                   ))}
                 </ul>
               )}
+              <div style={{ clear: "both" }} />
             </div>
           );
         })}
@@ -1490,24 +1541,37 @@ const hlStyle = (heading: string): React.CSSProperties =>
               {divider}
               <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.mid, marginBottom: 14 }}>BY THE NUMBERS</div>
               <h3 style={{ margin: "0 0 22px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, color: C.dark }}>{statsSection.heading}</h3>
-              {ps.length > 0 && (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 24 }}>
-                  {ps.slice(0, 3).map((p, i) => {
-                    const m = p.text.match(/(\d[\d,.%x+\-]*\s*(?:billion|million|thousand|percent|%|x)?)/i);
-                    const stat = m ? m[1].trim() : "—";
-                    const caption = p.text.replace(stat, "").trim().slice(0, 72);
-                    return (
-                      <div key={i} style={{ padding: "20px 16px", background: C.dark, borderRadius: 10, textAlign: "center" }}>
-                        <div style={{ fontSize: 30, fontWeight: 700, color: C.salmon, lineHeight: 1, letterSpacing: -1 }}>{stat}</div>
-                        <div style={{ marginTop: 10, fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.6)", lineHeight: 1.45 }}>{caption || p.text.slice(0, 60)}</div>
+              {ps.length > 0 && (() => {
+                const STAT_RE = /(\$[\d,.]+\s*(?:billion|million|trillion|[bBmMtTkK])\b|\b\d[\d,.]*\s*(?:%|[xX]\b|×|\+)|\b\d[\d,.]*\s*(?:billion|million|trillion|thousand)\b)/i;
+                // Only paragraphs with a real number become stat cards; the rest render as plain text
+                const statParas = ps.filter(p => STAT_RE.test(p.text.replace(/<[^>]+>/g, "")));
+                const plainParas = ps.filter(p => !STAT_RE.test(p.text.replace(/<[^>]+>/g, "")));
+                const cardParas = statParas.slice(0, 3);
+                const overflowParas = [...statParas.slice(3), ...plainParas];
+                return (
+                  <>
+                    {cardParas.length > 0 && (
+                      <div style={{ display: "grid", gridTemplateColumns: `repeat(${cardParas.length},1fr)`, gap: 14, marginBottom: 24 }}>
+                        {cardParas.map((p, i) => {
+                          const clean = p.text.replace(/<[^>]+>/g, "");
+                          const m = clean.match(STAT_RE)!;
+                          const stat = m[1].trim();
+                          const caption = clean.replace(stat, "").replace(/\s{2,}/g, " ").trim().slice(0, 80);
+                          return (
+                            <div key={i} style={{ padding: "20px 16px", background: C.dark, borderRadius: 10, textAlign: "center" }}>
+                              <div style={{ fontSize: 30, fontWeight: 700, color: C.salmon, lineHeight: 1, letterSpacing: -1 }}>{stat}</div>
+                              <div style={{ marginTop: 10, fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.6)", lineHeight: 1.45 }}>{caption || clean.slice(0, 60)}</div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-              {ps.slice(3).map((p, i) =>
-                richPara(p.text, { margin: "0 0 13px", fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: "#222" }, i)
-              )}
+                    )}
+                    {overflowParas.map((p, i) =>
+                      richPara(p.text, { margin: "0 0 13px", fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: "#222" }, i)
+                    )}
+                  </>
+                );
+              })()}
             </div>
           );
         })()}
@@ -1722,7 +1786,7 @@ function sectionTypeStyle(type: string) {
 
 // ─── Editor screen ────────────────────────────────────────────────────────────
 
-function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[] }) {
+function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, sidebarCollapsed }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; sidebarCollapsed?: boolean }) {
   // ── Plan step state ────────────────────────────────────────────────────────
   type EditorStep = "plan" | "article";
   const [editorStep, setEditorStep] = useState<EditorStep>("plan");
@@ -2024,6 +2088,16 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
             setSeoTitle(data.article.title?.slice(0, 60) ?? "");
             setDraftSentAt(prev => prev ?? new Date().toISOString());
             setDraftState("success");
+            // Reconstruct outline from article sections so "Back to plan" shows structure
+            setArticleTitle(data.article.title ?? "");
+            setOutline(data.article.sections.map(s => ({
+              order: s.order,
+              type: s.type,
+              title: s.heading,
+              eyebrow: s.eyebrow,
+              description: [],
+              keywords: [],
+            })));
           } else {
             setArticleError(data.error ?? "Could not load saved article");
           }
@@ -2758,16 +2832,17 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           )}
         </div>
 
-        {/* Loading skeletons */}
+        {/* Loading — Option D combo */}
         {outlineLoading && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {[1,2,3,4,5].map(i => (
-              <div key={i} style={{ height: 72, borderRadius: 10, background: "rgba(22,61,38,.06)", animation: "pulse 1.4s ease-in-out infinite", animationDelay: `${i * 0.1}s` }} />
-            ))}
-            <div style={{ marginTop: 8, fontSize: 12, color: "rgba(22,61,38,.5)", fontWeight: 500 }}>
-              Building a GEO-optimised plan for this topic…
-            </div>
-          </div>
+          <ComboLoader
+            stages={["Research", "Structure", "Keywords", "Validate"]}
+            phases={[
+              { label: "Researching topic", text: "Scanning top-ranking content for this topic...\nIdentifying audience pain points and search intent...\nMapping the competitive keyword landscape..." },
+              { label: "Structuring outline", text: "Introduction → Market Context → Strategy Deep-Dive → Case Study → FAQ → Key Takeaways" },
+              { label: "Mapping keywords", text: "Embedding primary and secondary keywords into each section...\nAligning section types: introduction, section, comparison, faq, conclusion..." },
+              { label: "Validating plan", text: "✓  GEO section coverage — complete\n✓  Keyword density — balanced\n✓  Conclusion bullets — ready\n✓  FAQ fan-out — structured" },
+            ]}
+          />
         )}
 
         {/* Error state */}
@@ -2981,8 +3056,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   </svg>
                 </button>
               )}
-              {/* Load from server — only shown when card was previously sent to Sanity (server has the article) */}
-              {activeCardId && !readCardCache(activeCardId)?.articleData && sentToSanityIds.has(activeCardId) && (
+              {/* Load from server — shown when card has a saved article on server (sent to Sanity or article-in-progress) */}
+              {activeCardId && !readCardCache(activeCardId)?.articleData && (sentToSanityIds.has(activeCardId) || withArticleIds.has(activeCardId)) && (
                 <button
                   disabled={restoring}
                   onClick={async () => {
@@ -3001,6 +3076,15 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         setGeoScore(data.geoScore ?? null);
                         setQualityFlags(data.qualityFlags ?? []);
                         setSeoTitle(data.article.title?.slice(0, 60) ?? "");
+                        setArticleTitle(data.article.title ?? "");
+                        setOutline(data.article.sections.map(s => ({
+                          order: s.order,
+                          type: s.type,
+                          title: s.heading,
+                          eyebrow: s.eyebrow,
+                          description: [],
+                          keywords: [],
+                        })));
                         setEditorStep("article");
                       }
                     } catch { /* non-fatal */ }
@@ -3055,15 +3139,17 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       {PresenceBanner}
       <StepBar current={2} />
 
-      {/* Loading skeleton */}
+      {/* Loading — Option D combo */}
       {articleLoading && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 720 }}>
-          <div style={{ height: 130, borderRadius: 12, background: "rgba(22,61,38,.09)", animation: "pulse 1.4s ease-in-out infinite" }} />
-          <div style={{ height: 240, background: "rgba(22,61,38,.05)", animation: "pulse 1.4s ease-in-out infinite", animationDelay: ".1s" }} />
-          <div style={{ height: 180, borderRadius: 10, background: "rgba(22,61,38,.04)", animation: "pulse 1.4s ease-in-out infinite", animationDelay: ".2s" }} />
-          <div style={{ height: 160, borderRadius: 10, background: "rgba(22,61,38,.04)", animation: "pulse 1.4s ease-in-out infinite", animationDelay: ".3s" }} />
-          <div style={{ marginTop: 8, fontSize: 12, color: "rgba(22,61,38,.5)", fontWeight: 500 }}>Writing your article — usually takes 30–60 seconds…</div>
-        </div>
+        <ComboLoader
+          stages={["Intro", "Sections", "FAQ", "GEO"]}
+          phases={[
+            { label: "Writing introduction", text: "Crafting the opening hook and framing the reader's challenge...\nEmbedding market context with named sources and statistics..." },
+            { label: "Writing body sections", text: "Expanding each outline section into full paragraphs...\nAdding concrete examples, named tools, and source attribution..." },
+            { label: "Writing FAQ + conclusion", text: "Generating Q&A pairs for AI fan-out coverage...\nCrafting key takeaways as specific, actionable bullets..." },
+            { label: "Running GEO checks", text: "✓  Named sources — scanning\n✓  Statistics with attribution — scanning\n✓  AI-tell density — scanning\n⟳  Finalising GEO score..." },
+          ]}
+        />
       )}
 
       {/* Error state */}
@@ -3097,6 +3183,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               onScore={onScore}
               onPublish={onPublish}
               highlightedSectionId={highlightedSectionId}
+              sidebarCollapsed={sidebarCollapsed}
               brandVoiceMatches={
                 brandVoiceStatus?.status === "partial"
                   ? (brandVoiceStatus.residuals?.flatMap(r => r.violations.map(v => v.match)) ?? [])
@@ -4485,6 +4572,105 @@ function saveTrashedCards(cards: DraftCard[]) {
   catch {}
 }
 
+// ── Option-D loading animation: stage pills + live typewriter stream ──────────
+function ComboLoader({ stages, phases }: {
+  stages: string[];
+  phases: { label: string; text: string }[];
+}) {
+  const [phaseIdx, setPhaseIdx] = useState(0);
+  const [displayed, setDisplayed] = useState("");
+  const phaseIdxRef = useRef(0);
+  const displayedRef = useRef("");
+  const erasingRef   = useRef(false);
+  const timerRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    function tick() {
+      const ph = phases[phaseIdxRef.current];
+      if (!ph) return;
+      if (erasingRef.current) {
+        if (displayedRef.current.length > 0) {
+          displayedRef.current = displayedRef.current.slice(0, Math.max(0, displayedRef.current.length - 5));
+          setDisplayed(displayedRef.current);
+          timerRef.current = setTimeout(tick, 10);
+        } else {
+          erasingRef.current = false;
+          phaseIdxRef.current = (phaseIdxRef.current + 1) % phases.length;
+          setPhaseIdx(phaseIdxRef.current);
+          timerRef.current = setTimeout(tick, 280);
+        }
+      } else {
+        if (displayedRef.current.length < ph.text.length) {
+          const ch = ph.text[displayedRef.current.length];
+          displayedRef.current += ch;
+          setDisplayed(displayedRef.current);
+          timerRef.current = setTimeout(tick, ch === "\n" ? 75 : 25);
+        } else {
+          const isLast = phaseIdxRef.current === phases.length - 1;
+          timerRef.current = setTimeout(() => { erasingRef.current = true; tick(); }, isLast ? 2200 : 900);
+        }
+      }
+    }
+    tick();
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const phaseProgress = phases[phaseIdx] ? displayed.length / Math.max(1, phases[phaseIdx].text.length) : 0;
+  const progressPct = Math.min(100, Math.round(((phaseIdx + phaseProgress) / stages.length) * 100));
+
+  return (
+    <div style={{ maxWidth: 640 }}>
+      {/* Stage pills */}
+      <div style={{ display: "flex", borderRadius: 10, border: "1px solid rgba(22,61,38,.12)", overflow: "hidden", marginBottom: 16 }}>
+        {stages.map((s, i) => {
+          const isDone   = i < phaseIdx;
+          const isActive = i === phaseIdx;
+          return (
+            <div key={i} style={{
+              flex: 1,
+              padding: "9px 4px",
+              textAlign: "center",
+              fontSize: 10,
+              fontWeight: 600,
+              letterSpacing: ".04em",
+              lineHeight: 1.3,
+              borderRight: i < stages.length - 1 ? "1px solid rgba(22,61,38,.12)" : "none",
+              background: isActive ? "#2ECC71" : isDone ? "rgba(46,204,113,.14)" : "rgba(22,61,38,.03)",
+              color: isActive ? "#0A2218" : isDone ? "#1B6B3A" : "rgba(22,61,38,.45)",
+              transition: "background .4s, color .4s",
+            }}>{s}</div>
+          );
+        })}
+      </div>
+
+      {/* Stream box */}
+      <div style={{ background: "rgba(22,61,38,.04)", border: "1px solid rgba(22,61,38,.1)", borderRadius: 12, padding: "16px 18px", minHeight: 108 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
+          <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#2ECC71", animation: "pulse 1.1s ease-in-out infinite" }} />
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".09em", textTransform: "uppercase" as const, color: "#2A6B45" }}>
+            {phases[phaseIdx]?.label ?? ""}
+          </span>
+        </div>
+        <div style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace", fontSize: 12.5, lineHeight: 1.75, color: "rgba(22,61,38,.75)", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {displayed}
+          <span style={{ display: "inline-block", width: 2, height: 14, background: "#2ECC71", verticalAlign: "middle", marginLeft: 1, animation: "blink .65s step-end infinite" }} />
+        </div>
+      </div>
+
+      {/* Progress bar + percentage */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14 }}>
+        <div style={{ flex: 1, height: 3, background: "rgba(22,61,38,.1)", borderRadius: 99, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${progressPct}%`, background: "linear-gradient(90deg,#2A6B45,#2ECC71)", borderRadius: 99, transition: "width .25s ease" }} />
+        </div>
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#2ECC71", fontVariantNumeric: "tabular-nums", minWidth: 34, textAlign: "right" as const }}>
+          {progressPct}%
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function AtelierV2Page() {
   const [screen, setScreen] = useState<Screen>("dashboard");
   const [collapsed, setCollapsed] = useState(false);
@@ -4765,7 +4951,7 @@ export default function AtelierV2Page() {
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}
           {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} />}
           {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} />}
-          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} />}
+          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} />}
           {screen === "score"      && <ScoreScreen onEditor={go("editor")} />}
           {screen === "keywords"   && <KeywordsScreen />}
           {screen === "publish"    && <PublishScreen />}
