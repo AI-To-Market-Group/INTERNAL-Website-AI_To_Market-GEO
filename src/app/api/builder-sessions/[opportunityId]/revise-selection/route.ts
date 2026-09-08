@@ -25,7 +25,7 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   try {
     const system =
-      `You are an expert editorial editor. Rewrite ONLY the selected text following the user's instruction. Keep facts accurate and style consistent with the article context. ${getBrandVoiceCompact()} Return only the revised text — no quotes, no markdown, no explanations.`;
+      `You are an expert editorial editor. Rewrite ONLY the selected text following the user's instruction. Keep facts accurate and style consistent with the article context. ${await getBrandVoiceCompact()} Return only the revised text — no quotes, no markdown, no explanations.`;
 
     const user =
       `Language: ${language}\n` +

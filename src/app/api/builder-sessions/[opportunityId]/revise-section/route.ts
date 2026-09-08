@@ -23,7 +23,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   try {
     const system = `You are an editorial outline editor. Revise one article section based on the request.
 
-${getBrandVoiceCompact()}
+${await getBrandVoiceCompact()}
 
 Return only valid JSON:
 { "order": number, "type": "section type", "title": "Revised heading", "description": ["bullet 1", "bullet 2", "bullet 3"], "keywords": ["kw1"] }

@@ -97,7 +97,7 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const system = `You are a senior editorial editor refining a draft article. Your goal: lift the writing to expert-level WITHOUT expanding its length and WITHOUT making it sound like consulting jargon.
 
-${getBrandVoicePrompt()}
+${await getBrandVoicePrompt()}
 
 Apply ALL of the following refinement rules:
 

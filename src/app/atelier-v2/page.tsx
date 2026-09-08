@@ -83,6 +83,24 @@ function writeCardCache(id: string, data: V2CardCache) {
   catch {}
 }
 
+// ─── Batch queue (localStorage) ───────────────────────────────────────────────
+
+interface BatchQueueEntry {
+  id: string;
+  title: string;
+  outline: V2OutlineSection[];
+  addedAt: string;
+}
+const BATCH_QUEUE_KEY = "v2_batch_queue";
+function readBatchQueue(): BatchQueueEntry[] {
+  try { return JSON.parse(localStorage.getItem(BATCH_QUEUE_KEY) ?? "[]") as BatchQueueEntry[]; }
+  catch { return []; }
+}
+function saveBatchQueue(entries: BatchQueueEntry[]) {
+  try { localStorage.setItem(BATCH_QUEUE_KEY, JSON.stringify(entries)); }
+  catch {}
+}
+
 // ─── Palette constants ────────────────────────────────────────────────────────
 
 const C = {
@@ -115,7 +133,7 @@ const CREDIT_BAR_GRADIENT = "linear-gradient(to right, #39FF14 0%, #FFD700 50%, 
 const NAV_ITEMS: [Screen, string, string, string][] = [
   ["dashboard",  "Overview",      "M3 3h6v6H3zM11 3h6v4h-6zM11 9h6v8h-6zM3 11h6v6H3z", ""],
   ["generate",   "New article",   "M10 2l1.8 5.2L17 9l-5.2 1.8L10 16l-1.8-5.2L3 9l5.2-1.8z", ""],
-  ["queue",      "Batch queue",   "M3 4h14v2H3zM3 9h14v2H3zM3 14h10v2H3z", "12"],
+  ["queue",      "Batch queue",   "M3 4h14v2H3zM3 9h14v2H3zM3 14h10v2H3z", ""],
   ["editor",     "Draft editor",  "M4 3h8l4 4v10H4z", ""],
   ["score",      "GEO score",     "M10 2a8 8 0 108 8h-8z", ""],
   ["keywords",   "Prompt library","M2 8l6-6h8v8l-6 6zM12 5h2v2h-2z", ""],
@@ -151,11 +169,12 @@ function HamburgerIcon() {
   );
 }
 
-function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabel, onUsageClick }: {
+function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabel, onUsageClick, queueCount }: {
   screen: Screen; setScreen: (s: Screen) => void;
   collapsed: boolean; onToggle: () => void;
   creditPct: number; creditLabel: string;
   onUsageClick: () => void;
+  queueCount: number;
 }) {
   const w = collapsed ? 64 : 248;
   const [showVersionMenu, setShowVersionMenu] = useState(false);
@@ -163,17 +182,17 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
   return (
     <aside style={{ width: w, flexShrink: 0, background: C.dark, color: C.white, display: "flex", flexDirection: "column", padding: collapsed ? "20px 10px" : "24px 16px", position: "sticky", top: 0, height: "100vh", transition: "width .22s ease, padding .22s ease", overflow: "hidden" }}>
 
-      {/* Toggle + logo row */}
+      {/* Logo left, toggle right */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24, minWidth: 0 }}>
-        <button onClick={onToggle} title={collapsed ? "Expand sidebar" : "Collapse sidebar"} style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,.1)", border: "none", cursor: "pointer", color: C.white }}>
-          <HamburgerIcon />
-        </button>
         {!collapsed && (
-          <div style={{ minWidth: 0, overflow: "hidden" }}>
+          <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
             <img src="/logo-white.svg" alt="AI To Market" style={{ height: 24, width: "auto", display: "block" }} />
             <div style={{ marginTop: 4, fontSize: 10, fontWeight: 600, letterSpacing: ".1em", opacity: .55, whiteSpace: "nowrap" }}>GEO CONTENT DESK</div>
           </div>
         )}
+        <button onClick={onToggle} title={collapsed ? "Expand sidebar" : "Collapse sidebar"} style={{ flexShrink: 0, marginLeft: "auto", display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,.1)", border: "none", cursor: "pointer", color: C.white }}>
+          <HamburgerIcon />
+        </button>
       </div>
 
       {/* Workspace / version switcher — hidden when collapsed */}
@@ -238,8 +257,9 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
 
       {/* Nav */}
       <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {NAV_ITEMS.map(([key, label, d, badge]) => {
+        {NAV_ITEMS.map(([key, label, d]) => {
           const isActive = screen === key;
+          const badge = key === "queue" ? (queueCount > 0 ? String(queueCount) : "") : "";
           return (
             <button
               key={key}
@@ -310,8 +330,8 @@ function EyebrowLabel({ children }: { children: React.ReactNode }) {
   return <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid }}>{children}</div>;
 }
 
-function StageChip({ label, bg }: { label: string; bg: string }) {
-  return <span style={{ fontSize: 11, fontWeight: 600, padding: "4px 9px", borderRadius: 20, border: "1px solid rgba(22,61,38,.2)", background: bg }}>{label}</span>;
+function StageChip({ label, bg, color, borderColor }: { label: string; bg: string; color?: string; borderColor?: string }) {
+  return <span style={{ fontSize: 11, fontWeight: 600, padding: "4px 9px", borderRadius: 20, border: `1px solid ${borderColor ?? "rgba(22,61,38,.2)"}`, background: bg, color: color ?? "inherit" }}>{label}</span>;
 }
 
 // ─── Dashboard screen ─────────────────────────────────────────────────────────
@@ -487,7 +507,7 @@ const PIPELINE_STEPS = [
   "Stage for human review, never auto publish below 75",
 ];
 
-function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, defaultFlow }: { onSettings: () => void; onQueue: () => void; onSessionCreated: (opportunityId: string, brief: BriefFields) => void; seedKeywords: string[]; defaultFlow?: FlowMode }) {
+function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, defaultFlow }: { onSettings: () => void; onQueue: () => void; onSessionCreated: (opportunityId: string, brief: BriefFields) => void; seedKeywords: string[]; defaultFlow?: FlowMode; }) {
   const [flow, setFlow] = useState<FlowMode>(defaultFlow ?? "wizard");
   const [step, setStep] = useState(1);
   const [promptText, setPromptText] = useState("what is generative engine optimization");
@@ -883,7 +903,7 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
 
       {/* ── Keywords ── */}
       {flow === "keywords" && (
-        <KeywordWorkspace seedKeywords={seedKeywords} />
+        <KeywordWorkspace seedKeywords={seedKeywords} onCreated={onSessionCreated} />
       )}
     </div>
   );
@@ -902,9 +922,124 @@ const QUEUE_ROWS_DATA = [
   { prompt: "how often do engines refresh sources",  cluster: "Mechanics",   stage: "Queued",        pct: 0,   action: "View" },
 ];
 
-function QueueScreen({ onEditor, onGenerate }: { onEditor: () => void; onGenerate: () => void }) {
-  const [selected, setSelected] = useState([1, 2, 4]);
-  const toggleSelect = (i: number) => setSelected(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]);
+function QueueScreen({
+  onEditor, onGenerate, batchQueueEntries, onRemoveFromBatchQueue, onActivateCard,
+}: {
+  onEditor: () => void;
+  onGenerate: () => void;
+  batchQueueEntries: BatchQueueEntry[];
+  onRemoveFromBatchQueue: (id: string) => void;
+  onActivateCard: (id: string) => void;
+}) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const [buildProgress, setBuildProgress] = useState<Map<string, { pct: number; stage: string; error?: string }>>(new Map());
+  const [building, setBuilding] = useState(false);
+
+  const toggleSelect = (id: string) => setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggleAll = () => setSelected(selected.length === batchQueueEntries.length ? [] : batchQueueEntries.map(e => e.id));
+  const selectedSet = new Set(selected);
+
+  async function buildArticle(entry: BatchQueueEntry) {
+    const { id, title, outline } = entry;
+    if (outline.length === 0) {
+      setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 0, stage: "Failed", error: "No outline — resume the plan first" }); return m; });
+      return;
+    }
+    setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 10, stage: "Drafting" }); return m; });
+    try {
+      const res = await fetch(`/api/builder-sessions/${id}/validate-plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ outline }),
+      });
+      if (!res.ok) throw new Error(`Server error (${res.status})`);
+      if (!res.body) throw new Error("No response body");
+      setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 33, stage: "Drafting" }); return m; });
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let articleReceived = false;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split("\n");
+        buf = parts.pop() ?? "";
+        for (const line of parts) {
+          if (!line.startsWith("data: ")) continue;
+          const json = line.slice(6).trim();
+          if (!json || json === "[DONE]") continue;
+          try {
+            const parsed = JSON.parse(json) as {
+              article?: GeneratedArticle;
+              quality_flags?: { section?: string; type: string; message: string }[];
+              geo_score?: { score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number };
+              brand_voice_status?: { status: string; residuals?: { paragraphIndex: number; violations: { type: string; match: string }[] }[] } | null;
+            };
+            if (parsed.article && !articleReceived) {
+              articleReceived = true;
+              setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 80, stage: "Scoring" }); return m; });
+              writeCardCache(id, {
+                editorStep: "article",
+                outline,
+                articleTitle: title,
+                articleData: parsed.article!,
+                geoScore: parsed.geo_score ?? null,
+                qualityFlags: parsed.quality_flags ?? [],
+                brandVoiceStatus: parsed.brand_voice_status ?? null,
+                seoPageTitle: parsed.article!.title ?? title,
+                seoTitle: "", seoSlug: "", seoMetaDesc: "", seoTags: [],
+                savedAt: new Date().toISOString(),
+              });
+            }
+          } catch { /* partial chunk */ }
+        }
+      }
+      setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 100, stage: "Done" }); return m; });
+    } catch (e) {
+      setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 100, stage: "Failed", error: e instanceof Error ? e.message : String(e) }); return m; });
+    }
+  }
+
+  async function handleBuild() {
+    const toBuild = selected.filter(id => {
+      const p = buildProgress.get(id);
+      return !p || p.stage === "Failed";
+    });
+    if (toBuild.length === 0) return;
+    setBuilding(true);
+    await Promise.all(toBuild.map(id => {
+      const entry = batchQueueEntries.find(e => e.id === id);
+      return entry ? buildArticle(entry) : Promise.resolve();
+    }));
+    setBuilding(false);
+  }
+
+  function stageStyle(stage: string) {
+    if (stage === "Failed") return { bg: "rgba(249,57,67,.06)", color: C.red, border: "rgba(249,57,67,.28)" };
+    if (stage === "Done")   return { bg: "rgba(22,61,38,.07)", color: C.mid, border: "rgba(22,61,38,.35)" };
+    if (stage === "Drafting" || stage === "Scoring") return { bg: "rgba(22,61,38,.04)", color: "rgba(22,61,38,.7)", border: "rgba(22,61,38,.18)" };
+    return { bg: "rgba(22,61,38,.03)", color: "rgba(22,61,38,.45)", border: "rgba(22,61,38,.14)" };
+  }
+
+  if (batchQueueEntries.length === 0) {
+    return (
+      <div style={{ textAlign: "center", padding: "80px 24px" }}>
+        <div style={{ width: 52, height: 52, borderRadius: 14, background: "rgba(22,61,38,.07)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke={C.mid} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 9h10M7 12h6"/></svg>
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: C.dark, marginBottom: 8 }}>Batch queue is empty</div>
+        <div style={{ fontSize: 13, color: "rgba(22,61,38,.55)", marginBottom: 24, maxWidth: 320, margin: "0 auto 24px" }}>
+          Save a plan in the editor and click <strong>Queue</strong> on the card to stage it for batch generation.
+        </div>
+        <button onClick={onGenerate} style={{ padding: "11px 20px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer" }}>
+          New GEO article
+        </button>
+      </div>
+    );
+  }
+
+  const canBuild = selected.length > 0 && !building;
 
   return (
     <div>
@@ -912,37 +1047,75 @@ function QueueScreen({ onEditor, onGenerate }: { onEditor: () => void; onGenerat
       <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 20px", marginBottom: 24, border: "1px solid rgba(22,61,38,.16)", borderRadius: 10, background: C.white }}>
         <div style={{ whiteSpace: "nowrap", flexShrink: 0, fontSize: 12, fontWeight: 600 }}>{selected.length} selected</div>
         <div style={{ width: 1, height: 20, background: "rgba(22,61,38,.14)" }} />
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {["Rescore", "Approve", "Schedule", "Reassign voice"].map(ba => (
-            <button key={ba} style={{ whiteSpace: "nowrap", flexShrink: 0, padding: "8px 13px", border: "1px solid rgba(22,61,38,.22)", borderRadius: 7, fontSize: 11, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark }}>{ba}</button>
-          ))}
+        <button
+          onClick={handleBuild}
+          disabled={!canBuild}
+          style={{ whiteSpace: "nowrap", padding: "8px 16px", borderRadius: 7, background: canBuild ? C.dark : "rgba(22,61,38,.08)", color: canBuild ? C.white : "rgba(22,61,38,.3)", fontSize: 11, fontWeight: 700, border: "none", cursor: canBuild ? "pointer" : "default", display: "flex", alignItems: "center", gap: 7, transition: "all .15s" }}
+        >
+          {building
+            ? <><span style={{ display: "inline-block", animation: "spin .9s linear infinite" }}>↻</span> Building…</>
+            : <>
+                <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polygon points="4,2 14,8 4,14"/></svg>
+                Build selected
+              </>
+          }
+        </button>
+        <div style={{ marginLeft: "auto", whiteSpace: "nowrap", flexShrink: 0, fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.55)" }}>
+          {batchQueueEntries.length} article{batchQueueEntries.length !== 1 ? "s" : ""} in queue
         </div>
-        <div style={{ marginLeft: "auto", whiteSpace: "nowrap", flexShrink: 0, fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.62)" }}>Batch 041 · started 09:12 · 12 prompts</div>
       </div>
 
       {/* Queue table */}
       <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "28px 2.2fr 1.1fr 1fr 1.4fr 80px", gap: 16, padding: "14px 20px", background: "rgba(22,61,38,.04)", fontSize: 10, fontWeight: 700, letterSpacing: ".12em", color: C.mid }}>
-          <div /><div>PROMPT</div><div>CLUSTER</div><div>STAGE</div><div>PROGRESS</div><div />
+        {/* Header row */}
+        <div style={{ display: "grid", gridTemplateColumns: "28px 2.8fr 1fr 1.5fr 80px", gap: 16, padding: "14px 20px", background: "rgba(22,61,38,.04)", alignItems: "center" }}>
+          <button onClick={toggleAll} style={{ width: 18, height: 18, borderRadius: 5, border: selected.length === batchQueueEntries.length ? "none" : "1.5px solid rgba(22,61,38,.3)", background: selected.length === batchQueueEntries.length ? C.dark : "transparent", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {selected.length === batchQueueEntries.length && <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>}
+          </button>
+          {(["TITLE", "STAGE", "PROGRESS"] as const).map(h => (
+            <div key={h} style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".12em", color: C.mid }}>{h}</div>
+          ))}
+          <div />
         </div>
-        {QUEUE_ROWS_DATA.map((q, i) => {
-          const isSelected = selected.includes(i);
-          const fill = q.stage === "Needs review" ? C.red : q.pct === 100 ? C.mid : C.dark;
-          const stageBg = q.stage === "Needs review" ? "rgba(249,57,67,.08)" : q.stage === "Approved" ? "rgba(24,95,0,.1)" : "rgba(22,61,38,.05)";
+
+        {batchQueueEntries.map(entry => {
+          const prog = buildProgress.get(entry.id);
+          const stage = prog?.stage ?? "Queued";
+          const pct = prog?.pct ?? 0;
+          const isSelected = selectedSet.has(entry.id);
+          const isDone = stage === "Done";
+          const isFailed = stage === "Failed";
+          const isBuilding = stage === "Drafting" || stage === "Scoring";
+          const fill = isFailed ? C.red : isDone ? C.mid : C.dark;
+          const s = stageStyle(stage);
           return (
-            <div key={q.prompt} style={{ display: "grid", gridTemplateColumns: "28px 2.2fr 1.1fr 1fr 1.4fr 80px", gap: 16, alignItems: "center", padding: "15px 20px", borderTop: "1px solid rgba(22,61,38,.08)" }}>
-              <button onClick={() => toggleSelect(i)} style={{ width: 16, height: 16, borderRadius: 4, border: "1px solid rgba(22,61,38,.3)", background: isSelected ? C.dark : "transparent", cursor: "pointer", flexShrink: 0 }} />
-              <div style={{ fontSize: 13, fontWeight: 600, lineHeight: 1.4 }}>{q.prompt}</div>
-              <div style={{ fontSize: 11, fontWeight: 600, color: C.mid }}>{q.cluster}</div>
-              <div><StageChip label={q.stage} bg={stageBg} /></div>
+            <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "28px 2.8fr 1fr 1.5fr 80px", gap: 16, alignItems: "center", padding: "15px 20px", borderTop: "1px solid rgba(22,61,38,.08)" }}>
+              <button onClick={() => toggleSelect(entry.id)} style={{ width: 18, height: 18, borderRadius: 5, border: isSelected ? "none" : "1.5px solid rgba(22,61,38,.3)", background: isSelected ? C.dark : "transparent", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {isSelected && <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>}
+              </button>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.4, color: "#1a1a1a" }}>{entry.title || entry.id.slice(0, 16)}</div>
+                {isFailed && prog?.error && <div style={{ fontSize: 11, color: C.red, marginTop: 3, opacity: .85 }}>{prog.error}</div>}
+              </div>
+              <div>
+                <StageChip label={stage} bg={s.bg} color={s.color} borderColor={s.border} />
+              </div>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ flex: 1, height: 6, borderRadius: 4, background: "rgba(22,61,38,.1)", overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${q.pct}%`, background: fill }} />
+                  <div style={{ height: "100%", width: `${pct}%`, background: fill, transition: isBuilding ? "width .6s ease" : "width .2s ease" }} />
                 </div>
-                <div style={{ fontSize: 11, fontWeight: 600, width: 32, textAlign: "right" }}>{q.pct}%</div>
+                <div style={{ fontSize: 11, fontWeight: 600, width: 34, textAlign: "right", color: "rgba(22,61,38,.6)" }}>{pct}%</div>
               </div>
-              <div style={{ textAlign: "right" }}>
-                <button onClick={onEditor} style={{ fontSize: 11, fontWeight: 600, color: C.mid, background: "none", border: "none", cursor: "pointer" }}>{q.action}</button>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", alignItems: "center" }}>
+                {isDone && (
+                  <button onClick={() => { onActivateCard(entry.id); onEditor(); }} style={{ fontSize: 11, fontWeight: 700, color: C.dark, background: "none", border: "none", cursor: "pointer" }}>Open</button>
+                )}
+                {isFailed && (
+                  <button onClick={() => void buildArticle(entry)} style={{ fontSize: 11, fontWeight: 700, color: C.red, background: "none", border: "none", cursor: "pointer" }}>Retry</button>
+                )}
+                {!isDone && !isBuilding && (
+                  <button onClick={() => { onRemoveFromBatchQueue(entry.id); setSelected(prev => prev.filter(x => x !== entry.id)); }} title="Remove from queue" style={{ fontSize: 14, fontWeight: 400, color: "rgba(22,61,38,.3)", background: "none", border: "none", cursor: "pointer", lineHeight: 1 }}>×</button>
+                )}
               </div>
             </div>
           );
@@ -982,7 +1155,7 @@ function UserAvatar({ email, size = 24 }: { email: string; size?: number }) {
   );
 }
 
-function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity, hasArticle }: {
+function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity, hasArticle, isNew, batchQueued, onSendToBatchQueue }: {
   card: DraftCard;
   onCreateArticle: () => void;
   onResume?: () => void;
@@ -991,13 +1164,22 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
   hasSavedPlan?: boolean;
   sentToSanity?: boolean;
   hasArticle?: boolean;
+  isNew?: boolean;
+  batchQueued?: boolean;
+  onSendToBatchQueue?: () => void;
 }) {
   const rawScore = card.brief.predictedScore ? parseInt(card.brief.predictedScore) : NaN;
   const scoreNum = isNaN(rawScore) ? null : rawScore;
   const hasActive = activeUsers && activeUsers.length > 0;
+  const cardRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isNew || !cardRef.current) return;
+    cardRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [isNew]);
 
   return (
-    <div style={{ padding: 24, border: `1px solid ${hasActive ? "rgba(22,61,38,.22)" : C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", height: 300, position: "relative", opacity: hasActive ? 0.62 : 1, transition: "opacity .15s ease", cursor: hasActive ? "not-allowed" : "default" }}>
+    <div ref={cardRef} style={{ padding: 24, border: `1px solid ${isNew ? "#2ECC71" : hasActive ? "rgba(22,61,38,.22)" : C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", height: 300, position: "relative", opacity: hasActive ? 0.62 : 1, transition: "opacity .15s ease", cursor: hasActive ? "not-allowed" : "default", animation: isNew ? "card-new-glow 3.5s ease forwards" : undefined }}>
       {/* X remove button — hidden when locked */}
       {onRemove && !hasActive && (
         <button
@@ -1018,7 +1200,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
           </span>
         ) : sentToSanity ? (
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.13)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
-            <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 5l2.5 2.5 4.5-4.5"/></svg>
+            <svg viewBox="0 0 20 12" width="15" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 6l3 3 5.5-5.5"/><path d="M9 6l3 3 5.5-5.5"/></svg>
             SENT TO SANITY
           </span>
         ) : hasArticle ? (
@@ -1026,13 +1208,21 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
             <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 5l2.5 2.5 4.5-4.5"/></svg>
             ARTICLE SAVED
           </span>
+        ) : batchQueued ? (
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.12)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 9h10M7 12h6"/></svg>
+            IN BATCH QUEUE
+          </span>
         ) : hasSavedPlan ? (
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.12)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
-            <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 5l2.5 2.5 4.5-4.5"/></svg>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
             PLAN SAVED
           </span>
         ) : (
-          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#888", background: "#E8E8E8", padding: "4px 9px", borderRadius: 20 }}>READY TO BUILD</span>
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#888", background: "#E8E8E8", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/></svg>
+            READY TO BUILD
+          </span>
         )}
         {scoreNum !== null && (
           <div style={{ textAlign: "right", flexShrink: 0 }}>
@@ -1107,13 +1297,16 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
             >
               Resume Plan
             </button>
-            <button
-              onClick={onCreateArticle}
-              title="Regenerate from scratch"
-              style={{ padding: "11px 14px", borderRadius: 8, background: "transparent", color: C.muted, fontSize: 12, fontWeight: 500, border: `1px solid ${C.border}`, cursor: "pointer", whiteSpace: "nowrap" }}
-            >
-              Regenerate
-            </button>
+            {!batchQueued && onSendToBatchQueue && (
+              <button
+                onClick={e => { e.stopPropagation(); onSendToBatchQueue(); }}
+                title="Add to batch queue for bulk generation"
+                style={{ padding: "11px 13px", borderRadius: 8, background: "transparent", color: C.mid, fontSize: 12, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 5 }}
+              >
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                Queue
+              </button>
+            )}
           </>
         ) : (
           <button
@@ -1137,9 +1330,9 @@ interface GeneratedArticle { title: string; sections: GeneratedSection[]; }
 
 // ─── Newsletter article renderer ──────────────────────────────────────────────
 
-function ImgPlaceholder({ height = 200 }: { height?: number }) {
+function ImgPlaceholder({ height = 200, width }: { height?: number; width?: number }) {
   return (
-    <div style={{ width: "100%", height, background: "rgba(22,61,38,.07)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 28 }}>
+    <div style={{ width: width ?? "100%", flexShrink: 0, height, background: "rgba(22,61,38,.07)", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(22,61,38,.22)" strokeWidth="1.5" strokeLinecap="round">
         <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
       </svg>
@@ -1320,7 +1513,7 @@ function EditablePara({ text, style, paraKey, sectionOrder, paraId, onEditParagr
   return <p key={paraKey} {...shared} ref={elRef as React.RefObject<HTMLParagraphElement>} />;
 }
 
-function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet }: {
+function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet, sidebarCollapsed }: {
   article: GeneratedArticle;
   outline: V2OutlineSection[];
   onScore: () => void;
@@ -1330,12 +1523,41 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
   onEditParagraph?: (sectionOrder: number, paraId: number, text: string) => void;
   onEditHeading?: (sectionOrder: number, heading: string) => void;
   onEditBullet?: (sectionOrder: number, bulletIdx: number, text: string) => void;
+  sidebarCollapsed?: boolean;
 }) {
   const { sections } = article;
   const [subEmail, setSubEmail] = useState("");
   const [subState, setSubState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [faqOpenIdx, setFaqOpenIdx] = useState<number | null>(0);
   const articleBodyRef = useRef<HTMLDivElement>(null);
+  const [sectionSvgs, setSectionSvgs] = useState<Record<number, string>>({});
+
+  // Fetch Claude-generated SVG illustrations for each body section
+  useEffect(() => {
+    const bodySections = sections.filter(s =>
+      !/^(introduction|stats|conclusion|faq)$/i.test(s.type) &&
+      !/frequently.asked/i.test(s.type) &&
+      !/frequently asked/i.test(s.heading)
+    );
+    if (!bodySections.length) return;
+    setSectionSvgs({});
+    bodySections.forEach(s => {
+      const summary = s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400);
+      fetch("/api/illustration-generate-claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ heading: s.heading, sectionType: s.type, summary }),
+      })
+        .then(r => r.json())
+        .then((data: { svgString?: string | null }) => {
+          if (data.svgString) {
+            setSectionSvgs(prev => ({ ...prev, [s.order]: data.svgString! }));
+          }
+        })
+        .catch(() => { /* silently keep placeholder */ });
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [article.title]);
 
   // DOM-based brand voice violation highlighting — same approach as v1
   useEffect(() => {
@@ -1413,7 +1635,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
   const divider = <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "40px 0" }} />;
 
   return (
-    <div ref={articleBodyRef} style={{ maxWidth: 720, margin: 0 }}>
+    <div ref={articleBodyRef} style={{ maxWidth: sidebarCollapsed ? 900 : 720, margin: 0, transition: "max-width .22s ease" }}>
 
       {/* Newsletter masthead */}
       <div className="v2-masthead" style={{ background: C.dark, padding: "28px 44px", borderRadius: "12px 12px 0 0" }}>
@@ -1421,9 +1643,6 @@ const hlStyle = (heading: string): React.CSSProperties =>
         <h1 style={{ margin: "0 0 10px", fontSize: 24, fontWeight: 700, lineHeight: 1.2, color: C.white, letterSpacing: "-.3px" }}>
           {article.title}
         </h1>
-        <div style={{ fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.45)" }}>
-          {sections.length} sections · generated article
-        </div>
       </div>
 
       {/* Hero image */}
@@ -1457,27 +1676,60 @@ const hlStyle = (heading: string): React.CSSProperties =>
           );
         })()}
 
-        {/* Body sections */}
+        {/* Body sections — floated image so text wraps underneath if content is longer */}
         {body.map((s, bi) => {
-          const idx = sections.indexOf(s);
+          const imgLeft = bi % 2 === 0;
           return (
-            <div key={s.order} id={sectionSlug(s.heading)} style={{ scrollMarginTop: 32, ...hlStyle(s.heading) }}>
+            <div key={s.order} id={sectionSlug(s.heading)} style={{ scrollMarginTop: 32, overflow: "hidden", ...hlStyle(s.heading) }}>
               {divider}
-              <ImgPlaceholder height={170} />
-              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 12 }}>
+              {/* Floated illustration — text wraps around it and fills any space below */}
+              <div style={{
+                float: imgLeft ? "left" : "right",
+                marginRight: imgLeft ? 28 : 0,
+                marginLeft: imgLeft ? 0 : 28,
+                marginBottom: 16,
+                width: 300,
+                height: 240,
+                borderRadius: 9,
+                background: "rgba(22,61,38,.04)",
+                border: "1px solid rgba(22,61,38,.1)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                flexShrink: 0,
+                overflow: "hidden",
+              }}>
+                {sectionSvgs[s.order] ? (
+                  <div
+                    dangerouslySetInnerHTML={{
+                      __html: sectionSvgs[s.order]
+                        .replace(/width="340"/, 'width="300"')
+                        .replace(/height="130"/, 'height="240"')
+                        .replace(/viewBox="0 0 340 130"/, 'viewBox="0 0 340 130" preserveAspectRatio="xMidYMid meet"'),
+                    }}
+                    style={{ lineHeight: 0, display: "block", width: 300, height: 240 }}
+                  />
+                ) : (
+                  <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(22,61,38,.22)" strokeWidth="1.5" strokeLinecap="round">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
+                  </svg>
+                )}
+              </div>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 10 }}>
                 {s.eyebrow || s.type.replace(/_/g, " ").toUpperCase()}
               </div>
-              <h3 style={{ margin: "0 0 16px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-.2px", color: C.dark }}>{s.heading}</h3>
+              <h3 style={{ margin: "0 0 14px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-.2px", color: C.dark }}>{s.heading}</h3>
               {s.content.paragraphs.map((p, i) =>
-                <EditablePara key={p.id} text={p.text} style={{ margin: i < s.content.paragraphs.length - 1 ? "0 0 14px" : 0, fontSize: 15, fontWeight: 400, lineHeight: 1.7, color: "#222" }} paraKey={p.id} sectionOrder={s.order} paraId={p.id} onEditParagraph={onEditParagraph} />
+                <EditablePara key={p.id} text={p.text} style={{ margin: i < s.content.paragraphs.length - 1 ? "0 0 13px" : 0, fontSize: 14, fontWeight: 400, lineHeight: 1.7, color: "#222" }} paraKey={p.id} sectionOrder={s.order} paraId={p.id} onEditParagraph={onEditParagraph} />
               )}
               {s.content.bullets.length > 0 && (
-                <ul style={{ margin: "14px 0 0", paddingLeft: 22, display: "flex", flexDirection: "column", gap: 7 }}>
+                <ul style={{ margin: "12px 0 0", paddingLeft: 20, display: "flex", flexDirection: "column", gap: 6 }}>
                   {s.content.bullets.map((b, i) => (
-                    <li key={i} style={{ fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: "#222" }}>{b}</li>
+                    <li key={i} style={{ fontSize: 13.5, fontWeight: 400, lineHeight: 1.65, color: "#222" }}>{b}</li>
                   ))}
                 </ul>
               )}
+              <div style={{ clear: "both" }} />
             </div>
           );
         })}
@@ -1490,24 +1742,37 @@ const hlStyle = (heading: string): React.CSSProperties =>
               {divider}
               <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.mid, marginBottom: 14 }}>BY THE NUMBERS</div>
               <h3 style={{ margin: "0 0 22px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, color: C.dark }}>{statsSection.heading}</h3>
-              {ps.length > 0 && (
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 24 }}>
-                  {ps.slice(0, 3).map((p, i) => {
-                    const m = p.text.match(/(\d[\d,.%x+\-]*\s*(?:billion|million|thousand|percent|%|x)?)/i);
-                    const stat = m ? m[1].trim() : "—";
-                    const caption = p.text.replace(stat, "").trim().slice(0, 72);
-                    return (
-                      <div key={i} style={{ padding: "20px 16px", background: C.dark, borderRadius: 10, textAlign: "center" }}>
-                        <div style={{ fontSize: 30, fontWeight: 700, color: C.salmon, lineHeight: 1, letterSpacing: -1 }}>{stat}</div>
-                        <div style={{ marginTop: 10, fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.6)", lineHeight: 1.45 }}>{caption || p.text.slice(0, 60)}</div>
+              {ps.length > 0 && (() => {
+                const STAT_RE = /(\$[\d,.]+\s*(?:billion|million|trillion|[bBmMtTkK])\b|\b\d[\d,.]*\s*(?:%|[xX]\b|×|\+)|\b\d[\d,.]*\s*(?:billion|million|trillion|thousand)\b)/i;
+                // Only paragraphs with a real number become stat cards; the rest render as plain text
+                const statParas = ps.filter(p => STAT_RE.test(p.text.replace(/<[^>]+>/g, "")));
+                const plainParas = ps.filter(p => !STAT_RE.test(p.text.replace(/<[^>]+>/g, "")));
+                const cardParas = statParas.slice(0, 3);
+                const overflowParas = [...statParas.slice(3), ...plainParas];
+                return (
+                  <>
+                    {cardParas.length > 0 && (
+                      <div style={{ display: "grid", gridTemplateColumns: `repeat(${cardParas.length},1fr)`, gap: 14, marginBottom: 24 }}>
+                        {cardParas.map((p, i) => {
+                          const clean = p.text.replace(/<[^>]+>/g, "");
+                          const m = clean.match(STAT_RE)!;
+                          const stat = m[1].trim();
+                          const caption = clean.replace(stat, "").replace(/\s{2,}/g, " ").trim().slice(0, 80);
+                          return (
+                            <div key={i} style={{ padding: "20px 16px", background: C.dark, borderRadius: 10, textAlign: "center" }}>
+                              <div style={{ fontSize: 30, fontWeight: 700, color: C.salmon, lineHeight: 1, letterSpacing: -1 }}>{stat}</div>
+                              <div style={{ marginTop: 10, fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.6)", lineHeight: 1.45 }}>{caption || clean.slice(0, 60)}</div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    );
-                  })}
-                </div>
-              )}
-              {ps.slice(3).map((p, i) =>
-                richPara(p.text, { margin: "0 0 13px", fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: "#222" }, i)
-              )}
+                    )}
+                    {overflowParas.map((p, i) =>
+                      richPara(p.text, { margin: "0 0 13px", fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: "#222" }, i)
+                    )}
+                  </>
+                );
+              })()}
             </div>
           );
         })()}
@@ -1722,7 +1987,7 @@ function sectionTypeStyle(type: string) {
 
 // ─── Editor screen ────────────────────────────────────────────────────────────
 
-function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[] }) {
+function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, sidebarCollapsed, newCardId, batchQueuedIds, onSendToBatchQueue }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; sidebarCollapsed?: boolean; newCardId?: string | null; batchQueuedIds?: string[]; onSendToBatchQueue?: (id: string, title: string, outline: V2OutlineSection[]) => void }) {
   // ── Plan step state ────────────────────────────────────────────────────────
   type EditorStep = "plan" | "article";
   const [editorStep, setEditorStep] = useState<EditorStep>("plan");
@@ -2024,6 +2289,16 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
             setSeoTitle(data.article.title?.slice(0, 60) ?? "");
             setDraftSentAt(prev => prev ?? new Date().toISOString());
             setDraftState("success");
+            // Reconstruct outline from article sections so "Back to plan" shows structure
+            setArticleTitle(data.article.title ?? "");
+            setOutline(data.article.sections.map(s => ({
+              order: s.order,
+              type: s.type,
+              title: s.heading,
+              eyebrow: s.eyebrow,
+              description: [],
+              keywords: [],
+            })));
           } else {
             setArticleError(data.error ?? "Could not load saved article");
           }
@@ -2540,7 +2815,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
 
                   {/* Header */}
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, paddingRight: 28 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: C.mid, background: "rgba(24,95,0,.1)", padding: "4px 9px", borderRadius: 20 }}>PLAN SAVED</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: C.mid, background: "rgba(24,95,0,.1)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                      PLAN SAVED
+                    </span>
                     <span style={{ fontSize: 11, fontWeight: 600, padding: "4px 9px", borderRadius: 20, background: C.faint, color: "rgba(22,61,38,.6)" }}>{plan.outline.length} sections</span>
                   </div>
 
@@ -2572,13 +2850,30 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                     {timeAgo(plan.savedAt)}
                   </div>
 
-                  {/* Resume button */}
-                  <button
-                    onClick={() => handleResumeSavedPlan(plan)}
-                    style={{ width: "100%", padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
-                  >
-                    Resume plan
-                  </button>
+                  {/* Footer actions */}
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <button
+                      onClick={() => handleResumeSavedPlan(plan)}
+                      style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
+                    >
+                      Resume plan
+                    </button>
+                    {!batchQueuedIds?.includes(plan.opportunityId) && onSendToBatchQueue ? (
+                      <button
+                        onClick={() => onSendToBatchQueue(plan.opportunityId, plan.articleTitle, plan.outline)}
+                        title="Add to batch queue"
+                        style={{ padding: "11px 13px", borderRadius: 8, background: "transparent", color: C.mid, fontSize: 12, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer", display: "flex", alignItems: "center", gap: 5, whiteSpace: "nowrap" }}
+                      >
+                        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                        Queue
+                      </button>
+                    ) : batchQueuedIds?.includes(plan.opportunityId) ? (
+                      <div style={{ padding: "11px 13px", borderRadius: 8, background: "rgba(24,95,0,.07)", border: `1px solid rgba(22,61,38,.18)`, display: "flex", alignItems: "center", gap: 5, color: C.mid, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>
+                        <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>
+                        Queued
+                      </div>
+                    ) : null}
+                  </div>
                 </div>
               ))}
             </div>
@@ -2595,6 +2890,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           const pendingCards = draftCards!.filter(card => !isSent(card.opportunityId) && !hasArticleSaved(card.opportunityId) && !hasPlan(card.opportunityId));
           return (
             <>
+              {/* ── Articles with saved drafts ── */}
               {articleCards.length > 0 && (
                 <div style={{ marginBottom: 48 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
@@ -2608,6 +2904,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
                     {articleCards.map(card => {
                       const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
+                      const plan = savedPlans.find(p => p.opportunityId === card.opportunityId);
                       return (
                         <DraftCardComponent
                           key={card.opportunityId}
@@ -2616,14 +2913,53 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                           onResume={onResumeChat}
                           onRemove={() => onTrashCard?.(card.opportunityId)}
                           activeUsers={activeUsers}
-                          hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
+                          hasSavedPlan={!!plan}
                           hasArticle
+                          isNew={card.opportunityId === newCardId}
+                          batchQueued={batchQueuedIds?.includes(card.opportunityId)}
+                          onSendToBatchQueue={onSendToBatchQueue ? () => onSendToBatchQueue(card.opportunityId, plan?.articleTitle ?? card.brief.prompt ?? "Untitled", plan?.outline ?? []) : undefined}
                         />
                       );
                     })}
                   </div>
                 </div>
               )}
+
+              {/* ── Ready to build ── */}
+              {pendingCards.length > 0 && (
+                <div style={{ marginBottom: 48 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 28 }}>
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 8 }}>ALL OPPORTUNITIES</div>
+                      <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
+                        {pendingCards.length} brief{pendingCards.length !== 1 ? "s" : ""} ready to build
+                      </h2>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
+                    {pendingCards.map(card => {
+                      const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
+                      const plan = savedPlans.find(p => p.opportunityId === card.opportunityId);
+                      return (
+                        <DraftCardComponent
+                          key={card.opportunityId}
+                          card={card}
+                          onCreateArticle={() => onActivateCard(card.opportunityId)}
+                          onResume={onResumeChat}
+                          onRemove={() => onTrashCard?.(card.opportunityId)}
+                          activeUsers={activeUsers}
+                          hasSavedPlan={!!plan}
+                          isNew={card.opportunityId === newCardId}
+                          batchQueued={batchQueuedIds?.includes(card.opportunityId)}
+                          onSendToBatchQueue={onSendToBatchQueue ? () => onSendToBatchQueue(card.opportunityId, plan?.articleTitle ?? card.brief.prompt ?? "Untitled", plan?.outline ?? []) : undefined}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Sent to Sanity — least actionable, shown last ── */}
               {sentCards.length > 0 && (
                 <div style={{ marginBottom: 48 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
@@ -2653,30 +2989,6 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   </div>
                 </div>
               )}
-              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 28 }}>
-                <div>
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 8 }}>ALL OPPORTUNITIES</div>
-                  <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
-                    {pendingCards.length} brief{pendingCards.length !== 1 ? "s" : ""} ready to build
-                  </h2>
-                </div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
-                {pendingCards.map(card => {
-                  const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
-                  return (
-                    <DraftCardComponent
-                      key={card.opportunityId}
-                      card={card}
-                      onCreateArticle={() => onActivateCard(card.opportunityId)}
-                      onResume={onResumeChat}
-                      onRemove={() => onTrashCard?.(card.opportunityId)}
-                      activeUsers={activeUsers}
-                      hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
-                    />
-                  );
-                })}
-              </div>
             </>
           );
         })()}
@@ -2758,16 +3070,17 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           )}
         </div>
 
-        {/* Loading skeletons */}
+        {/* Loading — Option D combo */}
         {outlineLoading && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {[1,2,3,4,5].map(i => (
-              <div key={i} style={{ height: 72, borderRadius: 10, background: "rgba(22,61,38,.06)", animation: "pulse 1.4s ease-in-out infinite", animationDelay: `${i * 0.1}s` }} />
-            ))}
-            <div style={{ marginTop: 8, fontSize: 12, color: "rgba(22,61,38,.5)", fontWeight: 500 }}>
-              Building a GEO-optimised plan for this topic…
-            </div>
-          </div>
+          <ComboLoader
+            stages={["Research", "Structure", "Keywords", "Validate"]}
+            phases={[
+              { label: "Researching topic", text: "Scanning top-ranking content for this topic...\nIdentifying audience pain points and search intent...\nMapping the competitive keyword landscape..." },
+              { label: "Structuring outline", text: "Introduction → Market Context → Strategy Deep-Dive → Case Study → FAQ → Key Takeaways" },
+              { label: "Mapping keywords", text: "Embedding primary and secondary keywords into each section...\nAligning section types: introduction, section, comparison, faq, conclusion..." },
+              { label: "Validating plan", text: "✓  GEO section coverage — complete\n✓  Keyword density — balanced\n✓  Conclusion bullets — ready\n✓  FAQ fan-out — structured" },
+            ]}
+          />
         )}
 
         {/* Error state */}
@@ -2981,8 +3294,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   </svg>
                 </button>
               )}
-              {/* Load from server — only shown when card was previously sent to Sanity (server has the article) */}
-              {activeCardId && !readCardCache(activeCardId)?.articleData && sentToSanityIds.has(activeCardId) && (
+              {/* Load from server — shown when card has a saved article on server (sent to Sanity or article-in-progress) */}
+              {activeCardId && !readCardCache(activeCardId)?.articleData && (sentToSanityIds.has(activeCardId) || withArticleIds.has(activeCardId)) && (
                 <button
                   disabled={restoring}
                   onClick={async () => {
@@ -3001,6 +3314,15 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         setGeoScore(data.geoScore ?? null);
                         setQualityFlags(data.qualityFlags ?? []);
                         setSeoTitle(data.article.title?.slice(0, 60) ?? "");
+                        setArticleTitle(data.article.title ?? "");
+                        setOutline(data.article.sections.map(s => ({
+                          order: s.order,
+                          type: s.type,
+                          title: s.heading,
+                          eyebrow: s.eyebrow,
+                          description: [],
+                          keywords: [],
+                        })));
                         setEditorStep("article");
                       }
                     } catch { /* non-fatal */ }
@@ -3055,15 +3377,17 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       {PresenceBanner}
       <StepBar current={2} />
 
-      {/* Loading skeleton */}
+      {/* Loading — Option D combo */}
       {articleLoading && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 720 }}>
-          <div style={{ height: 130, borderRadius: 12, background: "rgba(22,61,38,.09)", animation: "pulse 1.4s ease-in-out infinite" }} />
-          <div style={{ height: 240, background: "rgba(22,61,38,.05)", animation: "pulse 1.4s ease-in-out infinite", animationDelay: ".1s" }} />
-          <div style={{ height: 180, borderRadius: 10, background: "rgba(22,61,38,.04)", animation: "pulse 1.4s ease-in-out infinite", animationDelay: ".2s" }} />
-          <div style={{ height: 160, borderRadius: 10, background: "rgba(22,61,38,.04)", animation: "pulse 1.4s ease-in-out infinite", animationDelay: ".3s" }} />
-          <div style={{ marginTop: 8, fontSize: 12, color: "rgba(22,61,38,.5)", fontWeight: 500 }}>Writing your article — usually takes 30–60 seconds…</div>
-        </div>
+        <ComboLoader
+          stages={["Intro", "Sections", "FAQ", "GEO"]}
+          phases={[
+            { label: "Writing introduction", text: "Crafting the opening hook and framing the reader's challenge...\nEmbedding market context with named sources and statistics..." },
+            { label: "Writing body sections", text: "Expanding each outline section into full paragraphs...\nAdding concrete examples, named tools, and source attribution..." },
+            { label: "Writing FAQ + conclusion", text: "Generating Q&A pairs for AI fan-out coverage...\nCrafting key takeaways as specific, actionable bullets..." },
+            { label: "Running GEO checks", text: "✓  Named sources — scanning\n✓  Statistics with attribution — scanning\n✓  AI-tell density — scanning\n⟳  Finalising GEO score..." },
+          ]}
+        />
       )}
 
       {/* Error state */}
@@ -3097,6 +3421,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               onScore={onScore}
               onPublish={onPublish}
               highlightedSectionId={highlightedSectionId}
+              sidebarCollapsed={sidebarCollapsed}
               brandVoiceMatches={
                 brandVoiceStatus?.status === "partial"
                   ? (brandVoiceStatus.residuals?.flatMap(r => r.violations.map(v => v.match)) ?? [])
@@ -3807,7 +4132,21 @@ const PUBLISH_RULES = [
 
 function PublishScreen() {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 32, alignItems: "start" }}>
+    <div style={{ position: "relative" }}>
+      {/* Coming soon overlay — gradient over content */}
+      <div style={{ position: "absolute", inset: 0, zIndex: 10, pointerEvents: "none", borderRadius: 16,
+        background: "linear-gradient(160deg, rgba(247,245,242,0) 0%, rgba(247,245,242,.55) 40%, rgba(247,245,242,.88) 70%, rgba(247,245,242,.97) 100%)",
+      }} />
+      {/* Label — fixed so it's truly centered in the viewport */}
+      <div style={{ position: "fixed", inset: 0, zIndex: 11, display: "flex", alignItems: "center", justifyContent: "center", pointerEvents: "none" }}>
+        <div style={{ textAlign: "center", pointerEvents: "auto" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".2em", color: C.mid, marginBottom: 8 }}>COMING SOON</div>
+          <div style={{ fontSize: 26, fontWeight: 700, color: C.dark, letterSpacing: "-.4px" }}>Publishing & integrations</div>
+          <div style={{ marginTop: 10, fontSize: 13, color: "rgba(22,61,38,.55)", fontWeight: 400 }}>This feature is in development. Stay tuned.</div>
+        </div>
+      </div>
+      {/* Page content — visible but locked */}
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 32, alignItems: "start", filter: "blur(1.5px)", userSelect: "none", pointerEvents: "none" }}>
       <section>
         <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 600 }}>Destinations</h2>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
@@ -3844,6 +4183,7 @@ function PublishScreen() {
           <div style={{ marginTop: 8, fontSize: 12, fontWeight: 400, color: "rgba(22,61,38,.7)" }}>Thursday 09:00, 4 articles, WordPress plus schema injection.</div>
         </div>
       </aside>
+    </div>
     </div>
   );
 }
@@ -3928,65 +4268,285 @@ function AnalyticsScreen() {
   );
 }
 
-// ─── Settings screen ──────────────────────────────────────────────────────────
+// ─── Brand voice screen ───────────────────────────────────────────────────────
 
-const BANNED_WORDS = ["unlock", "game changer", "revolutionary", "leverage", "supercharge", "seamless"];
-const GUARDRAILS = [
-  { label: "Never claim a number without a source",          box: C.dark },
-  { label: "No product mentions before the final section",   box: C.dark },
-  { label: "Flag any sentence over 30 words",                box: "transparent" },
-];
+interface BrandVoiceData {
+  company_name: string;
+  website: string;
+  brand_description: string;
+  audience: string;
+  tone: string[];
+  preferred_style: string[];
+  forbidden_phrases: string[];
+  guardrails: { label: string; active: boolean }[];
+}
+
+function EditableList({ items, onChange, placeholder }: {
+  items: string[];
+  onChange: (items: string[]) => void;
+  placeholder: string;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [editIdx, setEditIdx] = useState<number | null>(null);
+  const [editVal, setEditVal] = useState("");
+
+  function remove(i: number) { onChange(items.filter((_, idx) => idx !== i)); }
+  function commitAdd() {
+    const v = draft.trim();
+    if (v) onChange([...items, v]);
+    setDraft(""); setAdding(false);
+  }
+  function commitEdit(i: number) {
+    const v = editVal.trim();
+    if (v) onChange(items.map((it, idx) => idx === i ? v : it));
+    setEditIdx(null); setEditVal("");
+  }
+
+  const ta: React.CSSProperties = { width: "100%", padding: "10px 12px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 7, fontSize: 13, lineHeight: 1.6, color: "#1a1a1a", background: C.white, resize: "vertical", outline: "none", fontFamily: "inherit" };
+
+  return (
+    <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, background: C.white, overflow: "hidden" }}>
+      {items.map((item, i) => (
+        <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "14px 16px", borderBottom: `1px solid rgba(22,61,38,.07)` }}>
+          {/* Number badge */}
+          <div style={{ flexShrink: 0, width: 22, height: 22, borderRadius: "50%", background: "rgba(22,61,38,.07)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: C.mid, marginTop: 1 }}>{i + 1}</div>
+
+          {editIdx === i ? (
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
+              <textarea rows={2} value={editVal} onChange={e => setEditVal(e.target.value)} style={{ ...ta }} autoFocus />
+              <div style={{ display: "flex", gap: 7 }}>
+                <button onClick={() => commitEdit(i)} style={{ padding: "5px 14px", borderRadius: 6, background: C.dark, color: C.white, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer" }}>Save</button>
+                <button onClick={() => { setEditIdx(null); setEditVal(""); }} style={{ padding: "5px 12px", borderRadius: 6, background: "transparent", color: C.muted, fontSize: 11, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer" }}>Cancel</button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div style={{ flex: 1, fontSize: 13, lineHeight: 1.6, color: "#1a1a1a", fontWeight: 400, paddingTop: 2 }}>{item}</div>
+              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                <button onClick={() => { setEditIdx(i); setEditVal(item); }} title="Edit" style={{ width: 28, height: 28, borderRadius: 6, background: "transparent", border: `1px solid ${C.border}`, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.muted }}>
+                  <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M11.5 2.5a1.414 1.414 0 0 1 2 2L5 13H3v-2L11.5 2.5z"/></svg>
+                </button>
+                <button onClick={() => remove(i)} title="Remove" style={{ width: 28, height: 28, borderRadius: 6, background: "transparent", border: "1px solid rgba(249,57,67,.25)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.red }}>
+                  <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      ))}
+
+      {adding ? (
+        <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8, background: "rgba(22,61,38,.02)" }}>
+          <textarea rows={2} value={draft} onChange={e => setDraft(e.target.value)} placeholder={placeholder} style={{ ...ta }} autoFocus />
+          <div style={{ display: "flex", gap: 7 }}>
+            <button onClick={commitAdd} style={{ padding: "5px 14px", borderRadius: 6, background: C.dark, color: C.white, fontSize: 11, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
+            <button onClick={() => { setAdding(false); setDraft(""); }} style={{ padding: "5px 12px", borderRadius: 6, background: "transparent", color: C.muted, fontSize: 11, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer" }}>Cancel</button>
+          </div>
+        </div>
+      ) : (
+        <button onClick={() => setAdding(true)} style={{ width: "100%", padding: "11px 16px", textAlign: "left", background: "transparent", border: "none", cursor: "pointer", fontSize: 12, fontWeight: 700, color: C.mid, letterSpacing: ".04em", display: "flex", alignItems: "center", gap: 7 }}>
+          <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M8 2v12M2 8h12"/></svg>
+          Add rule
+        </button>
+      )}
+    </div>
+  );
+}
 
 function SettingsScreen() {
+  const [bv, setBv] = useState<BrandVoiceData | null>(null);
+  const [savedBv, setSavedBv] = useState<BrandVoiceData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
+  const [newPhrase, setNewPhrase] = useState("");
+  const [newGuardrail, setNewGuardrail] = useState("");
+
+  const isDirty = bv !== null && savedBv !== null && JSON.stringify(bv) !== JSON.stringify(savedBv);
+
+  useEffect(() => {
+    fetch("/api/brand-voice")
+      .then(r => r.ok ? r.json() : null)
+      .then((data: BrandVoiceData | null) => {
+        if (data) { setBv(data); setSavedBv(data); }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function handleSave() {
+    if (!bv || !isDirty) return;
+    setSaving(true);
+    try {
+      await fetch("/api/brand-voice", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bv) });
+      setSavedBv(bv);
+      setLastSavedAt(new Date());
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2500);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function addPhrase() {
+    const v = newPhrase.trim().toLowerCase();
+    if (!v || !bv) return;
+    setBv({ ...bv, forbidden_phrases: [...bv.forbidden_phrases, v] });
+    setNewPhrase("");
+  }
+
+  function addGuardrail() {
+    const v = newGuardrail.trim();
+    if (!v || !bv) return;
+    setBv({ ...bv, guardrails: [...bv.guardrails, { label: v, active: true }] });
+    setNewGuardrail("");
+  }
+
+  const fieldLabel = (t: string) => (
+    <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 10 }}>{t}</div>
+  );
+  const ta: React.CSSProperties = { width: "100%", padding: 14, border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, lineHeight: 1.6, color: "#1a1a1a", background: C.white, resize: "vertical", outline: "none", fontFamily: "inherit" };
+
+  if (loading) return (
+    <ComboLoader
+      stages={["Fetch", "Parse", "Ready"]}
+      phases={[
+        { label: "Loading brand voice", text: "Fetching your brand voice settings from the database...\nReading tone rules and style preferences..." },
+        { label: "Parsing configuration", text: "Preparing forbidden phrases list...\nLoading guardrails and audience definition..." },
+        { label: "Almost ready", text: "✓  Brand description\n✓  Audience\n✓  Tone rules\n✓  Style preferences\n✓  Guardrails" },
+      ]}
+    />
+  );
+  if (!bv) return <div style={{ padding: 48, color: C.red, fontSize: 13 }}>Could not load brand voice settings.</div>;
+
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 32, alignItems: "start" }}>
-      <section style={{ padding: 32, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
-        <h2 style={{ margin: "0 0 24px", fontSize: 18, fontWeight: 600 }}>Brand voice</h2>
-        <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
-          <div>
-            <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>HOUSE DESCRIPTION</label>
-            <textarea rows={4} defaultValue="Calm, premium, declarative. We explain before we sell. No hype, no exclamation marks, no jargon we would not say out loud to a CFO." style={{ width: "100%", padding: 14, border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, fontWeight: 400, lineHeight: 1.6, color: C.dark, background: C.bg, resize: "vertical", outline: "none" }} />
+    <>
+    {saving && (
+      <ComboLoader
+        stages={["Validate", "Save", "Cache"]}
+        phases={[
+          { label: "Validating changes", text: "Checking brand description...\nVerifying tone rules and forbidden phrases..." },
+          { label: "Saving to database", text: "Writing updated brand voice settings...\nAll generation routes will inherit these changes." },
+          { label: "Busting cache", text: "✓  Cache invalidated\n✓  Next generation picks up new rules\n✓  Brand voice updated" },
+        ]}
+      />
+    )}
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 40, alignItems: "start" }}>
+
+      {/* ── Left column ── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 36 }}>
+
+        {/* Company identity */}
+        <div style={{ padding: 20, borderRadius: 10, background: "rgba(24,95,0,.05)", border: "1px solid rgba(22,61,38,.14)" }}>
+          {fieldLabel("COMPANY IDENTITY")}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
+            <div>
+              <div style={{ fontSize: 11, color: "rgba(22,61,38,.55)", marginBottom: 5 }}>Company name</div>
+              <input
+                value={bv.company_name}
+                onChange={e => setBv({ ...bv, company_name: e.target.value })}
+                style={{ ...ta, resize: undefined, padding: "10px 12px" }}
+                placeholder="AI To Market"
+              />
+            </div>
+            <div>
+              <div style={{ fontSize: 11, color: "rgba(22,61,38,.55)", marginBottom: 5 }}>Website</div>
+              <input
+                value={bv.website}
+                onChange={e => setBv({ ...bv, website: e.target.value })}
+                style={{ ...ta, resize: undefined, padding: "10px 12px" }}
+                placeholder="https://aitomarketgroup.com/"
+              />
+            </div>
           </div>
-          {VOICE_DIALS.map(v => (
-            <div key={v.label}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 600, marginBottom: 10 }}>
-                <span>{v.label}</span><span style={{ fontWeight: 400, color: "rgba(22,61,38,.65)" }}>{v.value}</span>
-              </div>
-              <div style={{ height: 6, borderRadius: 4, background: "rgba(22,61,38,.1)", position: "relative" }}>
-                <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${v.pct}%`, background: C.dark, borderRadius: 4 }} />
-                <div style={{ position: "absolute", left: `${v.pct}%`, top: -5, width: 16, height: 16, marginLeft: -8, borderRadius: "50%", background: C.white, border: `2px solid ${C.dark}` }} />
-              </div>
-            </div>
-          ))}
-          <div>
-            <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>NEVER USE</label>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {BANNED_WORDS.map(w => (
-                <span key={w} style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 11px", borderRadius: 20, border: "1px solid rgba(22,61,38,.2)", fontSize: 12, fontWeight: 600 }}>{w}<span style={{ fontSize: 12, fontWeight: 400, color: "rgba(22,61,38,.5)" }}>×</span></span>
-              ))}
-            </div>
+          <div style={{ fontSize: 11, color: "rgba(22,61,38,.5)", lineHeight: 1.5 }}>
+            The company name is injected at the top of every generation prompt. Add wrong variants (AITOM, AI2M) to the Never Use list below so the brand voice checker flags them in drafts.
           </div>
         </div>
-      </section>
-      <aside style={{ display: "flex", flexDirection: "column", gap: 16, position: "sticky", top: 180 }}>
-        <div style={{ padding: 22, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
-          <EyebrowLabel>SAMPLE SENTENCE</EyebrowLabel>
-          <p style={{ margin: "14px 0 0", fontSize: 13, fontWeight: 400, lineHeight: 1.6 }}>Answer engines cite sources that state a position in one sentence. Most B2B blogs take four paragraphs to get there.</p>
-          <div style={{ marginTop: 16, fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.6)" }}>Regenerated from your current dials.</div>
+
+        {/* Brand description */}
+        <div>
+          {fieldLabel("BRAND DESCRIPTION")}
+          <textarea rows={3} value={bv.brand_description} onChange={e => setBv({ ...bv, brand_description: e.target.value })} style={ta} />
         </div>
-        <div style={{ padding: 22, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
-          <EyebrowLabel>GUARDRAILS</EyebrowLabel>
-          <div style={{ marginTop: 16, display: "flex", flexDirection: "column", gap: 12 }}>
-            {GUARDRAILS.map(g => (
-              <div key={g.label} style={{ display: "flex", alignItems: "flex-start", gap: 11 }}>
-                <span style={{ width: 16, height: 16, flexShrink: 0, marginTop: 1, borderRadius: 4, border: "1px solid rgba(22,61,38,.3)", background: g.box, display: "inline-block" }} />
-                <div style={{ fontSize: 12, fontWeight: 400, lineHeight: 1.5 }}>{g.label}</div>
+
+        {/* Audience */}
+        <div>
+          {fieldLabel("AUDIENCE")}
+          <textarea rows={3} value={bv.audience} onChange={e => setBv({ ...bv, audience: e.target.value })} style={ta} />
+        </div>
+
+        {/* Tone */}
+        <div>
+          {fieldLabel("TONE")}
+          <EditableList items={bv.tone} onChange={tone => setBv({ ...bv, tone })} placeholder="Add a tone rule…" />
+        </div>
+
+        {/* Style preferences */}
+        <div>
+          {fieldLabel("STYLE PREFERENCES")}
+          <EditableList items={bv.preferred_style} onChange={preferred_style => setBv({ ...bv, preferred_style })} placeholder="Add a style preference…" />
+        </div>
+
+        {/* Save */}
+        <div style={{ paddingTop: 8, borderTop: `1px solid ${C.border}` }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+            <button onClick={handleSave} disabled={saving || !isDirty} style={{ padding: "12px 28px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: (saving || !isDirty) ? "not-allowed" : "pointer", opacity: (saving || !isDirty) ? .35 : 1, transition: "opacity .15s" }}>
+              {saving ? "Saving…" : "Save brand voice"}
+            </button>
+            {saved && <span style={{ fontSize: 12, color: C.mid, fontWeight: 600 }}>Saved — next generation picks up changes</span>}
+          </div>
+          {lastSavedAt && (
+            <div style={{ marginTop: 8, fontSize: 11, color: "rgba(22,61,38,.45)" }}>
+              Last saved {lastSavedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {lastSavedAt.toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Right column ── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 32, position: "sticky", top: 180 }}>
+
+        {/* Never use */}
+        <div style={{ padding: 20, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
+          {fieldLabel("NEVER USE")}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 7, marginBottom: 14 }}>
+            {bv.forbidden_phrases.map(w => (
+              <span key={w} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 20, border: "1px solid rgba(22,61,38,.2)", fontSize: 12, fontWeight: 600, color: "#1a1a1a", background: C.bg }}>
+                {w}
+                <button onClick={() => setBv({ ...bv, forbidden_phrases: bv.forbidden_phrases.filter(p => p !== w) })} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.45)", fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
+              </span>
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={newPhrase} onChange={e => setNewPhrase(e.target.value)} onKeyDown={e => e.key === "Enter" && addPhrase()} placeholder="Add phrase…" style={{ flex: 1, padding: "7px 10px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 7, fontSize: 12, outline: "none", background: C.white, color: "#1a1a1a", fontFamily: "inherit" }} />
+            <button onClick={addPhrase} style={{ padding: "7px 14px", borderRadius: 7, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
+          </div>
+        </div>
+
+        {/* Guardrails */}
+        <div style={{ padding: 20, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
+          {fieldLabel("GUARDRAILS")}
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
+            {bv.guardrails.map((g, i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <input type="checkbox" checked={g.active} onChange={e => setBv({ ...bv, guardrails: bv.guardrails.map((gr, idx) => idx === i ? { ...gr, active: e.target.checked } : gr) })} style={{ width: 16, height: 16, accentColor: C.dark, cursor: "pointer", flexShrink: 0 }} />
+                <span style={{ flex: 1, fontSize: 12, lineHeight: 1.5, color: "#1a1a1a" }}>{g.label}</span>
+                <button onClick={() => setBv({ ...bv, guardrails: bv.guardrails.filter((_, idx) => idx !== i) })} style={{ background: "none", border: "none", cursor: "pointer", color: C.red, fontSize: 16, lineHeight: 1, padding: "0 4px" }}>×</button>
               </div>
             ))}
           </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={newGuardrail} onChange={e => setNewGuardrail(e.target.value)} onKeyDown={e => e.key === "Enter" && addGuardrail()} placeholder="Add guardrail…" style={{ flex: 1, padding: "7px 10px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 7, fontSize: 12, outline: "none", background: C.white, color: "#1a1a1a", fontFamily: "inherit" }} />
+            <button onClick={addGuardrail} style={{ padding: "7px 14px", borderRadius: 7, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
+          </div>
         </div>
-      </aside>
+      </div>
+
     </div>
+    </>
   );
 }
 
@@ -4005,7 +4565,8 @@ const FEATURE_NAMES: Record<string, string> = {
   "content-forge/create":       "Content Forge — Create",
   "content-forge/blog":         "Content Forge — Blog",
   "content-forge/linkedin":     "Content Forge — LinkedIn",
-  "illustration":               "Illustration Generation",
+  "illustration":               "Illustration — OpenAI",
+  "illustration-claude":        "Illustration — Claude (SVG)",
   "article-outline":            "Article Outline",
   "article-draft":              "Article Draft",
   "article-refine":             "Article Refine",
@@ -4384,7 +4945,7 @@ function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChang
           </div>
 
           <div style={{ marginTop: 20, textAlign: "center", fontSize: 11, color: C.muted }}>
-            Token counts are exact values from the API. Costs use OpenAI list pricing — verify at platform.openai.com/usage.
+            Token counts are exact values from the API. OpenAI costs: platform.openai.com/usage · Anthropic costs: platform.claude.com/settings/usage · Image/vision tokens billed at the same rate as text.
           </div>
         </>
       )}
@@ -4485,6 +5046,107 @@ function saveTrashedCards(cards: DraftCard[]) {
   catch {}
 }
 
+// ── Option-D loading animation: stage pills + live typewriter stream ──────────
+function ComboLoader({ stages, phases }: {
+  stages: string[];
+  phases: { label: string; text: string }[];
+}) {
+  const [phaseIdx, setPhaseIdx] = useState(0);
+  const [displayed, setDisplayed] = useState("");
+  const phaseIdxRef = useRef(0);
+  const displayedRef = useRef("");
+  const erasingRef   = useRef(false);
+  const timerRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    function tick() {
+      const ph = phases[phaseIdxRef.current];
+      if (!ph) return;
+      if (erasingRef.current) {
+        if (displayedRef.current.length > 0) {
+          displayedRef.current = displayedRef.current.slice(0, Math.max(0, displayedRef.current.length - 5));
+          setDisplayed(displayedRef.current);
+          timerRef.current = setTimeout(tick, 10);
+        } else {
+          erasingRef.current = false;
+          phaseIdxRef.current = (phaseIdxRef.current + 1) % phases.length;
+          setPhaseIdx(phaseIdxRef.current);
+          timerRef.current = setTimeout(tick, 280);
+        }
+      } else {
+        if (displayedRef.current.length < ph.text.length) {
+          const ch = ph.text[displayedRef.current.length];
+          displayedRef.current += ch;
+          setDisplayed(displayedRef.current);
+          timerRef.current = setTimeout(tick, ch === "\n" ? 75 : 25);
+        } else {
+          const isLast = phaseIdxRef.current === phases.length - 1;
+          timerRef.current = setTimeout(() => { erasingRef.current = true; tick(); }, isLast ? 2200 : 900);
+        }
+      }
+    }
+    tick();
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const phaseProgress = phases[phaseIdx] ? displayed.length / Math.max(1, phases[phaseIdx].text.length) : 0;
+  const progressPct = Math.min(100, Math.round(((phaseIdx + phaseProgress) / stages.length) * 100));
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(247,245,242,.82)", backdropFilter: "blur(4px)" }}>
+    <div style={{ width: "100%", maxWidth: 540, padding: "0 24px" }}>
+      {/* Stage pills */}
+      <div style={{ display: "flex", borderRadius: 10, border: "1.5px solid rgba(22,61,38,.15)", overflow: "hidden", marginBottom: 16 }}>
+        {stages.map((s, i) => {
+          const isDone   = i < phaseIdx;
+          const isActive = i === phaseIdx;
+          return (
+            <div key={i} style={{
+              flex: 1,
+              padding: "9px 4px",
+              textAlign: "center",
+              fontSize: 10,
+              fontWeight: 600,
+              letterSpacing: ".04em",
+              lineHeight: 1.3,
+              borderRight: i < stages.length - 1 ? "1px solid rgba(22,61,38,.15)" : "none",
+              background: isActive ? "#185F00" : isDone ? "rgba(24,95,0,.1)" : "transparent",
+              color: isActive ? "#FFFFFF" : isDone ? "#185F00" : "rgba(22,61,38,.38)",
+              transition: "background .4s, color .4s",
+            }}>{s}</div>
+          );
+        })}
+      </div>
+
+      {/* Stream box */}
+      <div style={{ background: "#FFFFFF", border: "1.5px solid rgba(22,61,38,.14)", boxShadow: "0 1px 6px rgba(22,61,38,.06)", borderRadius: 12, padding: "16px 18px", minHeight: 108 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
+          <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#185F00", animation: "pulse 1.1s ease-in-out infinite" }} />
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".09em", textTransform: "uppercase" as const, color: "#185F00" }}>
+            {phases[phaseIdx]?.label ?? ""}
+          </span>
+        </div>
+        <div style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace", fontSize: 12.5, lineHeight: 1.75, color: "#163D26", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+          {displayed}
+          <span style={{ display: "inline-block", width: 2, height: 14, background: "#185F00", verticalAlign: "middle", marginLeft: 1, animation: "blink .65s step-end infinite" }} />
+        </div>
+      </div>
+
+      {/* Progress bar + percentage */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14 }}>
+        <div style={{ flex: 1, height: 3, background: "rgba(22,61,38,.1)", borderRadius: 99, overflow: "hidden" }}>
+          <div style={{ height: "100%", width: `${progressPct}%`, background: "linear-gradient(90deg,#185F00,#50C878)", borderRadius: 99, transition: "width .25s ease" }} />
+        </div>
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#185F00", fontVariantNumeric: "tabular-nums", minWidth: 34, textAlign: "right" as const }}>
+          {progressPct}%
+        </span>
+      </div>
+    </div>
+    </div>
+  );
+}
+
 export default function AtelierV2Page() {
   const [screen, setScreen] = useState<Screen>("dashboard");
   const [collapsed, setCollapsed] = useState(false);
@@ -4493,6 +5155,13 @@ export default function AtelierV2Page() {
   const [draftCards, setDraftCards] = useState<DraftCard[]>([]);
   const [trashedCards, setTrashedCards] = useState<DraftCard[]>([]);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
+  const [newCardId, setNewCardId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!newCardId) return;
+    const t = setTimeout(() => setNewCardId(null), 4000);
+    return () => clearTimeout(t);
+  }, [newCardId]);
   const [generateDefaultFlow, setGenerateDefaultFlow] = useState<FlowMode>("wizard");
   const [presenceData, setPresenceData] = useState<PresenceUser[]>([]);
   const { data: settings } = useSettings();
@@ -4554,6 +5223,26 @@ export default function AtelierV2Page() {
     window.history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : ""));
   }, [screen, activeCardId]);
 
+  // ── Batch queue ───────────────────────────────────────────────────────────────
+  const [batchQueueEntries, setBatchQueueEntries] = useState<BatchQueueEntry[]>([]);
+  useEffect(() => { setBatchQueueEntries(readBatchQueue()); }, []);
+
+  function handleSendToBatchQueue(id: string, title: string, outline: V2OutlineSection[]) {
+    setBatchQueueEntries(prev => {
+      if (prev.some(e => e.id === id)) return prev;
+      const next = [...prev, { id, title, outline, addedAt: new Date().toISOString() }];
+      saveBatchQueue(next);
+      return next;
+    });
+  }
+  function handleRemoveFromBatchQueue(id: string) {
+    setBatchQueueEntries(prev => {
+      const next = prev.filter(e => e.id !== id);
+      saveBatchQueue(next);
+      return next;
+    });
+  }
+
   // Load trashed cards from localStorage on mount
   useEffect(() => { setTrashedCards(readTrashedCards()); }, []);
 
@@ -4583,8 +5272,12 @@ export default function AtelierV2Page() {
 
   function handleSessionCreated(opportunityId: string, brief: BriefFields) {
     setCurrentOpportunityId(opportunityId);
-    setDraftCards(prev => [...prev, { opportunityId, brief, createdAt: new Date().toISOString() }]);
+    setDraftCards(prev => {
+      if (prev.some(c => c.opportunityId === opportunityId)) return prev;
+      return [{ opportunityId, brief, createdAt: new Date().toISOString() }, ...prev];
+    });
     setActiveCardId(null);
+    setNewCardId(opportunityId);
     setScreen("editor");
   }
 
@@ -4674,6 +5367,11 @@ export default function AtelierV2Page() {
         * { box-sizing: border-box; }
         @keyframes pulse { 0%,100%{opacity:.35}50%{opacity:.7} }
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes card-new-glow {
+          0%   { box-shadow: 0 0 0 3px rgba(46,204,113,.55), 0 0 18px rgba(46,204,113,.25); border-color: #2ECC71; }
+          65%  { box-shadow: 0 0 0 5px rgba(46,204,113,.18), 0 0 28px rgba(46,204,113,.12); border-color: rgba(46,204,113,.6); }
+          100% { box-shadow: none; border-color: rgba(22,61,38,.12); }
+        }
         ::-webkit-scrollbar { width: 6px; height: 6px; }
         ::-webkit-scrollbar-track { background: rgba(22,61,38,.06); border-radius: 8px; }
         ::-webkit-scrollbar-thumb { background: rgba(22,61,38,.28); border-radius: 8px; }
@@ -4756,6 +5454,7 @@ export default function AtelierV2Page() {
         creditPct={creditPct}
         creditLabel={creditLabel}
         onUsageClick={() => setScreen("usage")}
+        queueCount={batchQueueEntries.length}
       />
 
       <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
@@ -4764,8 +5463,8 @@ export default function AtelierV2Page() {
         <div style={{ flex: 1, padding: "32px 40px 64px" }}>
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}
           {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} />}
-          {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} />}
-          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} />}
+          {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} batchQueueEntries={batchQueueEntries} onRemoveFromBatchQueue={handleRemoveFromBatchQueue} onActivateCard={handleActivateCard} />}
+          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} newCardId={newCardId} batchQueuedIds={batchQueueEntries.map(e => e.id)} onSendToBatchQueue={handleSendToBatchQueue} />}
           {screen === "score"      && <ScoreScreen onEditor={go("editor")} />}
           {screen === "keywords"   && <KeywordsScreen />}
           {screen === "publish"    && <PublishScreen />}

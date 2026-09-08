@@ -144,7 +144,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     try {
       const system = `You are a GEO (Generative Engine Optimization) content strategist. Generate article outlines that AI search engines (ChatGPT, Perplexity, Claude, Gemini) will cite as authoritative sources.
 
-${getBrandVoicePrompt()}
+${await getBrandVoicePrompt()}
 
 Return only valid JSON with this exact shape (no markdown, no code block):
 {

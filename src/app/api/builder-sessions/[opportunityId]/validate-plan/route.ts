@@ -154,6 +154,29 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
     }
   }
 
+  // 3c. Stats sections — if the LLM buried the number after a citation preamble
+  //     ("According to Gartner (2024), 85%…"), reorder so the number leads.
+  //     Paragraphs with no extractable number are left untouched; the renderer
+  //     drops them from the stat-card grid and renders them as plain text instead.
+  const STAT_NUMBER_RE = /(\$[\d,.]+\s*(?:billion|million|trillion|[bBmMtTkK])\b|\b\d[\d,.]*\s*(?:%|[xX]\b|×|\+)|\b\d[\d,.]*\s*(?:billion|million|trillion|thousand)\b)/i;
+  // Matches "According to X (YYYY)," or "Per X," preambles at sentence start
+  const CITATION_PREAMBLE_RE = /^(?:according\s+to\s+[\w\s]+(?:\(\d{4}\))?,\s*|per\s+[\w\s]+,\s*)/i;
+  for (const sec of sections) {
+    if (!/^stats$/i.test(sec.type)) continue;
+    for (const para of sec.content.paragraphs) {
+      const clean = para.text.replace(/<[^>]+>/g, "").trim();
+      // Number already leads — no change needed
+      if (STAT_NUMBER_RE.test(clean.slice(0, 15))) continue;
+      // Number present but buried after a preamble — strip the preamble so number leads
+      if (STAT_NUMBER_RE.test(clean) && CITATION_PREAMBLE_RE.test(clean)) {
+        para.text = para.text.replace(CITATION_PREAMBLE_RE, "");
+        // Capitalise the first character of the new leading text
+        para.text = para.text.charAt(0).toUpperCase() + para.text.slice(1);
+      }
+      // No number at all — leave unchanged; renderer handles gracefully
+    }
+  }
+
   // 4. True empty-section backfill: if a section is STILL empty (no paragraphs,
   //    no bullets), pull prose from the outline bullets so the section heading
   //    isn't followed by a void.
@@ -286,7 +309,7 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const system = `You are a GEO (Generative Engine Optimization) content writer. Write in English. Output a full article as JSON only (no markdown). Goal: produce content AI search engines (ChatGPT, Perplexity, Claude, Gemini) will cite as authoritative.
 
-${getBrandVoicePrompt()}
+${await getBrandVoicePrompt()}
 
 Return valid JSON in this exact shape:
 {
@@ -326,7 +349,7 @@ SECTION-TYPE RULES (each one MUST add value beyond the outline):
   * Wrong: paragraphs: ["Q: A1?\\nA: ans1. Q: A2?\\nA: ans2."]  (this packs 2 Q/A into one string — FORBIDDEN)
   * Right: paragraphs: ["Q: A1?\\nA: ans1.", "Q: A2?\\nA: ans2."]  (each Q/A is its own array element)
 
-- For "stats" sections: each stat is 2–3 sentences in this format: "[number/%] [context], according to [Named Source, Year]. [One sentence of concrete implication or tradeoff for the audience — e.g. why this number matters for a B2B marketing leader, or what it means for a team adopting AI tools]." A bare stat with just attribution is INSUFFICIENT — every stat needs the implication sentence.
+- For "stats" sections: EVERY paragraph MUST open with a specific number or percentage — this is a hard requirement. Format: "[number/% with unit] [context], according to [Named Source, Year]. [One sentence of concrete implication]." WRONG: "According to Gartner (2024), 85% of AI projects fail." RIGHT: "85% of AI projects fail to reach production value, according to Gartner (2024). For B2B teams, this means validating AI tools in a live workflow before committing to a vendor." A paragraph with no extractable number (%, $, ×, billion, million) is a failure — do not generate it.
 
 - For "how_to" sections: use the bullets array. Each step is formatted as: "N. [Short action title]: [40–60 word elaboration that adds at least ONE of: a specific tool/platform name, a real-world workflow example, a watch-out tip, or a mechanism explanation]." The elaboration must contain information NOT present in the outline. A bare step like "Pick an automation tool" is FORBIDDEN — write "Pick the automation tool that fits the team: n8n suits teams that need custom logic and low cost per run, Make suits marketing ops teams that want drag-and-drop speed. Avoid evaluating more than two options in parallel — tool paralysis kills sprint momentum." That's the bar.
 
