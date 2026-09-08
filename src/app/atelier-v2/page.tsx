@@ -133,7 +133,7 @@ const CREDIT_BAR_GRADIENT = "linear-gradient(to right, #39FF14 0%, #FFD700 50%, 
 const NAV_ITEMS: [Screen, string, string, string][] = [
   ["dashboard",  "Overview",      "M3 3h6v6H3zM11 3h6v4h-6zM11 9h6v8h-6zM3 11h6v6H3z", ""],
   ["generate",   "New article",   "M10 2l1.8 5.2L17 9l-5.2 1.8L10 16l-1.8-5.2L3 9l5.2-1.8z", ""],
-  ["queue",      "Batch queue",   "M3 4h14v2H3zM3 9h14v2H3zM3 14h10v2H3z", "12"],
+  ["queue",      "Batch queue",   "M3 4h14v2H3zM3 9h14v2H3zM3 14h10v2H3z", ""],
   ["editor",     "Draft editor",  "M4 3h8l4 4v10H4z", ""],
   ["score",      "GEO score",     "M10 2a8 8 0 108 8h-8z", ""],
   ["keywords",   "Prompt library","M2 8l6-6h8v8l-6 6zM12 5h2v2h-2z", ""],
@@ -169,11 +169,12 @@ function HamburgerIcon() {
   );
 }
 
-function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabel, onUsageClick }: {
+function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabel, onUsageClick, queueCount }: {
   screen: Screen; setScreen: (s: Screen) => void;
   collapsed: boolean; onToggle: () => void;
   creditPct: number; creditLabel: string;
   onUsageClick: () => void;
+  queueCount: number;
 }) {
   const w = collapsed ? 64 : 248;
   const [showVersionMenu, setShowVersionMenu] = useState(false);
@@ -256,8 +257,9 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
 
       {/* Nav */}
       <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {NAV_ITEMS.map(([key, label, d, badge]) => {
+        {NAV_ITEMS.map(([key, label, d]) => {
           const isActive = screen === key;
+          const badge = key === "queue" ? (queueCount > 0 ? String(queueCount) : "") : "";
           return (
             <button
               key={key}
@@ -5422,6 +5424,7 @@ export default function AtelierV2Page() {
         creditPct={creditPct}
         creditLabel={creditLabel}
         onUsageClick={() => setScreen("usage")}
+        queueCount={batchQueueEntries.length}
       />
 
       <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
