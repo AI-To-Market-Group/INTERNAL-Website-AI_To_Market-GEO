@@ -3926,7 +3926,19 @@ const PUBLISH_RULES = [
 
 function PublishScreen() {
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 32, alignItems: "start" }}>
+    <div style={{ position: "relative" }}>
+      {/* Coming soon overlay */}
+      <div style={{ position: "absolute", inset: 0, zIndex: 10, pointerEvents: "none", borderRadius: 16,
+        background: "linear-gradient(160deg, rgba(247,245,242,0) 0%, rgba(247,245,242,.55) 40%, rgba(247,245,242,.88) 70%, rgba(247,245,242,.97) 100%)",
+      }}>
+        <div style={{ position: "absolute", bottom: 48, left: "50%", transform: "translateX(-50%)", textAlign: "center", pointerEvents: "auto" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".2em", color: C.mid, marginBottom: 8 }}>COMING SOON</div>
+          <div style={{ fontSize: 22, fontWeight: 700, color: C.dark, letterSpacing: "-.3px", whiteSpace: "nowrap" }}>Publishing & integrations</div>
+          <div style={{ marginTop: 8, fontSize: 13, color: "rgba(22,61,38,.55)", fontWeight: 400 }}>This feature is in development. Stay tuned.</div>
+        </div>
+      </div>
+      {/* Page content — visible but locked */}
+    <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: 32, alignItems: "start", filter: "blur(1.5px)", userSelect: "none", pointerEvents: "none" }}>
       <section>
         <h2 style={{ margin: "0 0 20px", fontSize: 18, fontWeight: 600 }}>Destinations</h2>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
@@ -3963,6 +3975,7 @@ function PublishScreen() {
           <div style={{ marginTop: 8, fontSize: 12, fontWeight: 400, color: "rgba(22,61,38,.7)" }}>Thursday 09:00, 4 articles, WordPress plus schema injection.</div>
         </div>
       </aside>
+    </div>
     </div>
   );
 }
