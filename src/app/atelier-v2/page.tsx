@@ -83,6 +83,24 @@ function writeCardCache(id: string, data: V2CardCache) {
   catch {}
 }
 
+// ─── Batch queue (localStorage) ───────────────────────────────────────────────
+
+interface BatchQueueEntry {
+  id: string;
+  title: string;
+  outline: V2OutlineSection[];
+  addedAt: string;
+}
+const BATCH_QUEUE_KEY = "v2_batch_queue";
+function readBatchQueue(): BatchQueueEntry[] {
+  try { return JSON.parse(localStorage.getItem(BATCH_QUEUE_KEY) ?? "[]") as BatchQueueEntry[]; }
+  catch { return []; }
+}
+function saveBatchQueue(entries: BatchQueueEntry[]) {
+  try { localStorage.setItem(BATCH_QUEUE_KEY, JSON.stringify(entries)); }
+  catch {}
+}
+
 // ─── Palette constants ────────────────────────────────────────────────────────
 
 const C = {
@@ -902,9 +920,124 @@ const QUEUE_ROWS_DATA = [
   { prompt: "how often do engines refresh sources",  cluster: "Mechanics",   stage: "Queued",        pct: 0,   action: "View" },
 ];
 
-function QueueScreen({ onEditor, onGenerate }: { onEditor: () => void; onGenerate: () => void }) {
-  const [selected, setSelected] = useState([1, 2, 4]);
-  const toggleSelect = (i: number) => setSelected(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]);
+function QueueScreen({
+  onEditor, onGenerate, batchQueueEntries, onRemoveFromBatchQueue, onActivateCard,
+}: {
+  onEditor: () => void;
+  onGenerate: () => void;
+  batchQueueEntries: BatchQueueEntry[];
+  onRemoveFromBatchQueue: (id: string) => void;
+  onActivateCard: (id: string) => void;
+}) {
+  const [selected, setSelected] = useState<string[]>([]);
+  const [buildProgress, setBuildProgress] = useState<Map<string, { pct: number; stage: string; error?: string }>>(new Map());
+  const [building, setBuilding] = useState(false);
+
+  const toggleSelect = (id: string) => setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
+  const toggleAll = () => setSelected(selected.length === batchQueueEntries.length ? [] : batchQueueEntries.map(e => e.id));
+  const selectedSet = new Set(selected);
+
+  async function buildArticle(entry: BatchQueueEntry) {
+    const { id, title, outline } = entry;
+    if (outline.length === 0) {
+      setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 0, stage: "Failed", error: "No outline — resume the plan first" }); return m; });
+      return;
+    }
+    setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 10, stage: "Drafting" }); return m; });
+    try {
+      const res = await fetch(`/api/builder-sessions/${id}/validate-plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ outline }),
+      });
+      if (!res.ok) throw new Error(`Server error (${res.status})`);
+      if (!res.body) throw new Error("No response body");
+      setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 33, stage: "Drafting" }); return m; });
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let articleReceived = false;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const parts = buf.split("\n");
+        buf = parts.pop() ?? "";
+        for (const line of parts) {
+          if (!line.startsWith("data: ")) continue;
+          const json = line.slice(6).trim();
+          if (!json || json === "[DONE]") continue;
+          try {
+            const parsed = JSON.parse(json) as {
+              article?: GeneratedArticle;
+              quality_flags?: { section?: string; type: string; message: string }[];
+              geo_score?: { score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number };
+              brand_voice_status?: { status: string; residuals?: { paragraphIndex: number; violations: { type: string; match: string }[] }[] } | null;
+            };
+            if (parsed.article && !articleReceived) {
+              articleReceived = true;
+              setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 80, stage: "Scoring" }); return m; });
+              writeCardCache(id, {
+                editorStep: "article",
+                outline,
+                articleTitle: title,
+                articleData: parsed.article!,
+                geoScore: parsed.geo_score ?? null,
+                qualityFlags: parsed.quality_flags ?? [],
+                brandVoiceStatus: parsed.brand_voice_status ?? null,
+                seoPageTitle: parsed.article!.title ?? title,
+                seoTitle: "", seoSlug: "", seoMetaDesc: "", seoTags: [],
+                savedAt: new Date().toISOString(),
+              });
+            }
+          } catch { /* partial chunk */ }
+        }
+      }
+      setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 100, stage: "Done" }); return m; });
+    } catch (e) {
+      setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 100, stage: "Failed", error: e instanceof Error ? e.message : String(e) }); return m; });
+    }
+  }
+
+  async function handleBuild() {
+    const toBuild = selected.filter(id => {
+      const p = buildProgress.get(id);
+      return !p || p.stage === "Failed";
+    });
+    if (toBuild.length === 0) return;
+    setBuilding(true);
+    await Promise.all(toBuild.map(id => {
+      const entry = batchQueueEntries.find(e => e.id === id);
+      return entry ? buildArticle(entry) : Promise.resolve();
+    }));
+    setBuilding(false);
+  }
+
+  function stageStyle(stage: string) {
+    if (stage === "Failed") return { bg: "rgba(249,57,67,.06)", color: C.red, border: "rgba(249,57,67,.28)" };
+    if (stage === "Done")   return { bg: "rgba(22,61,38,.07)", color: C.mid, border: "rgba(22,61,38,.35)" };
+    if (stage === "Drafting" || stage === "Scoring") return { bg: "rgba(22,61,38,.04)", color: "rgba(22,61,38,.7)", border: "rgba(22,61,38,.18)" };
+    return { bg: "rgba(22,61,38,.03)", color: "rgba(22,61,38,.45)", border: "rgba(22,61,38,.14)" };
+  }
+
+  if (batchQueueEntries.length === 0) {
+    return (
+      <div style={{ textAlign: "center", padding: "80px 24px" }}>
+        <div style={{ width: 52, height: 52, borderRadius: 14, background: "rgba(22,61,38,.07)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
+          <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke={C.mid} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 9h10M7 12h6"/></svg>
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 700, color: C.dark, marginBottom: 8 }}>Batch queue is empty</div>
+        <div style={{ fontSize: 13, color: "rgba(22,61,38,.55)", marginBottom: 24, maxWidth: 320, margin: "0 auto 24px" }}>
+          Save a plan in the editor and click <strong>Queue</strong> on the card to stage it for batch generation.
+        </div>
+        <button onClick={onGenerate} style={{ padding: "11px 20px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer" }}>
+          New GEO article
+        </button>
+      </div>
+    );
+  }
+
+  const canBuild = selected.length > 0 && !building;
 
   return (
     <div>
@@ -912,44 +1045,75 @@ function QueueScreen({ onEditor, onGenerate }: { onEditor: () => void; onGenerat
       <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 20px", marginBottom: 24, border: "1px solid rgba(22,61,38,.16)", borderRadius: 10, background: C.white }}>
         <div style={{ whiteSpace: "nowrap", flexShrink: 0, fontSize: 12, fontWeight: 600 }}>{selected.length} selected</div>
         <div style={{ width: 1, height: 20, background: "rgba(22,61,38,.14)" }} />
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          {["Rescore", "Approve", "Schedule", "Reassign voice"].map(ba => (
-            <button key={ba} style={{ whiteSpace: "nowrap", flexShrink: 0, padding: "8px 13px", border: "1px solid rgba(22,61,38,.22)", borderRadius: 7, fontSize: 11, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark }}>{ba}</button>
-          ))}
+        <button
+          onClick={handleBuild}
+          disabled={!canBuild}
+          style={{ whiteSpace: "nowrap", padding: "8px 16px", borderRadius: 7, background: canBuild ? C.dark : "rgba(22,61,38,.08)", color: canBuild ? C.white : "rgba(22,61,38,.3)", fontSize: 11, fontWeight: 700, border: "none", cursor: canBuild ? "pointer" : "default", display: "flex", alignItems: "center", gap: 7, transition: "all .15s" }}
+        >
+          {building
+            ? <><span style={{ display: "inline-block", animation: "spin .9s linear infinite" }}>↻</span> Building…</>
+            : <>
+                <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polygon points="4,2 14,8 4,14"/></svg>
+                Build selected
+              </>
+          }
+        </button>
+        <div style={{ marginLeft: "auto", whiteSpace: "nowrap", flexShrink: 0, fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.55)" }}>
+          {batchQueueEntries.length} article{batchQueueEntries.length !== 1 ? "s" : ""} in queue
         </div>
-        <div style={{ marginLeft: "auto", whiteSpace: "nowrap", flexShrink: 0, fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.62)" }}>Batch 041 · started 09:12 · 12 prompts</div>
       </div>
 
       {/* Queue table */}
       <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, overflow: "hidden" }}>
-        <div style={{ display: "grid", gridTemplateColumns: "28px 2.2fr 1.1fr 1fr 1.4fr 80px", gap: 16, padding: "14px 20px", background: "rgba(22,61,38,.04)", fontSize: 10, fontWeight: 700, letterSpacing: ".12em", color: C.mid }}>
-          <div /><div>PROMPT</div><div>CLUSTER</div><div>STAGE</div><div>PROGRESS</div><div />
+        {/* Header row */}
+        <div style={{ display: "grid", gridTemplateColumns: "28px 2.8fr 1fr 1.5fr 80px", gap: 16, padding: "14px 20px", background: "rgba(22,61,38,.04)", alignItems: "center" }}>
+          <button onClick={toggleAll} style={{ width: 18, height: 18, borderRadius: 5, border: selected.length === batchQueueEntries.length ? "none" : "1.5px solid rgba(22,61,38,.3)", background: selected.length === batchQueueEntries.length ? C.dark : "transparent", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {selected.length === batchQueueEntries.length && <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>}
+          </button>
+          {(["TITLE", "STAGE", "PROGRESS"] as const).map(h => (
+            <div key={h} style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".12em", color: C.mid }}>{h}</div>
+          ))}
+          <div />
         </div>
-        {QUEUE_ROWS_DATA.map((q, i) => {
-          const isSelected = selected.includes(i);
-          const isNeedsReview = q.stage === "Needs review";
-          const isApproved = q.stage === "Approved";
-          const fill = isNeedsReview ? C.red : C.dark;
-          const stageBg = isNeedsReview ? "rgba(249,57,67,.06)" : isApproved ? "rgba(22,61,38,.07)" : "rgba(22,61,38,.04)";
-          const stageColor = isNeedsReview ? C.red : isApproved ? C.mid : "rgba(22,61,38,.7)";
-          const stageBorder = isNeedsReview ? "rgba(249,57,67,.28)" : isApproved ? "rgba(22,61,38,.35)" : "rgba(22,61,38,.18)";
-          const actionColor = q.action === "Review" ? C.red : q.action === "Open" ? C.dark : C.mid;
+
+        {batchQueueEntries.map(entry => {
+          const prog = buildProgress.get(entry.id);
+          const stage = prog?.stage ?? "Queued";
+          const pct = prog?.pct ?? 0;
+          const isSelected = selectedSet.has(entry.id);
+          const isDone = stage === "Done";
+          const isFailed = stage === "Failed";
+          const isBuilding = stage === "Drafting" || stage === "Scoring";
+          const fill = isFailed ? C.red : isDone ? C.mid : C.dark;
+          const s = stageStyle(stage);
           return (
-            <div key={q.prompt} style={{ display: "grid", gridTemplateColumns: "28px 2.2fr 1.1fr 1fr 1.4fr 80px", gap: 16, alignItems: "center", padding: "15px 20px", borderTop: "1px solid rgba(22,61,38,.08)" }}>
-              <button onClick={() => toggleSelect(i)} style={{ width: 18, height: 18, borderRadius: 5, border: isSelected ? "none" : "1.5px solid rgba(22,61,38,.3)", background: isSelected ? C.dark : "transparent", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "28px 2.8fr 1fr 1.5fr 80px", gap: 16, alignItems: "center", padding: "15px 20px", borderTop: "1px solid rgba(22,61,38,.08)" }}>
+              <button onClick={() => toggleSelect(entry.id)} style={{ width: 18, height: 18, borderRadius: 5, border: isSelected ? "none" : "1.5px solid rgba(22,61,38,.3)", background: isSelected ? C.dark : "transparent", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 {isSelected && <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>}
               </button>
-              <div style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.4, color: "#1a1a1a" }}>{q.prompt}</div>
-              <div style={{ fontSize: 11, fontWeight: 600, color: C.mid }}>{q.cluster}</div>
-              <div><StageChip label={q.stage} bg={stageBg} color={stageColor} borderColor={stageBorder} /></div>
+              <div>
+                <div style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.4, color: "#1a1a1a" }}>{entry.title || entry.id.slice(0, 16)}</div>
+                {isFailed && prog?.error && <div style={{ fontSize: 11, color: C.red, marginTop: 3, opacity: .85 }}>{prog.error}</div>}
+              </div>
+              <div>
+                <StageChip label={stage} bg={s.bg} color={s.color} borderColor={s.border} />
+              </div>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ flex: 1, height: 6, borderRadius: 4, background: "rgba(22,61,38,.1)", overflow: "hidden" }}>
-                  <div style={{ height: "100%", width: `${q.pct}%`, background: fill, transition: "width .3s ease" }} />
+                  <div style={{ height: "100%", width: `${pct}%`, background: fill, transition: isBuilding ? "width .6s ease" : "width .2s ease" }} />
                 </div>
-                <div style={{ fontSize: 11, fontWeight: 600, width: 34, textAlign: "right", color: "rgba(22,61,38,.6)" }}>{q.pct}%</div>
+                <div style={{ fontSize: 11, fontWeight: 600, width: 34, textAlign: "right", color: "rgba(22,61,38,.6)" }}>{pct}%</div>
               </div>
-              <div style={{ textAlign: "right" }}>
-                <button onClick={onEditor} style={{ fontSize: 11, fontWeight: 700, color: actionColor, background: "none", border: "none", cursor: "pointer" }}>{q.action}</button>
+              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", alignItems: "center" }}>
+                {isDone && (
+                  <button onClick={() => { onActivateCard(entry.id); onEditor(); }} style={{ fontSize: 11, fontWeight: 700, color: C.dark, background: "none", border: "none", cursor: "pointer" }}>Open</button>
+                )}
+                {isFailed && (
+                  <button onClick={() => void buildArticle(entry)} style={{ fontSize: 11, fontWeight: 700, color: C.red, background: "none", border: "none", cursor: "pointer" }}>Retry</button>
+                )}
+                {!isDone && !isBuilding && (
+                  <button onClick={() => { onRemoveFromBatchQueue(entry.id); setSelected(prev => prev.filter(x => x !== entry.id)); }} title="Remove from queue" style={{ fontSize: 14, fontWeight: 400, color: "rgba(22,61,38,.3)", background: "none", border: "none", cursor: "pointer", lineHeight: 1 }}>×</button>
+                )}
               </div>
             </div>
           );
@@ -989,7 +1153,7 @@ function UserAvatar({ email, size = 24 }: { email: string; size?: number }) {
   );
 }
 
-function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity, hasArticle, isNew }: {
+function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity, hasArticle, isNew, batchQueued, onSendToBatchQueue }: {
   card: DraftCard;
   onCreateArticle: () => void;
   onResume?: () => void;
@@ -999,6 +1163,8 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
   sentToSanity?: boolean;
   hasArticle?: boolean;
   isNew?: boolean;
+  batchQueued?: boolean;
+  onSendToBatchQueue?: () => void;
 }) {
   const rawScore = card.brief.predictedScore ? parseInt(card.brief.predictedScore) : NaN;
   const scoreNum = isNaN(rawScore) ? null : rawScore;
@@ -1039,6 +1205,11 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.1)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
             <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M1.5 5l2.5 2.5 4.5-4.5"/></svg>
             ARTICLE SAVED
+          </span>
+        ) : batchQueued ? (
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.12)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/><path d="M7 9h10M7 12h6"/></svg>
+            IN BATCH QUEUE
           </span>
         ) : hasSavedPlan ? (
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.12)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
@@ -1124,13 +1295,16 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
             >
               Resume Plan
             </button>
-            <button
-              onClick={onCreateArticle}
-              title="Regenerate from scratch"
-              style={{ padding: "11px 14px", borderRadius: 8, background: "transparent", color: C.muted, fontSize: 12, fontWeight: 500, border: `1px solid ${C.border}`, cursor: "pointer", whiteSpace: "nowrap" }}
-            >
-              Regenerate
-            </button>
+            {!batchQueued && onSendToBatchQueue && (
+              <button
+                onClick={e => { e.stopPropagation(); onSendToBatchQueue(); }}
+                title="Add to batch queue for bulk generation"
+                style={{ padding: "11px 13px", borderRadius: 8, background: "transparent", color: C.mid, fontSize: 12, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 5 }}
+              >
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
+                Queue
+              </button>
+            )}
           </>
         ) : (
           <button
@@ -1811,7 +1985,7 @@ function sectionTypeStyle(type: string) {
 
 // ─── Editor screen ────────────────────────────────────────────────────────────
 
-function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, sidebarCollapsed, newCardId }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; sidebarCollapsed?: boolean; newCardId?: string | null }) {
+function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, sidebarCollapsed, newCardId, batchQueuedIds, onSendToBatchQueue }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; sidebarCollapsed?: boolean; newCardId?: string | null; batchQueuedIds?: string[]; onSendToBatchQueue?: (id: string, title: string, outline: V2OutlineSection[]) => void }) {
   // ── Plan step state ────────────────────────────────────────────────────────
   type EditorStep = "plan" | "article";
   const [editorStep, setEditorStep] = useState<EditorStep>("plan");
@@ -2711,6 +2885,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
                     {articleCards.map(card => {
                       const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
+                      const plan = savedPlans.find(p => p.opportunityId === card.opportunityId);
                       return (
                         <DraftCardComponent
                           key={card.opportunityId}
@@ -2719,9 +2894,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                           onResume={onResumeChat}
                           onRemove={() => onTrashCard?.(card.opportunityId)}
                           activeUsers={activeUsers}
-                          hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
+                          hasSavedPlan={!!plan}
                           hasArticle
                           isNew={card.opportunityId === newCardId}
+                          batchQueued={batchQueuedIds?.includes(card.opportunityId)}
+                          onSendToBatchQueue={onSendToBatchQueue ? () => onSendToBatchQueue(card.opportunityId, plan?.articleTitle ?? card.brief.prompt ?? "Untitled", plan?.outline ?? []) : undefined}
                         />
                       );
                     })}
@@ -2743,6 +2920,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
                     {pendingCards.map(card => {
                       const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
+                      const plan = savedPlans.find(p => p.opportunityId === card.opportunityId);
                       return (
                         <DraftCardComponent
                           key={card.opportunityId}
@@ -2751,8 +2929,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                           onResume={onResumeChat}
                           onRemove={() => onTrashCard?.(card.opportunityId)}
                           activeUsers={activeUsers}
-                          hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
+                          hasSavedPlan={!!plan}
                           isNew={card.opportunityId === newCardId}
+                          batchQueued={batchQueuedIds?.includes(card.opportunityId)}
+                          onSendToBatchQueue={onSendToBatchQueue ? () => onSendToBatchQueue(card.opportunityId, plan?.articleTitle ?? card.brief.prompt ?? "Untitled", plan?.outline ?? []) : undefined}
                         />
                       );
                     })}
@@ -4994,6 +5174,26 @@ export default function AtelierV2Page() {
     window.history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : ""));
   }, [screen, activeCardId]);
 
+  // ── Batch queue ───────────────────────────────────────────────────────────────
+  const [batchQueueEntries, setBatchQueueEntries] = useState<BatchQueueEntry[]>([]);
+  useEffect(() => { setBatchQueueEntries(readBatchQueue()); }, []);
+
+  function handleSendToBatchQueue(id: string, title: string, outline: V2OutlineSection[]) {
+    setBatchQueueEntries(prev => {
+      if (prev.some(e => e.id === id)) return prev;
+      const next = [...prev, { id, title, outline, addedAt: new Date().toISOString() }];
+      saveBatchQueue(next);
+      return next;
+    });
+  }
+  function handleRemoveFromBatchQueue(id: string) {
+    setBatchQueueEntries(prev => {
+      const next = prev.filter(e => e.id !== id);
+      saveBatchQueue(next);
+      return next;
+    });
+  }
+
   // Load trashed cards from localStorage on mount
   useEffect(() => { setTrashedCards(readTrashedCards()); }, []);
 
@@ -5213,8 +5413,8 @@ export default function AtelierV2Page() {
         <div style={{ flex: 1, padding: "32px 40px 64px" }}>
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}
           {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} />}
-          {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} />}
-          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} newCardId={newCardId} />}
+          {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} batchQueueEntries={batchQueueEntries} onRemoveFromBatchQueue={handleRemoveFromBatchQueue} onActivateCard={handleActivateCard} />}
+          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} newCardId={newCardId} batchQueuedIds={batchQueueEntries.map(e => e.id)} onSendToBatchQueue={handleSendToBatchQueue} />}
           {screen === "score"      && <ScoreScreen onEditor={go("editor")} />}
           {screen === "keywords"   && <KeywordsScreen />}
           {screen === "publish"    && <PublishScreen />}
