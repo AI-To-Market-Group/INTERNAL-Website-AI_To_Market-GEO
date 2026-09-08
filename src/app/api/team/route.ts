@@ -2,18 +2,40 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser, requireAdmin } from "@/lib/api-auth";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
-/** GET /api/team — list all team members (any authenticated user can view) */
+/** GET /api/team — list all auth users merged with their team_members role */
 export async function GET() {
   const { error } = await requireUser();
   if (error) return error;
 
-  const { data, error: dbError } = await supabaseAdmin
-    .from("team_members")
-    .select("id, email, full_name, role, created_at")
-    .order("created_at", { ascending: true });
+  // All users who have ever signed in
+  const { data: authData, error: authErr } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+  if (authErr) return NextResponse.json({ error: authErr.message }, { status: 500 });
 
-  if (dbError) return NextResponse.json({ error: dbError.message }, { status: 500 });
-  return NextResponse.json(data ?? []);
+  // Explicit role assignments
+  const { data: members } = await supabaseAdmin
+    .from("team_members")
+    .select("id, role, full_name, created_at");
+
+  const roleMap = new Map((members ?? []).map(m => [m.id, m]));
+
+  const merged = authData.users.map(u => {
+    const tm = roleMap.get(u.id);
+    return {
+      id: u.id,
+      email: u.email ?? "",
+      full_name: tm?.full_name ?? (u.user_metadata?.full_name as string | undefined) ?? null,
+      role: (tm?.role ?? "editor") as "admin" | "editor",
+      created_at: u.created_at,
+    };
+  });
+
+  // Sort: admins first, then by created_at
+  merged.sort((a, b) => {
+    if (a.role === b.role) return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+    return a.role === "admin" ? -1 : 1;
+  });
+
+  return NextResponse.json(merged);
 }
 
 /** POST /api/team — invite a new member by email (admin only) */

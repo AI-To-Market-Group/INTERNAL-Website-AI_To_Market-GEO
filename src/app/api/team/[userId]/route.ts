@@ -19,10 +19,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ us
     return NextResponse.json({ error: "You cannot demote yourself" }, { status: 400 });
   }
 
+  // Look up the user's email from auth so we can upsert if they're not in team_members yet
+  const { data: authUser } = await supabaseAdmin.auth.admin.getUserById(userId);
+  const email = authUser?.user?.email ?? "";
+
   const { data, error: dbErr } = await supabaseAdmin
     .from("team_members")
-    .update({ role })
-    .eq("id", userId)
+    .upsert({ id: userId, email, role }, { onConflict: "id" })
     .select()
     .single();
 
