@@ -3,7 +3,6 @@ import { ok, err } from "@/lib/api-response";
 import { requireUser } from "@/lib/api-auth";
 import { getSession } from "@/lib/builder-sessions-store";
 import { computeGeoScore } from "@/lib/geo-score";
-import { reviewArticleQuality } from "@/lib/article-quality";
 import type { ArticleDraftBlock, GenerateArticleResponse } from "@/types";
 
 type Params = { params: Promise<{ opportunityId: string }> };
@@ -71,7 +70,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
     catch { return null; }
   })();
 
-  const qualityFlags = reviewArticleQuality(article, session.opportunityContext?.tags ?? []);
-
-  return ok({ article, geoScore, qualityFlags });
+  // Do not re-run quality checks on restore — the article was already reviewed
+  // and sent; showing stale content-quality errors on a sent article is misleading.
+  return ok({ article, geoScore, qualityFlags: [] });
 }
