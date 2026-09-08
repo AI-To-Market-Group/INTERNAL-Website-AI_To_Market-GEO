@@ -997,7 +997,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
   const hasActive = activeUsers && activeUsers.length > 0;
 
   return (
-    <div style={{ padding: 24, border: `1px solid ${hasActive ? "rgba(24,95,0,.35)" : C.border}`, borderRadius: 12, background: hasActive ? "rgba(24,95,0,.04)" : C.white, display: "flex", flexDirection: "column", height: 300, position: "relative", boxShadow: hasActive ? "0 0 0 2px rgba(24,95,0,.18)" : "none" }}>
+    <div style={{ padding: 24, border: `1px solid ${hasActive ? "rgba(22,61,38,.22)" : C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", height: 300, position: "relative", opacity: hasActive ? 0.62 : 1, transition: "opacity .15s ease", cursor: hasActive ? "not-allowed" : "default" }}>
       {/* X remove button — hidden when locked */}
       {onRemove && !hasActive && (
         <button
@@ -1012,8 +1012,9 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
       {/* Header: badge + score */}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12, marginBottom: 16, paddingRight: onRemove ? 28 : 0 }}>
         {hasActive ? (
-          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: C.mid, background: "rgba(24,95,0,.12)", padding: "4px 9px", borderRadius: 20 }}>
-            🔒 {activeUsers![0].user_email.split("@")[0].toUpperCase()} IS EDITING
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "rgba(22,61,38,.55)", background: "rgba(22,61,38,.07)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
+            <svg viewBox="0 0 12 14" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="6" width="10" height="8" rx="1.5"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg>
+            IN USE
           </span>
         ) : sentToSanity ? (
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#185F00", background: "rgba(24,95,0,.13)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
@@ -1071,11 +1072,9 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
             )}
           </div>
           {hasActive && (
-            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.mid, animation: "pulse 2s infinite" }} />
-              <div style={{ display: "flex" }}>
-                {activeUsers!.slice(0, 3).map(u => <UserAvatar key={u.user_id} email={u.user_email} size={22} />)}
-              </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.mid, animation: "pulse 2s infinite", flexShrink: 0 }} />
+              <span style={{ fontSize: 10, fontWeight: 500, color: "rgba(22,61,38,.45)" }}>live</span>
             </div>
           )}
         </div>
@@ -1083,14 +1082,24 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
 
       {/* Actions */}
       <div style={{ display: "flex", gap: 8 }}>
-        {(sentToSanity || hasArticle) ? (
+        {hasActive ? (
+          <div style={{ flex: 1, padding: "10px 12px", borderRadius: 8, background: "rgba(22,61,38,.05)", border: "1px solid rgba(22,61,38,.12)", display: "flex", alignItems: "center", gap: 8 }}>
+            <svg viewBox="0 0 12 14" width="12" height="12" fill="none" stroke="rgba(22,61,38,.45)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}><rect x="1" y="6" width="10" height="8" rx="1.5"/><path d="M4 6V4a2 2 0 0 1 4 0v2"/></svg>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "rgba(22,61,38,.5)", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {activeUsers!.map(u => u.user_email.split("@")[0]).join(", ")} editing
+            </span>
+            <div style={{ display: "flex", gap: -4 }}>
+              {activeUsers!.slice(0, 3).map(u => <UserAvatar key={u.user_id} email={u.user_email} size={20} />)}
+            </div>
+          </div>
+        ) : (sentToSanity || hasArticle) ? (
           <button
             onClick={onCreateArticle}
             style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
           >
             View Article
           </button>
-        ) : hasSavedPlan && !hasActive ? (
+        ) : hasSavedPlan ? (
           <>
             <button
               onClick={onCreateArticle}
@@ -1109,10 +1118,9 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
         ) : (
           <button
             onClick={onCreateArticle}
-            disabled={hasActive}
-            style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: hasActive ? "rgba(22,61,38,.25)" : C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: hasActive ? "not-allowed" : "pointer", opacity: hasActive ? 0.8 : 1 }}
+            style={{ flex: 1, padding: "11px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
           >
-            {hasActive ? "🔒 Locked" : "Create Article"}
+            Create Article
           </button>
         )}
       </div>
