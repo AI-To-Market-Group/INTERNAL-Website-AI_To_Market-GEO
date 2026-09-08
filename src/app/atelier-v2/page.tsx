@@ -2632,7 +2632,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
 
                   {/* Header */}
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, paddingRight: 28 }}>
-                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: C.mid, background: "rgba(24,95,0,.1)", padding: "4px 9px", borderRadius: 20 }}>PLAN SAVED</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: C.mid, background: "rgba(24,95,0,.1)", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
+                      <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                      PLAN SAVED
+                    </span>
                     <span style={{ fontSize: 11, fontWeight: 600, padding: "4px 9px", borderRadius: 20, background: C.faint, color: "rgba(22,61,38,.6)" }}>{plan.outline.length} sections</span>
                   </div>
 
