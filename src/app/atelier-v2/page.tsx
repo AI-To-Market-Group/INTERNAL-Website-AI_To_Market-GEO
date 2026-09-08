@@ -2684,6 +2684,38 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           const pendingCards = draftCards!.filter(card => !isSent(card.opportunityId) && !hasArticleSaved(card.opportunityId) && !hasPlan(card.opportunityId));
           return (
             <>
+              {/* ── Ready to build — shown first so new cards land at the top ── */}
+              {pendingCards.length > 0 && (
+                <div style={{ marginBottom: 48 }}>
+                  <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 28 }}>
+                    <div>
+                      <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 8 }}>ALL OPPORTUNITIES</div>
+                      <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
+                        {pendingCards.length} brief{pendingCards.length !== 1 ? "s" : ""} ready to build
+                      </h2>
+                    </div>
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
+                    {pendingCards.map(card => {
+                      const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
+                      return (
+                        <DraftCardComponent
+                          key={card.opportunityId}
+                          card={card}
+                          onCreateArticle={() => onActivateCard(card.opportunityId)}
+                          onResume={onResumeChat}
+                          onRemove={() => onTrashCard?.(card.opportunityId)}
+                          activeUsers={activeUsers}
+                          hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
+                          isNew={card.opportunityId === newCardId}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* ── Articles with saved drafts ── */}
               {articleCards.length > 0 && (
                 <div style={{ marginBottom: 48 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
@@ -2714,6 +2746,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   </div>
                 </div>
               )}
+
+              {/* ── Sent to Sanity — least actionable, shown last ── */}
               {sentCards.length > 0 && (
                 <div style={{ marginBottom: 48 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
@@ -2743,31 +2777,6 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   </div>
                 </div>
               )}
-              <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 28 }}>
-                <div>
-                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 8 }}>ALL OPPORTUNITIES</div>
-                  <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
-                    {pendingCards.length} brief{pendingCards.length !== 1 ? "s" : ""} ready to build
-                  </h2>
-                </div>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
-                {pendingCards.map(card => {
-                  const activeUsers = presenceData?.filter(p => p.active_card_id === card.opportunityId) ?? [];
-                  return (
-                    <DraftCardComponent
-                      key={card.opportunityId}
-                      card={card}
-                      onCreateArticle={() => onActivateCard(card.opportunityId)}
-                      onResume={onResumeChat}
-                      onRemove={() => onTrashCard?.(card.opportunityId)}
-                      activeUsers={activeUsers}
-                      hasSavedPlan={savedPlans.some(p => p.opportunityId === card.opportunityId)}
-                      isNew={card.opportunityId === newCardId}
-                    />
-                  );
-                })}
-              </div>
             </>
           );
         })()}
