@@ -4080,12 +4080,12 @@ function EditableList({ items, onChange, placeholder }: {
     setEditIdx(null); setEditVal("");
   }
 
-  const ta: React.CSSProperties = { width: "100%", padding: "8px 10px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 6, fontSize: 13, lineHeight: 1.55, color: C.dark, background: C.bg, resize: "vertical", outline: "none", fontFamily: "inherit" };
+  const ta: React.CSSProperties = { width: "100%", padding: "8px 10px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 6, fontSize: 13, lineHeight: 1.55, color: "#1a1a1a", background: C.white, resize: "vertical", outline: "none", fontFamily: "inherit" };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       {items.map((item, i) => (
-        <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+        <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "8px 0", borderBottom: "1px solid rgba(22,61,38,.07)" }}>
           {editIdx === i ? (
             <>
               <textarea rows={2} value={editVal} onChange={e => setEditVal(e.target.value)} style={{ ...ta, flex: 1 }} autoFocus />
@@ -4094,7 +4094,7 @@ function EditableList({ items, onChange, placeholder }: {
             </>
           ) : (
             <>
-              <div style={{ flex: 1, fontSize: 13, lineHeight: 1.55, color: C.dark, padding: "7px 0" }}>{item}</div>
+              <div style={{ flex: 1, fontSize: 13, lineHeight: 1.6, color: "#1a1a1a", fontWeight: 400 }}>{item}</div>
               <button onClick={() => { setEditIdx(i); setEditVal(item); }} style={{ padding: "4px 8px", borderRadius: 5, background: "transparent", color: C.muted, fontSize: 11, fontWeight: 600, border: `1px solid ${C.border}`, cursor: "pointer", flexShrink: 0 }}>Edit</button>
               <button onClick={() => remove(i)} style={{ padding: "4px 8px", borderRadius: 5, background: "transparent", color: C.red, fontSize: 11, fontWeight: 600, border: `1px solid rgba(249,57,67,.3)`, cursor: "pointer", flexShrink: 0 }}>×</button>
             </>
@@ -4159,7 +4159,7 @@ function SettingsScreen() {
   const fieldLabel = (t: string) => (
     <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 10 }}>{t}</div>
   );
-  const ta: React.CSSProperties = { width: "100%", padding: 14, border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, lineHeight: 1.6, color: C.dark, background: C.bg, resize: "vertical", outline: "none", fontFamily: "inherit" };
+  const ta: React.CSSProperties = { width: "100%", padding: 14, border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, lineHeight: 1.6, color: "#1a1a1a", background: C.white, resize: "vertical", outline: "none", fontFamily: "inherit" };
 
   if (loading) return <div style={{ padding: 48, color: C.muted, fontSize: 13 }}>Loading brand voice…</div>;
   if (!bv) return <div style={{ padding: 48, color: C.red, fontSize: 13 }}>Could not load brand voice settings.</div>;
@@ -4196,14 +4196,14 @@ function SettingsScreen() {
         {fieldLabel("NEVER USE")}
         <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
           {bv.forbidden_phrases.map(w => (
-            <span key={w} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 11px", borderRadius: 20, border: "1px solid rgba(22,61,38,.2)", fontSize: 12, fontWeight: 600 }}>
+            <span key={w} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 11px", borderRadius: 20, border: "1px solid rgba(22,61,38,.2)", fontSize: 12, fontWeight: 600, color: "#1a1a1a", background: C.white }}>
               {w}
               <button onClick={() => setBv({ ...bv, forbidden_phrases: bv.forbidden_phrases.filter(p => p !== w) })} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.45)", fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
             </span>
           ))}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <input value={newPhrase} onChange={e => setNewPhrase(e.target.value)} onKeyDown={e => e.key === "Enter" && addPhrase()} placeholder="Add phrase…" style={{ flex: 1, padding: "8px 12px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 12, outline: "none", background: C.bg, color: C.dark, fontFamily: "inherit" }} />
+          <input value={newPhrase} onChange={e => setNewPhrase(e.target.value)} onKeyDown={e => e.key === "Enter" && addPhrase()} placeholder="Add phrase…" style={{ flex: 1, padding: "8px 12px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 12, outline: "none", background: C.white, color: "#1a1a1a", fontFamily: "inherit" }} />
           <button onClick={addPhrase} style={{ padding: "8px 16px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
         </div>
       </div>
@@ -4215,13 +4215,13 @@ function SettingsScreen() {
           {bv.guardrails.map((g, i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
               <input type="checkbox" checked={g.active} onChange={e => setBv({ ...bv, guardrails: bv.guardrails.map((gr, idx) => idx === i ? { ...gr, active: e.target.checked } : gr) })} style={{ width: 16, height: 16, accentColor: C.dark, cursor: "pointer", flexShrink: 0 }} />
-              <span style={{ flex: 1, fontSize: 13, lineHeight: 1.5 }}>{g.label}</span>
+              <span style={{ flex: 1, fontSize: 13, lineHeight: 1.5, color: "#1a1a1a" }}>{g.label}</span>
               <button onClick={() => setBv({ ...bv, guardrails: bv.guardrails.filter((_, idx) => idx !== i) })} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.35)", fontSize: 14, padding: "0 4px" }}>×</button>
             </div>
           ))}
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <input value={newGuardrail} onChange={e => setNewGuardrail(e.target.value)} onKeyDown={e => e.key === "Enter" && addGuardrail()} placeholder="Add guardrail…" style={{ flex: 1, padding: "8px 12px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 12, outline: "none", background: C.bg, color: C.dark, fontFamily: "inherit" }} />
+          <input value={newGuardrail} onChange={e => setNewGuardrail(e.target.value)} onKeyDown={e => e.key === "Enter" && addGuardrail()} placeholder="Add guardrail…" style={{ flex: 1, padding: "8px 12px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 12, outline: "none", background: C.white, color: "#1a1a1a", fontFamily: "inherit" }} />
           <button onClick={addGuardrail} style={{ padding: "8px 16px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
         </div>
       </div>
