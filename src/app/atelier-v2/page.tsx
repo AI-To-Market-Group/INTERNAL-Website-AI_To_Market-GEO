@@ -1039,7 +1039,10 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
             PLAN SAVED
           </span>
         ) : (
-          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#888", background: "#E8E8E8", padding: "4px 9px", borderRadius: 20 }}>READY TO BUILD</span>
+          <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "#888", background: "#E8E8E8", padding: "4px 9px", borderRadius: 20, display: "flex", alignItems: "center", gap: 5 }}>
+            <svg viewBox="0 0 10 10" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="5" cy="5" r="1.5"/><path d="M5 1v1M5 8v1M1 5h1M8 5h1M2.05 2.05l.7.7M7.25 7.25l.7.7M7.95 2.05l-.7.7M2.75 7.25l-.7.7"/></svg>
+            READY TO BUILD
+          </span>
         )}
         {scoreNum !== null && (
           <div style={{ textAlign: "right", flexShrink: 0 }}>
