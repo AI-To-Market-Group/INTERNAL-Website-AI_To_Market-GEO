@@ -4290,6 +4290,19 @@ function AnalyticsScreen() {
 
 // ─── Brand voice screen ───────────────────────────────────────────────────────
 
+const QUALITY_SECTION_LABELS: Record<string, string> = {
+  introduction: "Introduction",
+  stats: "Statistics",
+  faq: "FAQ",
+  how_to: "How-to",
+  section: "Body section",
+  conclusion: "Conclusion",
+};
+const QUALITY_SECTION_ORDER = ["introduction", "section", "how_to", "stats", "faq", "conclusion"];
+const DEFAULT_WORD_COUNT_TARGETS_UI: Record<string, number> = {
+  introduction: 100, stats: 100, faq: 200, how_to: 150, section: 150, conclusion: 80,
+};
+
 interface BrandVoiceData {
   company_name: string;
   website: string;
@@ -4299,6 +4312,7 @@ interface BrandVoiceData {
   preferred_style: string[];
   forbidden_phrases: string[];
   guardrails: { label: string; active: boolean }[];
+  word_count_targets: Record<string, number>;
 }
 
 function EditableList({ items, onChange, placeholder }: {
@@ -4852,7 +4866,10 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
     fetch("/api/brand-voice")
       .then(r => r.ok ? r.json() : null)
       .then((data: BrandVoiceData | null) => {
-        if (data) { setBv(data); setSavedBv(data); }
+        if (data) {
+          const normalised = { ...data, word_count_targets: { ...DEFAULT_WORD_COUNT_TARGETS_UI, ...(data.word_count_targets ?? {}) } };
+          setBv(normalised); setSavedBv(normalised);
+        }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -4972,6 +4989,38 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
         <div>
           {fieldLabel("STYLE PREFERENCES")}
           <EditableList items={bv.preferred_style} onChange={preferred_style => setBv({ ...bv, preferred_style })} placeholder="Add a style preference…" />
+        </div>
+
+        {/* Content Quality — min word counts per section type */}
+        <div style={{ padding: 20, borderRadius: 10, background: "rgba(24,95,0,.05)", border: "1px solid rgba(22,61,38,.14)" }}>
+          {fieldLabel("CONTENT QUALITY — MIN WORDS PER SECTION")}
+          <div style={{ fontSize: 11, color: "rgba(22,61,38,.5)", marginBottom: 14, lineHeight: 1.5 }}>
+            Sections below this word count trigger an error flag after generation. Auto-fix expands them to meet the minimum.
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr auto", gap: "8px 16px", alignItems: "center" }}>
+            {QUALITY_SECTION_ORDER.map(key => (
+              <>
+                <div key={`${key}-label`} style={{ fontSize: 12, fontWeight: 500, color: "#1a1a1a" }}>
+                  {QUALITY_SECTION_LABELS[key] ?? key}
+                </div>
+                <div key={`${key}-input`} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <input
+                    type="number"
+                    min={0}
+                    max={1000}
+                    value={bv.word_count_targets[key] ?? DEFAULT_WORD_COUNT_TARGETS_UI[key] ?? 100}
+                    onChange={e => {
+                      const val = Math.max(0, parseInt(e.target.value, 10) || 0);
+                      setBv({ ...bv, word_count_targets: { ...bv.word_count_targets, [key]: val } });
+                    }}
+                    disabled={userRole !== "admin"}
+                    style={{ width: 70, padding: "5px 8px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 6, fontSize: 12, textAlign: "right", outline: "none", background: userRole === "admin" ? C.white : "rgba(22,61,38,.03)", color: "#1a1a1a", fontFamily: "inherit" }}
+                  />
+                  <span style={{ fontSize: 11, color: "rgba(22,61,38,.45)" }}>words</span>
+                </div>
+              </>
+            ))}
+          </div>
         </div>
 
         {/* Save — admin only */}

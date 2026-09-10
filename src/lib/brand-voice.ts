@@ -9,7 +9,17 @@ export interface BrandVoiceRow {
   preferred_style: string[];
   forbidden_phrases: string[];
   guardrails: { label: string; active: boolean }[];
+  word_count_targets: Record<string, number>;
 }
+
+export const DEFAULT_WORD_COUNT_TARGETS: Record<string, number> = {
+  introduction: 100,
+  stats: 100,
+  faq: 200,
+  how_to: 150,
+  section: 150,
+  conclusion: 80,
+};
 
 // ── Hardcoded defaults — used as fallback if DB is empty or unreachable ───────
 // These are the original values that made generation quality what it is today.
@@ -68,6 +78,7 @@ export const DEFAULT: BrandVoiceRow = {
     { label: "No product mentions before the final section", active: true },
     { label: "Flag any sentence over 30 words", active: false },
   ],
+  word_count_targets: DEFAULT_WORD_COUNT_TARGETS,
 };
 
 export const BRAND_VOICE = DEFAULT;
@@ -87,7 +98,7 @@ async function loadBrandVoice(): Promise<BrandVoiceRow> {
   try {
     const { data } = await supabaseAdmin
       .from("brand_voice")
-      .select("company_name,website,brand_description,audience,tone,preferred_style,forbidden_phrases,guardrails")
+      .select("company_name,website,brand_description,audience,tone,preferred_style,forbidden_phrases,guardrails,word_count_targets")
       .order("id", { ascending: true })
       .limit(1)
       .single();
@@ -136,4 +147,9 @@ export async function getBrandVoiceCompact(): Promise<string> {
 
 export async function getBrandVoiceRaw(): Promise<BrandVoiceRow> {
   return loadBrandVoice();
+}
+
+export async function getWordCountTargets(): Promise<Record<string, number>> {
+  const bv = await loadBrandVoice();
+  return { ...DEFAULT_WORD_COUNT_TARGETS, ...(bv.word_count_targets ?? {}) };
 }

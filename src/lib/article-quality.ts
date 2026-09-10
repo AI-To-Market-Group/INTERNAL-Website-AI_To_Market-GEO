@@ -1,13 +1,5 @@
 import type { GenerateArticleResponse, GenerateArticleSectionOutput, QualityFlag } from "@/types";
-
-const WORD_COUNT_TARGETS: Record<string, number> = {
-  introduction: 100,
-  stats: 100,
-  faq: 200,
-  how_to: 150,
-  section: 150,
-  conclusion: 80,
-};
+import { DEFAULT_WORD_COUNT_TARGETS } from "@/lib/brand-voice";
 
 const GENERIC_ATTRIBUTION_PHRASES = [
   /according to research/gi,
@@ -33,13 +25,14 @@ function fullArticleText(article: GenerateArticleResponse): string {
 export function reviewArticleQuality(
   article: GenerateArticleResponse,
   targetKeywords: string[] = [],
+  wordCountTargets: Record<string, number> = DEFAULT_WORD_COUNT_TARGETS,
 ): QualityFlag[] {
   const flags: QualityFlag[] = [];
   const fullText = fullArticleText(article);
 
   // Thin section check
   for (const section of article.sections) {
-    const minWords = WORD_COUNT_TARGETS[section.type] ?? 150;
+    const minWords = wordCountTargets[section.type] ?? DEFAULT_WORD_COUNT_TARGETS[section.type] ?? 150;
     const count = sectionWordCount(section);
     if (count < minWords) {
       flags.push({
