@@ -4567,6 +4567,7 @@ function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
     {(loading || !loadAnimDone) && (
       <BrandVoiceScanLoader
         phrases={TEAM_SCAN_PHRASES}
+        phraseMs={900}
         onComplete={() => setLoadAnimDone(true)}
       />
     )}
@@ -5545,13 +5546,13 @@ const BV_SCAN_PHRASES = [
   "applying voice rules…",
 ];
 
-function BrandVoiceScanLoader({ onComplete, phrases: phrasesProp }: { onComplete: () => void; phrases?: string[] }) {
+function BrandVoiceScanLoader({ onComplete, phrases: phrasesProp, phraseMs = 2000 }: { onComplete: () => void; phrases?: string[]; phraseMs?: number }) {
   const phrases = phrasesProp ?? BV_SCAN_PHRASES;
   const [phraseIdx, setPhraseIdx] = useState(0);
   const [visible, setVisible] = useState(true);
 
   useEffect(() => {
-    const PHRASE_MS = 2000;
+    const PHRASE_MS = phraseMs;
     if (phraseIdx < phrases.length - 1) {
       const t = setTimeout(() => setPhraseIdx(i => i + 1), PHRASE_MS);
       return () => clearTimeout(t);
@@ -5562,7 +5563,7 @@ function BrandVoiceScanLoader({ onComplete, phrases: phrasesProp }: { onComplete
       setTimeout(onComplete, 400);
     }, PHRASE_MS);
     return () => clearTimeout(t);
-  }, [phraseIdx, onComplete, phrases.length]);
+  }, [phraseIdx, onComplete, phrases.length, phraseMs]);
 
   return (
     <div style={{
