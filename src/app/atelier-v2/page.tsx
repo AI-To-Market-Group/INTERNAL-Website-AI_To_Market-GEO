@@ -918,7 +918,7 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
                   );
                 })}
               </div>
-              <button onClick={handleOneShotGenerate} disabled={oneShotGenerating || !brief.trim()} style={{ alignSelf: "flex-start", padding: "14px 24px", borderRadius: 8, background: oneShotGenerating ? "rgba(22,61,38,.4)" : C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: oneShotGenerating ? "wait" : "pointer" }}>{oneShotGenerating ? "Creating session…" : "Generate and score"}</button>
+              <button onClick={handleOneShotGenerate} disabled={oneShotGenerating || !brief.trim()} style={{ alignSelf: "flex-start", padding: "14px 24px", borderRadius: 8, background: oneShotGenerating ? "rgba(22,61,38,.4)" : C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: oneShotGenerating ? "wait" : "pointer" }}>{oneShotGenerating ? "Creating session…" : "Generate"}</button>
             </div>
           </section>
         </div>
