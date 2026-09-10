@@ -572,7 +572,7 @@ function BrandSelect<T extends string | number>({ value, onChange, options }: {
 }
 
 function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, defaultFlow }: { onSettings: () => void; onQueue: () => void; onSessionCreated: (opportunityId: string, brief: BriefFields) => void; seedKeywords: string[]; defaultFlow?: FlowMode; }) {
-  const [flow, setFlow] = useState<FlowMode>(defaultFlow ?? "wizard");
+  const [flow, setFlow] = useState<FlowMode>(defaultFlow ?? "single");
   const [step, setStep] = useState(1);
   const [promptText, setPromptText] = useState("what is generative engine optimization");
   const [adjacentOn, setAdjacentOn] = useState([0, 2]);
@@ -719,15 +719,15 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
     <div>
       {/* Flow tabs */}
       <div style={{ display: "flex", gap: 6, padding: 5, marginBottom: 32, border: "1px solid rgba(22,61,38,.16)", borderRadius: 10, width: "fit-content", background: C.white }}>
-        {(["wizard", "single", "chat", "keywords"] as FlowMode[]).map(f => (
+        {(["single", "chat", "keywords"] as FlowMode[]).map(f => (
           <button key={f} onClick={() => setFlow(f)} style={btnStyle(flow === f)}>
-            {f === "wizard" ? "Guided wizard" : f === "single" ? "One shot brief" : f === "chat" ? "Conversational" : "Keyword workspace"}
+            {f === "single" ? "One shot brief" : f === "chat" ? "Conversational" : "Keyword workspace"}
           </button>
         ))}
       </div>
 
-      {/* ── Wizard ── */}
-      {flow === "wizard" && (
+      {/* ── Wizard ── (commented out — not yet wired for v2) */}
+      {false && flow === "wizard" && (
         <div style={{ display: "grid", gridTemplateColumns: "236px 1fr", gap: 40, alignItems: "start" }}>
           {/* Step sidebar */}
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -6078,7 +6078,7 @@ export default function AtelierV2Page() {
     const t = setTimeout(() => setNewCardId(null), 4000);
     return () => clearTimeout(t);
   }, [newCardId]);
-  const [generateDefaultFlow, setGenerateDefaultFlow] = useState<FlowMode>("wizard");
+  const [generateDefaultFlow, setGenerateDefaultFlow] = useState<FlowMode>("single");
   const [presenceData, setPresenceData] = useState<PresenceUser[]>([]);
   const { data: settings } = useSettings();
 
