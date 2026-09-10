@@ -4411,9 +4411,15 @@ const ACTION_LABELS: Record<string, string> = {
   "team.remove":             "Removed team member",
 };
 
+const TEAM_SCAN_PHRASES = [
+  "syncing team roster…",
+  "loading access levels…",
+];
+
 function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadAnimDone, setLoadAnimDone] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"admin" | "editor">("editor");
   const [inviting, setInviting] = useState(false);
@@ -4556,19 +4562,20 @@ function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
     return name.split(/[\s@.]+/).map(s => s[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
   };
 
-  if (loading) return (
-    <ComboLoader
-      stages={["Load", "Parse", "Ready"]}
-      phases={[
-        { label: "Loading team", text: "Fetching team members..." },
-        { label: "Parsing roles", text: "Reading member roles and access levels..." },
-        { label: "Ready", text: "✓  Team loaded" },
-      ]}
-    />
-  );
-
   return (
-    <div style={{ maxWidth: 720, display: "flex", flexDirection: "column", gap: 32 }}>
+    <>
+    {(loading || !loadAnimDone) && (
+      <BrandVoiceScanLoader
+        phrases={TEAM_SCAN_PHRASES}
+        onComplete={() => setLoadAnimDone(true)}
+      />
+    )}
+    <div style={{
+      maxWidth: 720, display: "flex", flexDirection: "column", gap: 32,
+      filter: (loading || !loadAnimDone) ? "blur(6px)" : "none",
+      pointerEvents: (loading || !loadAnimDone) ? "none" : "auto",
+      transition: "filter .4s ease",
+    }}>
 
       {actionMsg && (
         <div style={{ padding: "10px 16px", borderRadius: 8, background: "rgba(249,57,67,.08)", border: "1px solid rgba(249,57,67,.2)", color: C.red, fontSize: 13 }}>
@@ -4819,6 +4826,7 @@ function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
         </div>
       )}
     </div>
+    </>
   );
 }
 
@@ -5537,13 +5545,14 @@ const BV_SCAN_PHRASES = [
   "applying voice rules…",
 ];
 
-function BrandVoiceScanLoader({ onComplete }: { onComplete: () => void }) {
+function BrandVoiceScanLoader({ onComplete, phrases: phrasesProp }: { onComplete: () => void; phrases?: string[] }) {
+  const phrases = phrasesProp ?? BV_SCAN_PHRASES;
   const [phraseIdx, setPhraseIdx] = useState(0);
   const [visible, setVisible] = useState(true);
 
   useEffect(() => {
     const PHRASE_MS = 2000;
-    if (phraseIdx < BV_SCAN_PHRASES.length - 1) {
+    if (phraseIdx < phrases.length - 1) {
       const t = setTimeout(() => setPhraseIdx(i => i + 1), PHRASE_MS);
       return () => clearTimeout(t);
     }
@@ -5553,7 +5562,7 @@ function BrandVoiceScanLoader({ onComplete }: { onComplete: () => void }) {
       setTimeout(onComplete, 400);
     }, PHRASE_MS);
     return () => clearTimeout(t);
-  }, [phraseIdx, onComplete]);
+  }, [phraseIdx, onComplete, phrases.length]);
 
   return (
     <div style={{
@@ -5584,12 +5593,12 @@ function BrandVoiceScanLoader({ onComplete }: { onComplete: () => void }) {
           minWidth: 220, textAlign: "center",
           transition: "opacity .25s",
         }}>
-          {BV_SCAN_PHRASES[phraseIdx]}
+          {phrases[phraseIdx]}
         </div>
 
         {/* Progress dots */}
         <div style={{ display: "flex", gap: 6 }}>
-          {BV_SCAN_PHRASES.map((_, i) => (
+          {phrases.map((_, i) => (
             <div key={i} style={{
               width: i === phraseIdx ? 18 : 6, height: 6, borderRadius: 99,
               background: i <= phraseIdx ? "#185F00" : "rgba(22,61,38,.15)",
