@@ -4375,6 +4375,8 @@ function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
   const [inviting, setInviting] = useState(false);
   const [inviteMsg, setInviteMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [expandedLog, setExpandedLog] = useState<string | null>(null); // member id
+  const [presenceMap, setPresenceMap] = useState<Map<string, { active_card_id: string | null; last_seen_at: string }>>(new Map());
 
   const isAdmin = userRole === "admin";
 
@@ -4387,6 +4389,59 @@ function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
       .finally(() => setLoading(false));
   }
   useEffect(loadMembers, []);
+
+  // Poll all-user presence every 10s (admin only)
+  useEffect(() => {
+    if (!isAdmin) return;
+    function pollPresence() {
+      fetch("/api/presence/all")
+        .then(r => r.ok ? r.json() : [])
+        .then((rows: { user_id: string; active_card_id: string | null; last_seen_at: string }[]) => {
+          const m = new Map(rows.map(r => [r.user_id, { active_card_id: r.active_card_id, last_seen_at: r.last_seen_at }]));
+          setPresenceMap(m);
+        })
+        .catch(() => {});
+    }
+    pollPresence();
+    const t = setInterval(pollPresence, 10_000);
+    return () => clearInterval(t);
+  }, [isAdmin]);
+
+  function getStatus(memberId: string): "active" | "idle" | "offline" {
+    const p = presenceMap.get(memberId);
+    if (!p) return "offline";
+    const diffMin = (Date.now() - new Date(p.last_seen_at).getTime()) / 60000;
+    if (diffMin < 2) return "active";
+    if (diffMin < 15) return "idle";
+    return "offline";
+  }
+
+  function formatLastSeen(memberId: string): string {
+    const p = presenceMap.get(memberId);
+    if (!p) return "Never seen";
+    const diff = Date.now() - new Date(p.last_seen_at).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "Active now";
+    if (mins < 60) return `${mins} min${mins === 1 ? "" : "s"} ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs} hr${hrs === 1 ? "" : "s"} ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days} day${days === 1 ? "" : "s"} ago`;
+  }
+
+  const STATUS_COLORS = { active: "#22c55e", idle: "#f59e0b", offline: "rgba(22,61,38,.25)" };
+
+  const StatusDot = ({ memberId }: { memberId: string }) => {
+    const status = getStatus(memberId);
+    return (
+      <div style={{
+        position: "absolute", bottom: 0, right: 0,
+        width: 10, height: 10, borderRadius: "50%",
+        background: STATUS_COLORS[status],
+        border: "2px solid #f5f4f0",
+      }} title={status} />
+    );
+  };
 
   async function handleInvite() {
     if (!inviteEmail.trim()) return;
@@ -4489,70 +4544,131 @@ function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
           </div>
         ) : (
           <div>
-            {members.map((m, i) => (
-              <div key={m.id} style={{
-                display: "flex", alignItems: "center", gap: 16, padding: "14px 20px",
-                borderBottom: i < members.length - 1 ? `1px solid ${C.border}` : "none",
-              }}>
-                {/* Avatar */}
-                <div style={{
-                  width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
-                  background: "rgba(22,61,38,.12)", display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 12, fontWeight: 700, color: C.mid, letterSpacing: ".02em",
-                }}>
-                  {initials(m)}
-                </div>
+            {members.map((m, i) => {
+              const status = getStatus(m.id);
+              const presence = presenceMap.get(m.id);
+              const isExpanded = expandedLog === m.id;
+              return (
+                <div key={m.id} style={{ borderBottom: i < members.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                  {/* Main row */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 20px" }}>
+                    {/* Avatar with status dot */}
+                    <div style={{ position: "relative", flexShrink: 0 }}>
+                      <div style={{
+                        width: 36, height: 36, borderRadius: "50%",
+                        background: "rgba(22,61,38,.12)", display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 12, fontWeight: 700, color: C.mid, letterSpacing: ".02em",
+                      }}>
+                        {initials(m)}
+                      </div>
+                      {isAdmin && <StatusDot memberId={m.id} />}
+                    </div>
 
-                {/* Info */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  {m.full_name && (
-                    <div style={{ fontSize: 13, fontWeight: 600, color: C.dark, marginBottom: 2 }}>{m.full_name}</div>
+                    {/* Info */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {m.full_name && (
+                        <div style={{ fontSize: 13, fontWeight: 600, color: C.dark, marginBottom: 2 }}>{m.full_name}</div>
+                      )}
+                      <div style={{ fontSize: 12, color: C.mid }}>{m.email}</div>
+                    </div>
+
+                    {/* Invited badge */}
+                    {m.invited && (
+                      <span style={{
+                        display: "inline-flex", alignItems: "center", padding: "2px 8px",
+                        borderRadius: 20, fontSize: 11, fontWeight: 700, letterSpacing: ".06em",
+                        background: "rgba(234,160,0,.1)", color: "#9a6800",
+                        border: "1px solid rgba(234,160,0,.3)",
+                      }}>
+                        INVITED
+                      </span>
+                    )}
+
+                    {/* Role badge / selector */}
+                    {isAdmin ? (
+                      <select
+                        value={m.role}
+                        onChange={e => handleRoleChange(m.id, e.target.value as "admin" | "editor")}
+                        style={{
+                          padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(22,61,38,.2)",
+                          background: C.white, fontSize: 12, fontWeight: 600, color: C.dark, cursor: "pointer",
+                        }}
+                      >
+                        <option value="editor">Editor</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                    ) : roleBadge(m.role)}
+
+                    {/* Log button — admin only */}
+                    {isAdmin && (
+                      <button
+                        onClick={() => setExpandedLog(isExpanded ? null : m.id)}
+                        style={{
+                          padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700,
+                          letterSpacing: ".05em", border: "1px solid rgba(22,61,38,.18)",
+                          background: isExpanded ? "rgba(22,61,38,.08)" : C.white,
+                          color: C.mid, cursor: "pointer", whiteSpace: "nowrap",
+                        }}
+                      >
+                        LOG {isExpanded ? "▲" : "▼"}
+                      </button>
+                    )}
+
+                    {/* Remove button */}
+                    {isAdmin && (
+                      <button
+                        onClick={() => handleRemove(m.id, m.email)}
+                        title="Remove member"
+                        style={{
+                          width: 28, height: 28, borderRadius: "50%", border: "1px solid rgba(249,57,67,.3)",
+                          background: "rgba(249,57,67,.07)", color: C.red, cursor: "pointer",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          fontSize: 14, fontWeight: 700, flexShrink: 0,
+                        }}
+                      >×</button>
+                    )}
+                  </div>
+
+                  {/* Expanded log panel */}
+                  {isExpanded && isAdmin && (
+                    <div style={{
+                      margin: "0 20px 14px", padding: 16, borderRadius: 8,
+                      background: "rgba(22,61,38,.03)", border: "1px solid rgba(22,61,38,.1)",
+                    }}>
+                      {/* Status row */}
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+                        <div style={{
+                          width: 8, height: 8, borderRadius: "50%",
+                          background: STATUS_COLORS[status], flexShrink: 0,
+                        }} />
+                        <span style={{ fontSize: 12, fontWeight: 700, color: C.dark, textTransform: "capitalize" }}>{status}</span>
+                        <span style={{ fontSize: 12, color: C.mid }}>— {formatLastSeen(m.id)}</span>
+                      </div>
+
+                      {/* Current activity */}
+                      {presence?.active_card_id ? (
+                        <div style={{ fontSize: 12, color: C.mid, marginBottom: 10 }}>
+                          <span style={{ fontWeight: 600, color: C.dark }}>Currently editing:</span> card <code style={{ fontSize: 11, background: "rgba(22,61,38,.06)", padding: "1px 5px", borderRadius: 4 }}>{presence.active_card_id.slice(0, 8)}…</code>
+                        </div>
+                      ) : status !== "offline" ? (
+                        <div style={{ fontSize: 12, color: C.mid, marginBottom: 10 }}>Not currently editing any card</div>
+                      ) : null}
+
+                      {/* Joined */}
+                      <div style={{ fontSize: 11, color: "rgba(22,61,38,.4)", borderTop: "1px solid rgba(22,61,38,.08)", paddingTop: 10, marginTop: 4 }}>
+                        Joined {new Date(m.created_at).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}
+                        {" · "}Role: <strong>{m.role}</strong>
+                        {m.invited ? " · Invite pending" : ""}
+                      </div>
+
+                      <div style={{ fontSize: 11, color: "rgba(22,61,38,.35)", marginTop: 8 }}>
+                        Full audit log (edits, generates, publishes) coming soon
+                      </div>
+                    </div>
                   )}
-                  <div style={{ fontSize: 12, color: C.mid }}>{m.email}</div>
                 </div>
-
-                {/* Invited badge */}
-                {m.invited && (
-                  <span style={{
-                    display: "inline-flex", alignItems: "center", padding: "2px 8px",
-                    borderRadius: 20, fontSize: 11, fontWeight: 700, letterSpacing: ".06em",
-                    background: "rgba(234,160,0,.1)", color: "#9a6800",
-                    border: "1px solid rgba(234,160,0,.3)",
-                  }}>
-                    INVITED
-                  </span>
-                )}
-
-                {/* Role badge / selector */}
-                {isAdmin ? (
-                  <select
-                    value={m.role}
-                    onChange={e => handleRoleChange(m.id, e.target.value as "admin" | "editor")}
-                    style={{
-                      padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(22,61,38,.2)",
-                      background: C.white, fontSize: 12, fontWeight: 600, color: C.dark, cursor: "pointer",
-                    }}
-                  >
-                    <option value="editor">Editor</option>
-                    <option value="admin">Admin</option>
-                  </select>
-                ) : roleBadge(m.role)}
-
-                {/* Remove button — admin only, can't remove self */}
-                {isAdmin && (
-                  <button
-                    onClick={() => handleRemove(m.id, m.email)}
-                    title="Remove member"
-                    style={{
-                      width: 28, height: 28, borderRadius: "50%", border: "1px solid rgba(249,57,67,.3)",
-                      background: "rgba(249,57,67,.07)", color: C.red, cursor: "pointer",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 14, fontWeight: 700, flexShrink: 0,
-                    }}
-                  >×</button>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
