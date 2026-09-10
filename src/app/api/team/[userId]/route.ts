@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/api-auth";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { logActivity } from "@/lib/log-activity";
 
 /** PATCH /api/team/[userId] — change role (admin only) */
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ userId: string }> }) {
@@ -30,6 +31,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ us
     .single();
 
   if (dbErr) return NextResponse.json({ error: dbErr.message }, { status: 500 });
+  void logActivity({ userId: user.id, userEmail: user.email ?? "", action: "team.role_change", entityType: "team_member", entityId: userId, entityTitle: email, metadata: { newRole: role } });
   return NextResponse.json(data);
 }
 
@@ -50,5 +52,6 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     .eq("id", userId);
 
   if (dbErr) return NextResponse.json({ error: dbErr.message }, { status: 500 });
+  void logActivity({ userId: user.id, userEmail: user.email ?? "", action: "team.remove", entityType: "team_member", entityId: userId });
   return new NextResponse(null, { status: 204 });
 }

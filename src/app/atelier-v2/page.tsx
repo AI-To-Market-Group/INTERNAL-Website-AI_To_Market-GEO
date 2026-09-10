@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
+import { toast } from "sonner";
 import { KeywordWorkspace } from "./components/KeywordWorkspace";
 import { useSettings } from "@/hooks/useSettings";
 
@@ -184,18 +185,25 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
   return (
     <aside style={{ width: w, flexShrink: 0, background: C.dark, color: C.white, display: "flex", flexDirection: "column", padding: collapsed ? "20px 10px" : "24px 16px", position: "sticky", top: 0, height: "100vh", transition: "width .22s ease, padding .22s ease", overflow: "hidden" }}>
 
-      {/* Logo left, toggle right */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24, minWidth: 0 }}>
-        {!collapsed && (
+      {/* Logo + toggle */}
+      {collapsed ? (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, marginBottom: 24 }}>
+          <img src="/logo-white.png" alt="AI To Market" style={{ width: 36, height: 36, objectFit: "contain", display: "block" }} />
+          <button onClick={onToggle} title="Expand sidebar" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,.1)", border: "none", cursor: "pointer", color: C.white }}>
+            <HamburgerIcon />
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24, minWidth: 0 }}>
           <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
             <img src="/logo-white.svg" alt="AI To Market" style={{ height: 24, width: "auto", display: "block" }} />
             <div style={{ marginTop: 4, fontSize: 10, fontWeight: 600, letterSpacing: ".1em", opacity: .55, whiteSpace: "nowrap" }}>GEO CONTENT DESK</div>
           </div>
-        )}
-        <button onClick={onToggle} title={collapsed ? "Expand sidebar" : "Collapse sidebar"} style={{ flexShrink: 0, marginLeft: "auto", display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,.1)", border: "none", cursor: "pointer", color: C.white }}>
-          <HamburgerIcon />
-        </button>
-      </div>
+          <button onClick={onToggle} title="Collapse sidebar" style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,.1)", border: "none", cursor: "pointer", color: C.white }}>
+            <HamburgerIcon />
+          </button>
+        </div>
+      )}
 
       {/* Workspace / version switcher — hidden when collapsed */}
       {!collapsed && (
@@ -998,6 +1006,7 @@ function QueueScreen({
         }
       }
       setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 100, stage: "Done" }); return m; });
+      fetch("/api/activity", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "article.batch_build", entityType: "article", entityId: id, entityTitle: title }) }).catch(() => {});
     } catch (e) {
       setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 100, stage: "Failed", error: e instanceof Error ? e.message : String(e) }); return m; });
     }
@@ -1997,6 +2006,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [articleTitle, setArticleTitle] = useState("");
   const [outlineLoading, setOutlineLoading] = useState(false);
   const [outlineError, setOutlineError] = useState<string | null>(null);
+  const [outlineRetryCount, setOutlineRetryCount] = useState(0);
+  const [outlineRetrying, setOutlineRetrying] = useState(false);
   const [expandedSection, setExpandedSection] = useState<number | null>(null);
   const [editingTitles, setEditingTitles] = useState<Record<number, string>>({});
   const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
@@ -2329,7 +2340,6 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     setOutline([]);
     setEditingTitles({});
     setExpandedSection(null);
-    setOutlineError(null);
     setOutlineLoading(true);
 
     fetch(`/api/builder-sessions/${activeCardId}/generate-outline`, {
@@ -2343,12 +2353,14 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         return body;
       })
       .then(data => {
+        setOutlineError(null);
+        setOutlineRetrying(false);
         setArticleTitle(data.article_title ?? card?.brief?.prompt ?? "Article");
         setOutline(data.sections ?? []);
       })
-      .catch((e: unknown) => setOutlineError(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => { setOutlineError(e instanceof Error ? e.message : String(e)); setOutlineRetrying(false); })
       .finally(() => setOutlineLoading(false));
-  }, [activeCardId, draftCards, savedPlans, sentToSanityIds, withArticleIds]);
+  }, [activeCardId, draftCards, savedPlans, sentToSanityIds, withArticleIds, outlineRetryCount]);
 
   // ── Save current plan (org-wide via Supabase) ─────────────────────────────
   async function handleSavePlan() {
@@ -2435,7 +2447,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ topic_title: title }),
       });
-      if (!res.ok) throw new Error(res.statusText);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        toast.error(body.error ?? "Could not regenerate section. Try again.");
+        return;
+      }
       const data = await res.json() as { sections: V2OutlineSection[] };
       const match = data.sections?.find(s => s.type === section.type) ?? data.sections?.[0];
       if (match) {
@@ -3072,8 +3088,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           )}
         </div>
 
-        {/* Loading — Option D combo */}
-        {outlineLoading && (
+        {/* Loading — full ComboLoader only on first generation, not retry */}
+        {outlineLoading && !outlineRetrying && (
           <ComboLoader
             stages={["Research", "Structure", "Keywords", "Validate"]}
             phases={[
@@ -3085,16 +3101,18 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           />
         )}
 
-        {/* Error state */}
-        {outlineError && !outlineLoading && (
+        {/* Error state — stays visible during retry so the spinning button is shown */}
+        {outlineError && (
           <div style={{ padding: "20px 24px", border: `1px solid rgba(249,57,67,.3)`, borderRadius: 10, background: "rgba(249,57,67,.04)", color: C.red, fontSize: 13 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Could not generate outline</div>
             <div style={{ fontWeight: 400, opacity: .8 }}>{outlineError}</div>
             <button
-              onClick={() => { prevCardIdRef.current = null; setOutlineError(null); }}
-              style={{ marginTop: 14, padding: "8px 14px", borderRadius: 7, background: C.red, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
+              disabled={outlineRetrying}
+              onClick={() => { setOutlineRetrying(true); prevCardIdRef.current = null; setOutlineRetryCount(c => c + 1); }}
+              style={{ marginTop: 14, display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 7, background: C.red, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: outlineRetrying ? "default" : "pointer", opacity: outlineRetrying ? 0.75 : 1 }}
             >
-              Retry
+              <span style={{ display: "inline-block", animation: outlineRetrying ? "spin .8s linear infinite" : "none" }}>↻</span>
+              {outlineRetrying ? "Retrying…" : "Retry"}
             </button>
           </div>
         )}
@@ -4364,16 +4382,53 @@ interface TeamMember {
   full_name: string | null;
   role: "admin" | "editor";
   created_at: string;
+  invited?: boolean;
 }
+
+interface ActivityLogEntry {
+  id: string;
+  user_id: string;
+  user_email: string;
+  action: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  entity_title: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+const ACTION_LABELS: Record<string, string> = {
+  "session.login":           "Logged in",
+  "article.generate":        "Started generating article",
+  "article.batch_queue_add": "Sent to batch queue",
+  "article.batch_build":     "Built article (batch)",
+  "article.delete":          "Deleted article",
+  "article.restore":         "Restored article",
+  "brand_voice.save":        "Updated brand voice",
+  "publish.sanity":          "Published to Sanity",
+  "team.invite":             "Invited team member",
+  "team.role_change":        "Changed member role",
+  "team.remove":             "Removed team member",
+};
+
+const TEAM_SCAN_PHRASES = [
+  "syncing team roster…",
+  "loading access levels…",
+];
 
 function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadAnimDone, setLoadAnimDone] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"admin" | "editor">("editor");
   const [inviting, setInviting] = useState(false);
   const [inviteMsg, setInviteMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [actionMsg, setActionMsg] = useState<string | null>(null);
+  const [expandedLog, setExpandedLog] = useState<string | null>(null); // member id
+  const [presenceMap, setPresenceMap] = useState<Map<string, { active_card_id: string | null; last_seen_at: string }>>(new Map());
+  const [activityLogs, setActivityLogs] = useState<Map<string, ActivityLogEntry[]>>(new Map());
+  const [activityLoading, setActivityLoading] = useState<string | null>(null);
 
   const isAdmin = userRole === "admin";
 
@@ -4386,6 +4441,59 @@ function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
       .finally(() => setLoading(false));
   }
   useEffect(loadMembers, []);
+
+  // Poll all-user presence every 10s (admin only)
+  useEffect(() => {
+    if (!isAdmin) return;
+    function pollPresence() {
+      fetch("/api/presence/all")
+        .then(r => r.ok ? r.json() : [])
+        .then((rows: { user_id: string; active_card_id: string | null; last_seen_at: string }[]) => {
+          const m = new Map(rows.map(r => [r.user_id, { active_card_id: r.active_card_id, last_seen_at: r.last_seen_at }]));
+          setPresenceMap(m);
+        })
+        .catch(() => {});
+    }
+    pollPresence();
+    const t = setInterval(pollPresence, 10_000);
+    return () => clearInterval(t);
+  }, [isAdmin]);
+
+  function getStatus(memberId: string): "active" | "idle" | "offline" {
+    const p = presenceMap.get(memberId);
+    if (!p) return "offline";
+    const diffMin = (Date.now() - new Date(p.last_seen_at).getTime()) / 60000;
+    if (diffMin < 2) return "active";
+    if (diffMin < 15) return "idle";
+    return "offline";
+  }
+
+  function formatLastSeen(memberId: string): string {
+    const p = presenceMap.get(memberId);
+    if (!p) return "Never seen";
+    const diff = Date.now() - new Date(p.last_seen_at).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "Active now";
+    if (mins < 60) return `${mins} min${mins === 1 ? "" : "s"} ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs} hr${hrs === 1 ? "" : "s"} ago`;
+    const days = Math.floor(hrs / 24);
+    return `${days} day${days === 1 ? "" : "s"} ago`;
+  }
+
+  const STATUS_COLORS = { active: "#22c55e", idle: "#f59e0b", offline: "rgba(22,61,38,.25)" };
+
+  const StatusDot = ({ memberId }: { memberId: string }) => {
+    const status = getStatus(memberId);
+    return (
+      <div style={{
+        position: "absolute", bottom: 0, right: 0,
+        width: 10, height: 10, borderRadius: "50%",
+        background: STATUS_COLORS[status],
+        border: "2px solid #f5f4f0",
+      }} title={status} />
+    );
+  };
 
   async function handleInvite() {
     if (!inviteEmail.trim()) return;
@@ -4454,19 +4562,21 @@ function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
     return name.split(/[\s@.]+/).map(s => s[0]).filter(Boolean).slice(0, 2).join("").toUpperCase();
   };
 
-  if (loading) return (
-    <ComboLoader
-      stages={["Load", "Parse", "Ready"]}
-      phases={[
-        { label: "Loading team", text: "Fetching team members..." },
-        { label: "Parsing roles", text: "Reading member roles and access levels..." },
-        { label: "Ready", text: "✓  Team loaded" },
-      ]}
-    />
-  );
-
   return (
-    <div style={{ maxWidth: 720, display: "flex", flexDirection: "column", gap: 32 }}>
+    <>
+    {(loading || !loadAnimDone) && (
+      <BrandVoiceScanLoader
+        phrases={TEAM_SCAN_PHRASES}
+        phraseMs={900}
+        onComplete={() => setLoadAnimDone(true)}
+      />
+    )}
+    <div style={{
+      maxWidth: 720, display: "flex", flexDirection: "column", gap: 32,
+      filter: (loading || !loadAnimDone) ? "blur(6px)" : "none",
+      pointerEvents: (loading || !loadAnimDone) ? "none" : "auto",
+      transition: "filter .4s ease",
+    }}>
 
       {actionMsg && (
         <div style={{ padding: "10px 16px", borderRadius: 8, background: "rgba(249,57,67,.08)", border: "1px solid rgba(249,57,67,.2)", color: C.red, fontSize: 13 }}>
@@ -4488,58 +4598,175 @@ function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
           </div>
         ) : (
           <div>
-            {members.map((m, i) => (
-              <div key={m.id} style={{
-                display: "flex", alignItems: "center", gap: 16, padding: "14px 20px",
-                borderBottom: i < members.length - 1 ? `1px solid ${C.border}` : "none",
-              }}>
-                {/* Avatar */}
-                <div style={{
-                  width: 36, height: 36, borderRadius: "50%", flexShrink: 0,
-                  background: "rgba(22,61,38,.12)", display: "flex", alignItems: "center", justifyContent: "center",
-                  fontSize: 12, fontWeight: 700, color: C.mid, letterSpacing: ".02em",
-                }}>
-                  {initials(m)}
-                </div>
+            {members.map((m, i) => {
+              const status = getStatus(m.id);
+              const presence = presenceMap.get(m.id);
+              const isExpanded = expandedLog === m.id;
+              return (
+                <div key={m.id} style={{ borderBottom: i < members.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                  {/* Main row */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 20px" }}>
+                    {/* Avatar with status dot */}
+                    <div style={{ position: "relative", flexShrink: 0 }}>
+                      <div style={{
+                        width: 36, height: 36, borderRadius: "50%",
+                        background: "rgba(22,61,38,.12)", display: "flex", alignItems: "center", justifyContent: "center",
+                        fontSize: 12, fontWeight: 700, color: C.mid, letterSpacing: ".02em",
+                      }}>
+                        {initials(m)}
+                      </div>
+                      {isAdmin && <StatusDot memberId={m.id} />}
+                    </div>
 
-                {/* Info */}
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  {m.full_name && (
-                    <div style={{ fontSize: 13, fontWeight: 600, color: C.dark, marginBottom: 2 }}>{m.full_name}</div>
+                    {/* Info */}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      {m.full_name && (
+                        <div style={{ fontSize: 13, fontWeight: 600, color: C.dark, marginBottom: 2 }}>{m.full_name}</div>
+                      )}
+                      <div style={{ fontSize: 12, color: C.mid }}>{m.email}</div>
+                    </div>
+
+                    {/* Invited badge */}
+                    {m.invited && (
+                      <span style={{
+                        display: "inline-flex", alignItems: "center", padding: "2px 8px",
+                        borderRadius: 20, fontSize: 11, fontWeight: 700, letterSpacing: ".06em",
+                        background: "rgba(234,160,0,.1)", color: "#9a6800",
+                        border: "1px solid rgba(234,160,0,.3)",
+                      }}>
+                        INVITED
+                      </span>
+                    )}
+
+                    {/* Role badge / selector */}
+                    {isAdmin ? (
+                      <select
+                        value={m.role}
+                        onChange={e => handleRoleChange(m.id, e.target.value as "admin" | "editor")}
+                        style={{
+                          padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(22,61,38,.2)",
+                          background: C.white, fontSize: 12, fontWeight: 600, color: C.dark, cursor: "pointer",
+                        }}
+                      >
+                        <option value="editor">Editor</option>
+                        <option value="admin">Admin</option>
+                      </select>
+                    ) : roleBadge(m.role)}
+
+                    {/* Log button — admin only */}
+                    {isAdmin && (
+                      <button
+                        onClick={() => {
+                          const next = isExpanded ? null : m.id;
+                          setExpandedLog(next);
+                          if (next && !activityLogs.has(next)) {
+                            setActivityLoading(next);
+                            fetch(`/api/activity?userId=${next}&limit=30`)
+                              .then(r => r.ok ? r.json() : [])
+                              .then((rows: ActivityLogEntry[]) => {
+                                setActivityLogs(prev => new Map(prev).set(next, rows));
+                              })
+                              .catch(() => {})
+                              .finally(() => setActivityLoading(al => al === next ? null : al));
+                          }
+                        }}
+                        style={{
+                          padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700,
+                          letterSpacing: ".05em", border: "1px solid rgba(22,61,38,.18)",
+                          background: isExpanded ? "rgba(22,61,38,.08)" : C.white,
+                          color: C.mid, cursor: "pointer", whiteSpace: "nowrap",
+                        }}
+                      >
+                        LOG {isExpanded ? "▲" : "▼"}
+                      </button>
+                    )}
+
+                    {/* Remove button */}
+                    {isAdmin && (
+                      <button
+                        onClick={() => handleRemove(m.id, m.email)}
+                        title="Remove member"
+                        style={{
+                          width: 28, height: 28, borderRadius: "50%", border: "1px solid rgba(249,57,67,.3)",
+                          background: "rgba(249,57,67,.07)", color: C.red, cursor: "pointer",
+                          display: "flex", alignItems: "center", justifyContent: "center",
+                          fontSize: 14, fontWeight: 700, flexShrink: 0,
+                        }}
+                      >×</button>
+                    )}
+                  </div>
+
+                  {/* Expanded log panel */}
+                  {isExpanded && isAdmin && (
+                    <div style={{
+                      margin: "0 20px 14px", borderRadius: 8,
+                      background: "rgba(22,61,38,.03)", border: "1px solid rgba(22,61,38,.1)",
+                      overflow: "hidden",
+                    }}>
+                      {/* Status + presence header */}
+                      <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid rgba(22,61,38,.08)", flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <div style={{ width: 8, height: 8, borderRadius: "50%", background: STATUS_COLORS[status] }} />
+                          <span style={{ fontSize: 12, fontWeight: 700, color: C.dark, textTransform: "capitalize" }}>{status}</span>
+                          <span style={{ fontSize: 12, color: "rgba(22,61,38,.5)" }}>— {formatLastSeen(m.id)}</span>
+                        </div>
+                        {presence?.active_card_id && (
+                          <span style={{ fontSize: 11, color: C.mid }}>
+                            Editing card <code style={{ fontSize: 10, background: "rgba(22,61,38,.08)", padding: "1px 5px", borderRadius: 3 }}>{presence.active_card_id.slice(0, 8)}…</code>
+                          </span>
+                        )}
+                        <span style={{ fontSize: 11, color: "rgba(22,61,38,.4)", marginLeft: "auto" }}>
+                          Joined {new Date(m.created_at).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}
+                        </span>
+                      </div>
+
+                      {/* Activity feed */}
+                      {activityLoading === m.id ? (
+                        <div style={{ padding: "16px", fontSize: 12, color: "rgba(22,61,38,.45)", textAlign: "center" }}>Loading activity…</div>
+                      ) : (activityLogs.get(m.id) ?? []).length === 0 ? (
+                        <div style={{ padding: "16px", fontSize: 12, color: "rgba(22,61,38,.35)", textAlign: "center" }}>No activity recorded yet</div>
+                      ) : (
+                        <div style={{ maxHeight: 300, overflowY: "auto" }}>
+                          {(activityLogs.get(m.id) ?? []).map((log, li) => {
+                            const isLast = li === (activityLogs.get(m.id) ?? []).length - 1;
+                            const ts = new Date(log.created_at);
+                            const diff = Date.now() - ts.getTime();
+                            const mins = Math.floor(diff / 60000);
+                            const relTime = mins < 1 ? "just now" : mins < 60 ? `${mins}m ago` : mins < 1440 ? `${Math.floor(mins / 60)}h ago` : ts.toLocaleDateString([], { day: "numeric", month: "short" });
+                            return (
+                              <div key={log.id} style={{
+                                display: "flex", gap: 12, padding: "10px 16px",
+                                borderBottom: isLast ? "none" : "1px solid rgba(22,61,38,.06)",
+                                alignItems: "flex-start",
+                              }}>
+                                {/* Timeline dot */}
+                                <div style={{ width: 6, height: 6, borderRadius: "50%", background: "rgba(22,61,38,.25)", flexShrink: 0, marginTop: 5 }} />
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontSize: 12, color: C.dark, fontWeight: 500 }}>
+                                    {ACTION_LABELS[log.action] ?? log.action}
+                                    {log.entity_title && (
+                                      <span style={{ color: "rgba(22,61,38,.55)", fontWeight: 400 }}> — {log.entity_title}</span>
+                                    )}
+                                  </div>
+                                  {log.metadata && Object.keys(log.metadata).length > 0 && (
+                                    <div style={{ fontSize: 11, color: "rgba(22,61,38,.4)", marginTop: 2 }}>
+                                      {Object.entries(log.metadata).map(([k, v]) => `${k}: ${v}`).join(" · ")}
+                                    </div>
+                                  )}
+                                </div>
+                                <div style={{ fontSize: 11, color: "rgba(22,61,38,.35)", flexShrink: 0, whiteSpace: "nowrap" }} title={ts.toLocaleString()}>
+                                  {relTime}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   )}
-                  <div style={{ fontSize: 12, color: C.mid }}>{m.email}</div>
                 </div>
-
-                {/* Role badge / selector */}
-                {isAdmin ? (
-                  <select
-                    value={m.role}
-                    onChange={e => handleRoleChange(m.id, e.target.value as "admin" | "editor")}
-                    style={{
-                      padding: "4px 10px", borderRadius: 6, border: "1px solid rgba(22,61,38,.2)",
-                      background: C.white, fontSize: 12, fontWeight: 600, color: C.dark, cursor: "pointer",
-                    }}
-                  >
-                    <option value="editor">Editor</option>
-                    <option value="admin">Admin</option>
-                  </select>
-                ) : roleBadge(m.role)}
-
-                {/* Remove button — admin only, can't remove self */}
-                {isAdmin && (
-                  <button
-                    onClick={() => handleRemove(m.id, m.email)}
-                    title="Remove member"
-                    style={{
-                      width: 28, height: 28, borderRadius: "50%", border: "1px solid rgba(249,57,67,.3)",
-                      background: "rgba(249,57,67,.07)", color: C.red, cursor: "pointer",
-                      display: "flex", alignItems: "center", justifyContent: "center",
-                      fontSize: 14, fontWeight: 700, flexShrink: 0,
-                    }}
-                  >×</button>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -4600,6 +4827,7 @@ function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
         </div>
       )}
     </div>
+    </>
   );
 }
 
@@ -4614,6 +4842,9 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [newPhrase, setNewPhrase] = useState("");
   const [newGuardrail, setNewGuardrail] = useState("");
+  // Scan loader: tracks whether the brand-voice animation has completed
+  const [loadAnimDone, setLoadAnimDone] = useState(false);
+  const [saveAnimDone, setSaveAnimDone] = useState(true); // true = not saving
 
   const isDirty = bv !== null && savedBv !== null && JSON.stringify(bv) !== JSON.stringify(savedBv);
 
@@ -4630,6 +4861,7 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
   async function handleSave() {
     if (!bv || !isDirty) return;
     setSaving(true);
+    setSaveAnimDone(false); // animation becomes the gate; content blurs
     try {
       await fetch("/api/brand-voice", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bv) });
       setSavedBv(bv);
@@ -4638,6 +4870,7 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
       setTimeout(() => setSaved(false), 2500);
     } finally {
       setSaving(false);
+      // saveAnimDone stays false until animation calls setSaveAnimDone(true)
     }
   }
 
@@ -4660,31 +4893,31 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
   );
   const ta: React.CSSProperties = { width: "100%", padding: 14, border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, lineHeight: 1.6, color: "#1a1a1a", background: C.white, resize: "vertical", outline: "none", fontFamily: "inherit" };
 
-  if (loading) return (
-    <ComboLoader
-      stages={["Fetch", "Parse", "Ready"]}
-      phases={[
-        { label: "Loading brand voice", text: "Fetching your brand voice settings from the database...\nReading tone rules and style preferences..." },
-        { label: "Parsing configuration", text: "Preparing forbidden phrases list...\nLoading guardrails and audience definition..." },
-        { label: "Almost ready", text: "✓  Brand description\n✓  Audience\n✓  Tone rules\n✓  Style preferences\n✓  Guardrails" },
-      ]}
-    />
-  );
-  if (!bv) return <div style={{ padding: 48, color: C.red, fontSize: 13 }}>Could not load brand voice settings.</div>;
+  // content is gated by BOTH data loaded AND animation finished
+  const showContent = !loading && loadAnimDone;
+  const showSaveOverlay = !saveAnimDone;
+
+  if (!loading && !bv) return <div style={{ padding: 48, color: C.red, fontSize: 13 }}>Could not load brand voice settings.</div>;
 
   return (
     <>
-    {saving && (
-      <ComboLoader
-        stages={["Validate", "Save", "Cache"]}
-        phases={[
-          { label: "Validating changes", text: "Checking brand description...\nVerifying tone rules and forbidden phrases..." },
-          { label: "Saving to database", text: "Writing updated brand voice settings...\nAll generation routes will inherit these changes." },
-          { label: "Busting cache", text: "✓  Cache invalidated\n✓  Next generation picks up new rules\n✓  Brand voice updated" },
-        ]}
-      />
+    {/* Load animation — runs once on mount, content blurs behind it */}
+    {!loadAnimDone && (
+      <BrandVoiceScanLoader phraseMs={1000} onComplete={() => setLoadAnimDone(true)} />
     )}
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 40, alignItems: "start" }}>
+    {/* Save animation — runs once each time Save is clicked */}
+    {showSaveOverlay && (
+      <BrandVoiceScanLoader phraseMs={1000} onComplete={() => setSaveAnimDone(true)} />
+    )}
+    <div style={{
+      display: "grid", gridTemplateColumns: "1fr 300px", gap: 40, alignItems: "start",
+      filter: (showContent && !showSaveOverlay) ? "none" : "blur(6px)",
+      pointerEvents: (showContent && !showSaveOverlay) ? "auto" : "none",
+      userSelect: (showContent && !showSaveOverlay) ? "auto" : "none",
+      transition: "filter .4s ease",
+      minHeight: 400,
+    }}>
+    {bv && <>
 
       {/* ── Left column ── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 36 }}>
@@ -4803,7 +5036,7 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
           </div>
         </div>
       </div>
-
+    </>}
     </div>
     </>
   );
@@ -5305,6 +5538,89 @@ function saveTrashedCards(cards: DraftCard[]) {
   catch {}
 }
 
+// ── Brand Voice scan loader (Variation B) ────────────────────────────────────
+const BV_SCAN_PHRASES = [
+  "reading brand parameters…",
+  "loading tone profile…",
+  "validating guardrails…",
+  "applying voice rules…",
+];
+
+function BrandVoiceScanLoader({ onComplete, phrases: phrasesProp, phraseMs = 2000 }: { onComplete: () => void; phrases?: string[]; phraseMs?: number }) {
+  const phrases = phrasesProp ?? BV_SCAN_PHRASES;
+  const [phraseIdx, setPhraseIdx] = useState(0);
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    const PHRASE_MS = phraseMs;
+    if (phraseIdx < phrases.length - 1) {
+      const t = setTimeout(() => setPhraseIdx(i => i + 1), PHRASE_MS);
+      return () => clearTimeout(t);
+    }
+    // Last phrase — hold briefly then fade out and call onComplete
+    const t = setTimeout(() => {
+      setVisible(false);
+      setTimeout(onComplete, 400);
+    }, PHRASE_MS);
+    return () => clearTimeout(t);
+  }, [phraseIdx, onComplete, phrases.length, phraseMs]);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 999,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      background: "rgba(247,245,242,.92)", backdropFilter: "blur(6px)",
+      opacity: visible ? 1 : 0, transition: "opacity .4s ease",
+    }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 28 }}>
+
+        {/* Logo + scan line */}
+        <div style={{ position: "relative", width: 140, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+          <img src="/logo-green.png" alt="AI To Market" style={{ width: 140, height: "auto", position: "relative", zIndex: 1 }} />
+          {/* scan line */}
+          <div style={{
+            position: "absolute", left: -4, right: -4, height: 2,
+            background: "linear-gradient(90deg, transparent 0%, #185F00 30%, #2ecc71 50%, #185F00 70%, transparent 100%)",
+            boxShadow: "0 0 10px 2px rgba(24,95,0,.4)",
+            animation: "bv-scan 2s ease-in-out infinite",
+            zIndex: 2,
+          }} />
+        </div>
+
+        {/* Phrase */}
+        <div style={{
+          fontSize: 11, fontFamily: "'DM Mono', 'Courier New', monospace",
+          color: "rgba(22,61,38,.55)", letterSpacing: ".06em",
+          minWidth: 220, textAlign: "center",
+          transition: "opacity .25s",
+        }}>
+          {phrases[phraseIdx]}
+        </div>
+
+        {/* Progress dots */}
+        <div style={{ display: "flex", gap: 6 }}>
+          {phrases.map((_, i) => (
+            <div key={i} style={{
+              width: i === phraseIdx ? 18 : 6, height: 6, borderRadius: 99,
+              background: i <= phraseIdx ? "#185F00" : "rgba(22,61,38,.15)",
+              transition: "all .3s ease",
+            }} />
+          ))}
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes bv-scan {
+          0%   { top: -4px; opacity: 0; }
+          8%   { opacity: 1; }
+          92%  { opacity: 1; }
+          100% { top: calc(100% + 4px); opacity: 0; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 // ── Option-D loading animation: stage pills + live typewriter stream ──────────
 function ComboLoader({ stages, phases }: {
   stages: string[];
@@ -5328,7 +5644,9 @@ function ComboLoader({ stages, phases }: {
           timerRef.current = setTimeout(tick, 10);
         } else {
           erasingRef.current = false;
-          phaseIdxRef.current = (phaseIdxRef.current + 1) % phases.length;
+          const nextIdx = phaseIdxRef.current + 1;
+          if (nextIdx >= phases.length) return; // reached end — stop, no loop
+          phaseIdxRef.current = nextIdx;
           setPhaseIdx(phaseIdxRef.current);
           timerRef.current = setTimeout(tick, 280);
         }
@@ -5340,7 +5658,8 @@ function ComboLoader({ stages, phases }: {
           timerRef.current = setTimeout(tick, ch === "\n" ? 75 : 25);
         } else {
           const isLast = phaseIdxRef.current === phases.length - 1;
-          timerRef.current = setTimeout(() => { erasingRef.current = true; tick(); }, isLast ? 2200 : 900);
+          if (isLast) return; // last phase fully typed — stay here, don't erase
+          timerRef.current = setTimeout(() => { erasingRef.current = true; tick(); }, 900);
         }
       }
     }
@@ -5493,6 +5812,18 @@ export default function AtelierV2Page() {
       .catch(() => {});
   }, []);
 
+  // ── Activity logger ───────────────────────────────────────────────────────────
+  function logEvent(action: string, entityType?: string, entityId?: string, entityTitle?: string, metadata?: Record<string, unknown>) {
+    fetch("/api/activity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, entityType, entityId, entityTitle, metadata }),
+    }).catch(() => {});
+  }
+
+  // Log session start once on mount
+  useEffect(() => { logEvent("session.login"); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Batch queue ───────────────────────────────────────────────────────────────
   const [batchQueueEntries, setBatchQueueEntries] = useState<BatchQueueEntry[]>([]);
   useEffect(() => { setBatchQueueEntries(readBatchQueue()); }, []);
@@ -5504,6 +5835,7 @@ export default function AtelierV2Page() {
       saveBatchQueue(next);
       return next;
     });
+    logEvent("article.batch_queue_add", "article", id, title);
   }
   function handleRemoveFromBatchQueue(id: string) {
     setBatchQueueEntries(prev => {
@@ -5576,6 +5908,7 @@ export default function AtelierV2Page() {
     saveTrashedCards(newTrashed);
     if (activeCardId === id) setActiveCardId(null);
     if (newDraft.length === 0) setActiveCardId(null);
+    logEvent("article.delete", "article", id, card.brief.prompt ?? id);
   }
 
   function handleRestoreCard(id: string) {
@@ -5585,6 +5918,7 @@ export default function AtelierV2Page() {
     setDraftCards(prev => [card, ...prev]);
     setTrashedCards(newTrashed);
     saveTrashedCards(newTrashed);
+    logEvent("article.restore", "article", id, card.brief.prompt ?? id);
   }
 
   function handleDeletePermanently(id: string) {

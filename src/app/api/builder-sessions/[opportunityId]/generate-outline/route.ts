@@ -3,6 +3,7 @@ import { updateSession } from "@/lib/builder-sessions-store";
 import { chatJson } from "@/lib/openai-article";
 import { requireUser } from "@/lib/api-auth";
 import { getBrandVoicePrompt } from "@/lib/brand-voice";
+import { checkBudget } from "@/lib/budget-guard";
 import type {
   GenerateArticleSectionsResponse,
   GenerateArticleSection,
@@ -124,6 +125,14 @@ function mockOutlineResponse(topicTitle: string): GenerateArticleSectionsRespons
 export async function POST(req: NextRequest, { params }: Params) {
   const { user, error } = await requireUser();
   if (error) return error;
+
+  const budget = await checkBudget(user.id);
+  if (!budget.allowed) {
+    return Response.json(
+      { error: `Monthly call limit reached (${budget.count} of ${budget.budget}). Update your limit in Settings → AI Usage.` },
+      { status: 429 }
+    );
+  }
 
   const { opportunityId } = await params;
   const body = (await req.json()) as {
