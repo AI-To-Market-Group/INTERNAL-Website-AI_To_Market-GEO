@@ -77,16 +77,16 @@ export async function dbSaveGeoRun(
 }
 
 export async function dbGetGeoRunHistory(
-  userId: string,
+  _userId: string,
   companyName?: string,
   limit = 20
 ): Promise<GeoRunRecord[]> {
   const safeLimit = Math.min(100, Math.max(1, limit));
 
+  // Org-wide: fetch all runs regardless of who ran them
   let query = supabaseAdmin
     .from("geo_history")
     .select("*")
-    .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(safeLimit);
 
@@ -100,13 +100,13 @@ export async function dbGetGeoRunHistory(
 }
 
 export async function dbGetGeoRunById(
-  userId: string,
+  _userId: string,
   runId: string
 ): Promise<GeoRunRecord | null> {
+  // Org-wide: fetch by run_id only, regardless of who ran it
   const { data, error } = await supabaseAdmin
     .from("geo_history")
     .select("*")
-    .eq("user_id", userId)
     .eq("run_id", runId)
     .maybeSingle();
 
