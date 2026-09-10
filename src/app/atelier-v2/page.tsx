@@ -1587,9 +1587,18 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
   const [subState, setSubState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [faqOpenIdx, setFaqOpenIdx] = useState<number | null>(0);
   const articleBodyRef = useRef<HTMLDivElement>(null);
-  const [sectionSvgs, setSectionSvgs] = useState<Record<number, string>>({});
+  // Image state — arrays per section order (newest first), active index per section
+  const [sectionImages, setSectionImages] = useState<Record<number, string[]>>({});
+  const [activeImgIdx, setActiveImgIdx] = useState<Record<number, number>>({});
+  const [imgLoadingOrders, setImgLoadingOrders] = useState<Set<number>>(new Set());
+  const [hoveredImg, setHoveredImg] = useState<number | null>(null);
+  // Image modal state
+  type ImgModal = { order: number; heading: string; sType: string; prompt: string };
+  const [imgModal, setImgModal] = useState<ImgModal | null>(null);
+  const [imgPrompt, setImgPrompt] = useState("");
+  const [imgGenerating, setImgGenerating] = useState(false);
 
-  // Fetch Claude-generated SVG illustrations for each body section
+  // Auto-fetch Claude SVG illustrations for body sections on first load
   useEffect(() => {
     const bodySections = sections.filter(s =>
       !/^(introduction|stats|conclusion|faq)$/i.test(s.type) &&
@@ -1597,7 +1606,10 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
       !/frequently asked/i.test(s.heading)
     );
     if (!bodySections.length) return;
-    setSectionSvgs({});
+    setSectionImages({});
+    setActiveImgIdx({});
+    const orders = new Set(bodySections.map(s => s.order));
+    setImgLoadingOrders(orders);
     bodySections.forEach(s => {
       const summary = s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400);
       fetch("/api/illustration-generate-claude", {
@@ -1608,13 +1620,34 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
         .then(r => r.json())
         .then((data: { svgString?: string | null }) => {
           if (data.svgString) {
-            setSectionSvgs(prev => ({ ...prev, [s.order]: data.svgString! }));
+            setSectionImages(prev => ({ ...prev, [s.order]: [data.svgString!, ...(prev[s.order] ?? [])] }));
+            setActiveImgIdx(prev => ({ ...prev, [s.order]: 0 }));
           }
         })
-        .catch(() => { /* silently keep placeholder */ });
+        .catch(() => {})
+        .finally(() => setImgLoadingOrders(prev => { const n = new Set(prev); n.delete(s.order); return n; }));
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [article.title]);
+
+  async function generateNewImage() {
+    if (!imgModal || imgGenerating) return;
+    setImgGenerating(true);
+    try {
+      const res = await fetch("/api/illustration-generate-claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ heading: imgModal.heading, sectionType: imgModal.sType, summary: imgPrompt }),
+      });
+      const data = await res.json() as { svgString?: string | null };
+      if (data.svgString) {
+        const order = imgModal.order;
+        setSectionImages(prev => ({ ...prev, [order]: [data.svgString!, ...(prev[order] ?? [])] }));
+        setActiveImgIdx(prev => ({ ...prev, [order]: 0 }));
+      }
+    } catch {}
+    setImgGenerating(false);
+  }
 
   // DOM-based brand voice violation highlighting — same approach as v1
   useEffect(() => {
@@ -1702,19 +1735,52 @@ const hlStyle = (heading: string): React.CSSProperties =>
         </h1>
       </div>
 
-      {/* Hero image */}
-      <div style={{ background: `linear-gradient(140deg, #163D26 0%, #185F00 100%)`, height: 240, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden" }}>
-        <svg viewBox="0 0 400 240" width="100%" height="100%" style={{ position: "absolute", inset: 0, opacity: .06 }} preserveAspectRatio="xMidYMid slice">
-          <defs><pattern id="nlgrid" x="0" y="0" width="36" height="36" patternUnits="userSpaceOnUse"><path d="M 36 0 L 0 0 0 36" fill="none" stroke="white" strokeWidth="1"/></pattern></defs>
-          <rect width="100%" height="100%" fill="url(#nlgrid)"/>
-        </svg>
-        <div style={{ position: "relative", textAlign: "center" }}>
-          <svg viewBox="0 0 48 48" width="44" height="44" fill="none" stroke="rgba(255,255,255,.32)" strokeWidth="1.5" strokeLinecap="round">
-            <rect x="4" y="4" width="40" height="40" rx="4"/><circle cx="16" cy="18" r="4"/><path d="M44 32l-10-10-14 14"/>
-          </svg>
-          <div style={{ marginTop: 10, fontSize: 10, fontWeight: 600, letterSpacing: ".12em", color: "rgba(255,255,255,.28)" }}>HERO IMAGE</div>
-        </div>
-      </div>
+      {/* Hero image — clickable to generate */}
+      {(() => {
+        const heroImgs = sectionImages[0] ?? [];
+        const heroSvg = heroImgs[activeImgIdx[0] ?? 0] ?? null;
+        const heroLoading = imgLoadingOrders.has(0);
+        const heroHovered = hoveredImg === 0;
+        return (
+          <div
+            onClick={() => { setImgModal({ order: 0, heading: article.title, sType: "hero", prompt: `Hero illustration for article: ${article.title}` }); setImgPrompt(`Hero illustration for article: ${article.title}`); }}
+            onMouseEnter={() => setHoveredImg(0)}
+            onMouseLeave={() => setHoveredImg(null)}
+            style={{ height: 240, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", cursor: "pointer", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)` }}
+          >
+            {heroSvg ? (
+              <div dangerouslySetInnerHTML={{ __html: heroSvg.replace(/width="340"/, 'width="100%"').replace(/height="130"/, 'height="240"').replace(/viewBox="0 0 340 130"/, 'viewBox="0 0 340 130" preserveAspectRatio="xMidYMid slice"') }} style={{ width: "100%", height: 240, lineHeight: 0 }} />
+            ) : (
+              <>
+                <svg viewBox="0 0 400 240" width="100%" height="100%" style={{ position: "absolute", inset: 0, opacity: .06 }} preserveAspectRatio="xMidYMid slice">
+                  <defs><pattern id="nlgrid" x="0" y="0" width="36" height="36" patternUnits="userSpaceOnUse"><path d="M 36 0 L 0 0 0 36" fill="none" stroke="white" strokeWidth="1"/></pattern></defs>
+                  <rect width="100%" height="100%" fill="url(#nlgrid)"/>
+                </svg>
+                <div style={{ position: "relative", textAlign: "center" }}>
+                  {heroLoading ? (
+                    <div style={{ width: 28, height: 28, border: "2px solid rgba(255,255,255,.2)", borderTop: "2px solid rgba(255,255,255,.7)", borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto" }} />
+                  ) : (
+                    <svg viewBox="0 0 48 48" width="44" height="44" fill="none" stroke="rgba(255,255,255,.32)" strokeWidth="1.5" strokeLinecap="round">
+                      <rect x="4" y="4" width="40" height="40" rx="4"/><circle cx="16" cy="18" r="4"/><path d="M44 32l-10-10-14 14"/>
+                    </svg>
+                  )}
+                  <div style={{ marginTop: 10, fontSize: 10, fontWeight: 600, letterSpacing: ".12em", color: "rgba(255,255,255,.28)" }}>HERO IMAGE</div>
+                </div>
+              </>
+            )}
+            {heroHovered && (
+              <div style={{ position: "absolute", inset: 0, background: "rgba(22,61,38,.65)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="rgba(255,255,255,.9)" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+                </svg>
+                <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,.9)", letterSpacing: ".1em" }}>
+                  {heroSvg ? `EDIT HERO · ${heroImgs.length} VERSION${heroImgs.length > 1 ? "S" : ""}` : "GENERATE HERO IMAGE"}
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Article body */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", padding: "44px 52px" }}>
@@ -1739,39 +1805,78 @@ const hlStyle = (heading: string): React.CSSProperties =>
           return (
             <div key={s.order} id={sectionSlug(s.heading)} style={{ scrollMarginTop: 32, overflow: "hidden", ...hlStyle(s.heading) }}>
               {divider}
-              {/* Floated illustration — text wraps around it and fills any space below */}
-              <div style={{
-                float: imgLeft ? "left" : "right",
-                marginRight: imgLeft ? 28 : 0,
-                marginLeft: imgLeft ? 0 : 28,
-                marginBottom: 16,
-                width: 300,
-                height: 240,
-                borderRadius: 9,
-                background: "rgba(22,61,38,.04)",
-                border: "1px solid rgba(22,61,38,.1)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0,
-                overflow: "hidden",
-              }}>
-                {sectionSvgs[s.order] ? (
+              {/* Floated illustration — clickable, shows active image from history */}
+              {(() => {
+                const imgs = sectionImages[s.order] ?? [];
+                const idx = activeImgIdx[s.order] ?? 0;
+                const activeSvg = imgs[idx] ?? null;
+                const isLoading = imgLoadingOrders.has(s.order);
+                const isHovered = hoveredImg === s.order;
+                const summary = s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400);
+                return (
                   <div
-                    dangerouslySetInnerHTML={{
-                      __html: sectionSvgs[s.order]
-                        .replace(/width="340"/, 'width="300"')
-                        .replace(/height="130"/, 'height="240"')
-                        .replace(/viewBox="0 0 340 130"/, 'viewBox="0 0 340 130" preserveAspectRatio="xMidYMid meet"'),
+                    onClick={() => { setImgModal({ order: s.order, heading: s.heading, sType: s.type, prompt: summary }); setImgPrompt(summary); }}
+                    onMouseEnter={() => setHoveredImg(s.order)}
+                    onMouseLeave={() => setHoveredImg(null)}
+                    style={{
+                      float: imgLeft ? "left" : "right",
+                      marginRight: imgLeft ? 28 : 0,
+                      marginLeft: imgLeft ? 0 : 28,
+                      marginBottom: 16,
+                      width: 300, height: 240,
+                      borderRadius: 9,
+                      background: "rgba(22,61,38,.04)",
+                      border: `1px solid ${isHovered ? "rgba(22,61,38,.35)" : "rgba(22,61,38,.1)"}`,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      flexShrink: 0, overflow: "hidden",
+                      position: "relative", cursor: "pointer",
+                      transition: "border-color .15s",
                     }}
-                    style={{ lineHeight: 0, display: "block", width: 300, height: 240 }}
-                  />
-                ) : (
-                  <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(22,61,38,.22)" strokeWidth="1.5" strokeLinecap="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
-                  </svg>
-                )}
-              </div>
+                  >
+                    {activeSvg ? (
+                      <div
+                        dangerouslySetInnerHTML={{
+                          __html: activeSvg
+                            .replace(/width="340"/, 'width="300"')
+                            .replace(/height="130"/, 'height="240"')
+                            .replace(/viewBox="0 0 340 130"/, 'viewBox="0 0 340 130" preserveAspectRatio="xMidYMid meet"'),
+                        }}
+                        style={{ lineHeight: 0, display: "block", width: 300, height: 240 }}
+                      />
+                    ) : isLoading ? (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+                        <div style={{ width: 24, height: 24, border: "2px solid rgba(22,61,38,.15)", borderTop: "2px solid rgba(22,61,38,.5)", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+                        <span style={{ fontSize: 10, fontWeight: 600, color: "rgba(22,61,38,.4)", letterSpacing: ".08em" }}>GENERATING</span>
+                      </div>
+                    ) : (
+                      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(22,61,38,.22)" strokeWidth="1.5" strokeLinecap="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
+                      </svg>
+                    )}
+                    {/* Hover overlay */}
+                    {isHovered && (
+                      <div style={{
+                        position: "absolute", inset: 0, background: "rgba(22,61,38,.72)",
+                        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8,
+                        transition: "opacity .15s",
+                      }}>
+                        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="rgba(255,255,255,.9)" strokeWidth="1.8" strokeLinecap="round">
+                          <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+                        </svg>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,.9)", letterSpacing: ".1em" }}>
+                          {activeSvg ? `EDIT IMAGE · ${imgs.length} VERSION${imgs.length > 1 ? "S" : ""}` : "GENERATE IMAGE"}
+                        </span>
+                      </div>
+                    )}
+                    {/* Version badge */}
+                    {imgs.length > 1 && !isHovered && (
+                      <div style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(22,61,38,.7)", color: "#fff", fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 4, letterSpacing: ".05em" }}>
+                        {idx + 1}/{imgs.length}
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
               <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 10 }}>
                 {s.eyebrow || s.type.replace(/_/g, " ").toUpperCase()}
               </div>
@@ -2005,6 +2110,103 @@ const hlStyle = (heading: string): React.CSSProperties =>
           </div>
         </div>
       </div>
+
+      {/* Image Modal */}
+      {imgModal && (() => {
+        const modalImgs = sectionImages[imgModal.order] ?? [];
+        const modalActive = activeImgIdx[imgModal.order] ?? 0;
+        const activeSvg = modalImgs[modalActive] ?? null;
+        return (
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+            onClick={e => { if (e.target === e.currentTarget) setImgModal(null); }}
+          >
+            <div style={{ background: "#fff", borderRadius: 16, width: "100%", maxWidth: 720, maxHeight: "90vh", overflow: "auto", boxShadow: "0 24px 80px rgba(0,0,0,.4)" }}>
+              {/* Modal header */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 24px 16px", borderBottom: "1px solid rgba(22,61,38,.1)" }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".12em", color: "rgba(22,61,38,.45)", textTransform: "uppercase", marginBottom: 4 }}>{imgModal.sType}</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "#163D26", lineHeight: 1.3, maxWidth: 540 }}>{imgModal.heading}</div>
+                </div>
+                <button
+                  onClick={() => setImgModal(null)}
+                  style={{ width: 32, height: 32, borderRadius: "50%", border: "1.5px solid rgba(22,61,38,.15)", background: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#163D26", fontSize: 18, lineHeight: 1 }}
+                >×</button>
+              </div>
+
+              {/* Large image preview */}
+              <div style={{ padding: "20px 24px 0" }}>
+                <div style={{ background: "#F7F5F2", borderRadius: 12, overflow: "hidden", width: "100%", height: 240, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {imgGenerating ? (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
+                      <div style={{ width: 32, height: 32, border: "2.5px solid rgba(22,61,38,.15)", borderTop: "2.5px solid #163D26", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
+                      <div style={{ fontSize: 11, fontWeight: 600, color: "rgba(22,61,38,.4)", letterSpacing: ".08em" }}>GENERATING…</div>
+                    </div>
+                  ) : activeSvg ? (
+                    <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="340"/, 'width="100%"').replace(/height="130"/, 'height="240"').replace(/viewBox="0 0 340 130"/, 'viewBox="0 0 340 130" preserveAspectRatio="xMidYMid meet"') }} style={{ width: "100%", height: 240, lineHeight: 0 }} />
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                      <svg viewBox="0 0 48 48" width="40" height="40" fill="none" stroke="rgba(22,61,38,.25)" strokeWidth="1.5" strokeLinecap="round">
+                        <rect x="4" y="4" width="40" height="40" rx="4"/><circle cx="16" cy="18" r="4"/><path d="M44 32l-10-10-14 14"/>
+                      </svg>
+                      <div style={{ fontSize: 11, color: "rgba(22,61,38,.35)", fontWeight: 600 }}>No image yet</div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Version thumbnails */}
+                {modalImgs.length > 1 && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 12, overflowX: "auto", paddingBottom: 4 }}>
+                    {modalImgs.map((svg, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => setActiveImgIdx(prev => ({ ...prev, [imgModal.order]: idx }))}
+                        style={{ flexShrink: 0, width: 80, height: 50, borderRadius: 8, overflow: "hidden", border: `2px solid ${idx === modalActive ? "#163D26" : "rgba(22,61,38,.15)"}`, cursor: "pointer", background: "#F7F5F2", padding: 0, position: "relative" }}
+                        title={`Version ${modalImgs.length - idx}`}
+                      >
+                        <div dangerouslySetInnerHTML={{ __html: svg }} style={{ transform: "scale(0.235)", transformOrigin: "top left", width: 340, height: 130, pointerEvents: "none" }} />
+                        <div style={{ position: "absolute", bottom: 2, right: 4, fontSize: 9, fontWeight: 700, color: idx === modalActive ? "#163D26" : "rgba(22,61,38,.45)" }}>
+                          v{modalImgs.length - idx}
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Prompt + generate */}
+              <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 12 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "rgba(22,61,38,.55)", letterSpacing: ".1em", textTransform: "uppercase" }}>Reprompt</label>
+                <textarea
+                  value={imgPrompt}
+                  onChange={e => setImgPrompt(e.target.value)}
+                  rows={3}
+                  placeholder="Describe what you want to see in the illustration…"
+                  style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1.5px solid rgba(22,61,38,.18)", background: "#F7F5F2", fontSize: 13, lineHeight: 1.55, color: "#163D26", resize: "vertical", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+                />
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  {modalImgs.length > 0 && (
+                    <div style={{ fontSize: 11, color: "rgba(22,61,38,.45)" }}>
+                      {modalImgs.length} version{modalImgs.length > 1 ? "s" : ""} · showing v{modalImgs.length - modalActive}
+                    </div>
+                  )}
+                  <button
+                    onClick={() => void generateNewImage()}
+                    disabled={imgGenerating}
+                    style={{ marginLeft: "auto", padding: "10px 22px", borderRadius: 8, background: imgGenerating ? "rgba(22,61,38,.3)" : "#163D26", color: "#fff", fontSize: 13, fontWeight: 700, border: "none", cursor: imgGenerating ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}
+                  >
+                    {imgGenerating && <div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,.25)", borderTop: "2px solid #fff", borderRadius: "50%", animation: "spin 1s linear infinite" }} />}
+                    {imgGenerating ? "Generating…" : "Generate new image"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Keyframe for spinner */}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }
