@@ -4903,11 +4903,11 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
     <>
     {/* Load animation — runs once on mount, content blurs behind it */}
     {!loadAnimDone && (
-      <BrandVoiceScanLoader onComplete={() => setLoadAnimDone(true)} />
+      <BrandVoiceScanLoader phraseMs={1000} onComplete={() => setLoadAnimDone(true)} />
     )}
     {/* Save animation — runs once each time Save is clicked */}
     {showSaveOverlay && (
-      <BrandVoiceScanLoader onComplete={() => setSaveAnimDone(true)} />
+      <BrandVoiceScanLoader phraseMs={1000} onComplete={() => setSaveAnimDone(true)} />
     )}
     <div style={{
       display: "grid", gridTemplateColumns: "1fr 300px", gap: 40, alignItems: "start",
