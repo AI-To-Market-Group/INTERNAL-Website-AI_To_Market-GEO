@@ -184,18 +184,25 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
   return (
     <aside style={{ width: w, flexShrink: 0, background: C.dark, color: C.white, display: "flex", flexDirection: "column", padding: collapsed ? "20px 10px" : "24px 16px", position: "sticky", top: 0, height: "100vh", transition: "width .22s ease, padding .22s ease", overflow: "hidden" }}>
 
-      {/* Logo left, toggle right */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24, minWidth: 0 }}>
-        {!collapsed && (
+      {/* Logo + toggle */}
+      {collapsed ? (
+        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12, marginBottom: 24 }}>
+          <img src="/logo-white.png" alt="AI To Market" style={{ width: 36, height: 36, objectFit: "contain", display: "block" }} />
+          <button onClick={onToggle} title="Expand sidebar" style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,.1)", border: "none", cursor: "pointer", color: C.white }}>
+            <HamburgerIcon />
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 24, minWidth: 0 }}>
           <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
             <img src="/logo-white.svg" alt="AI To Market" style={{ height: 24, width: "auto", display: "block" }} />
             <div style={{ marginTop: 4, fontSize: 10, fontWeight: 600, letterSpacing: ".1em", opacity: .55, whiteSpace: "nowrap" }}>GEO CONTENT DESK</div>
           </div>
-        )}
-        <button onClick={onToggle} title={collapsed ? "Expand sidebar" : "Collapse sidebar"} style={{ flexShrink: 0, marginLeft: "auto", display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,.1)", border: "none", cursor: "pointer", color: C.white }}>
-          <HamburgerIcon />
-        </button>
-      </div>
+          <button onClick={onToggle} title="Collapse sidebar" style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center", width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,.1)", border: "none", cursor: "pointer", color: C.white }}>
+            <HamburgerIcon />
+          </button>
+        </div>
+      )}
 
       {/* Workspace / version switcher — hidden when collapsed */}
       {!collapsed && (
