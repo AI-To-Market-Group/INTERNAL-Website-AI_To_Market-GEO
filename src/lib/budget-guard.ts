@@ -43,7 +43,8 @@ export async function getBudget(_userId?: string): Promise<number> {
 }
 
 export async function setBudget(_userId: string | undefined, budget: number): Promise<void> {
-  await supabaseAdmin
+  const { error } = await supabaseAdmin
     .from("user_budget_settings")
     .upsert({ user_id: ORG_KEY, monthly_call_budget: budget, updated_at: new Date().toISOString() });
+  if (error) throw new Error(`setBudget failed: ${error.message}`);
 }
