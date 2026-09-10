@@ -524,6 +524,9 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
   const [adjacentOn, setAdjacentOn] = useState([0, 2]);
   const [togglesOn, setTogglesOn] = useState([0, 1, 3]);
   const [brief, setBrief] = useState("Explainer for B2B marketing leads on how answer engines pick sources, with a comparison of GEO and classic SEO and a short checklist.");
+  const [oneShotFormat, setOneShotFormat] = useState("Definitional explainer");
+  const [oneShotLength, setOneShotLength] = useState(1200);
+  const [oneShotGenerating, setOneShotGenerating] = useState(false);
   const [chatInput, setChatInput] = useState("");
 
   // ── Conversational chat state ────────────────────────────────────────────────
@@ -602,6 +605,39 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
     } catch (e) {
       setChatError(e instanceof Error ? e.message : "Failed to create session");
       setGenerating(false);
+    }
+  }
+
+  async function handleOneShotGenerate() {
+    if (!brief.trim() || oneShotGenerating) return;
+    setOneShotGenerating(true);
+    try {
+      const activeFlags = TOGGLE_LABELS.filter((_, i) => togglesOn.includes(i));
+      const contentBrief = [
+        brief.trim(),
+        `\nFORMAT: ${oneShotFormat}`,
+        `TARGET_WORDS: ${oneShotLength}`,
+        activeFlags.length ? `FLAGS: ${activeFlags.join(", ")}` : "",
+      ].filter(Boolean).join("\n");
+
+      const res = await fetch("/api/builder-sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic_title: brief.slice(0, 120),
+          opportunity_context: { content_brief: contentBrief },
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const data = await res.json() as { opportunityId: string };
+      onSessionCreated(data.opportunityId, { prompt: brief.slice(0, 120), format: oneShotFormat });
+    } catch (e) {
+      console.error("[one-shot] failed to create session:", e);
+    } finally {
+      setOneShotGenerating(false);
     }
   }
 
@@ -796,12 +832,22 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
                 <textarea value={brief} onChange={e => setBrief(e.target.value)} rows={7} style={{ width: "100%", padding: 14, border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 14, fontWeight: 400, lineHeight: 1.55, color: C.dark, background: C.bg, resize: "vertical", outline: "none" }} />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16 }}>
-                {[["FORMAT", "Definitional explainer"], ["LENGTH", "1200 to 1600"], ["VOICE", "House style"]].map(([lbl, val]) => (
-                  <div key={lbl}>
-                    <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>{lbl}</label>
-                    <div style={{ padding: "12px 14px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, fontWeight: 600, background: C.bg }}>{val}</div>
-                  </div>
-                ))}
+                <div>
+                  <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>FORMAT</label>
+                  <select value={oneShotFormat} onChange={e => setOneShotFormat(e.target.value)} style={{ width: "100%", padding: "12px 14px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, fontWeight: 600, background: C.bg, color: C.dark, appearance: "none", cursor: "pointer", outline: "none" }}>
+                    {["Definitional explainer", "How-to guide", "Comparison", "Listicle", "Opinion piece"].map(f => <option key={f} value={f}>{f}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>LENGTH (words)</label>
+                  <select value={oneShotLength} onChange={e => setOneShotLength(Number(e.target.value))} style={{ width: "100%", padding: "12px 14px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, fontWeight: 600, background: C.bg, color: C.dark, appearance: "none", cursor: "pointer", outline: "none" }}>
+                    {[[600, "600 – 800"], [900, "900 – 1100"], [1200, "1200 – 1600"], [1800, "1800 – 2200"]].map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>VOICE</label>
+                  <div style={{ padding: "12px 14px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, fontWeight: 600, background: C.bg, color: "rgba(22,61,38,.5)" }}>House style</div>
+                </div>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                 {TOGGLE_LABELS.map((label, i) => {
@@ -814,7 +860,7 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
                   );
                 })}
               </div>
-              <button onClick={onQueue} style={{ alignSelf: "flex-start", padding: "14px 24px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer" }}>Generate and score</button>
+              <button onClick={handleOneShotGenerate} disabled={oneShotGenerating || !brief.trim()} style={{ alignSelf: "flex-start", padding: "14px 24px", borderRadius: 8, background: oneShotGenerating ? "rgba(22,61,38,.4)" : C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: oneShotGenerating ? "wait" : "pointer" }}>{oneShotGenerating ? "Creating session…" : "Generate and score"}</button>
             </div>
           </section>
           <aside style={{ padding: 24, border: `1px solid ${C.border}`, borderRadius: 12, background: C.dark, color: C.white, position: "sticky", top: 180 }}>

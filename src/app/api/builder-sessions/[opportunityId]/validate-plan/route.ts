@@ -258,6 +258,24 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
   return { title: raw.title ?? articleTitle, sections };
 }
 
+function parseOneShotHints(contentBrief: string | undefined): { targetWords?: number; flagModifiers: string[] } {
+  if (!contentBrief) return { flagModifiers: [] };
+  const targetWordsMatch = contentBrief.match(/^TARGET_WORDS:\s*(\d+)/m);
+  const flagsMatch = contentBrief.match(/^FLAGS:\s*(.+)/m);
+  const FLAG_MAP: Record<string, string> = {
+    "Inject FAQ schema": "After the FAQ section, output a JSON-LD FAQPage schema block as a paragraph with id 9999 and text starting with <script type=\"application/ld+json\">.",
+    "Add comparison table": "In the most appropriate body section, include an HTML <table> comparison (2-4 columns, 3-5 rows) embedded as a paragraph.",
+    "Require 3 citable sources": "Cite at least 3 named external sources in format 'According to [Named Source, Year]'. Do not use generic 'According to research' more than once.",
+    "Write answer block per section": "Begin every non-introduction, non-conclusion section with a 1–2 sentence direct answer block (bold the key claim) before expanding into full paragraphs.",
+  };
+  const activeFlags = flagsMatch ? flagsMatch[1].split(",").map(f => f.trim()).filter(Boolean) : [];
+  const flagModifiers = activeFlags.map(f => FLAG_MAP[f]).filter(Boolean);
+  return {
+    targetWords: targetWordsMatch ? parseInt(targetWordsMatch[1]) : undefined,
+    flagModifiers,
+  };
+}
+
 export async function POST(req: NextRequest, { params }: Params) {
   const { user, error } = await requireUser();
   if (error) return error;
@@ -275,6 +293,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   const ctx = session?.opportunityContext;
   const targetKeywords = ctx?.tags ?? [];
   const wordCountTargets = await getWordCountTargets();
+  const { targetWords, flagModifiers } = parseOneShotHints(ctx?.content_brief);
 
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey || outline.length === 0) {
@@ -359,7 +378,7 @@ SECTION-TYPE RULES (each one MUST add value beyond the outline):
 - For other "section" types: 2–3 paragraphs (60–80 words each) of real specific content using brand and product names from the outline.
 
 Every section must have at least one paragraph or one bullet entry. Use outline bullets as content scaffolding — never ignore them, never quote them.
-${getGenerationLengthPrompt(outline.length)}`;
+${getGenerationLengthPrompt(outline.length, targetWords)}${flagModifiers.length ? `\n\nONE-SHOT FLAGS (apply all):\n${flagModifiers.map((m, i) => `${i + 1}. ${m}`).join("\n")}` : ""}`;
 
   const userPrompt = [
     `Article title: ${articleTitle}`,
