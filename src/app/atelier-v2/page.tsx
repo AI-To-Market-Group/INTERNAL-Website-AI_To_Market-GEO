@@ -877,7 +877,7 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
 
       {/* ── Single shot ── */}
       {flow === "single" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 32, alignItems: "start" }}>
+        <div>
           <section style={{ padding: 32, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
             <h2 style={{ margin: "0 0 24px", fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>One brief, one pass</h2>
             <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
@@ -921,13 +921,6 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
               <button onClick={handleOneShotGenerate} disabled={oneShotGenerating || !brief.trim()} style={{ alignSelf: "flex-start", padding: "14px 24px", borderRadius: 8, background: oneShotGenerating ? "rgba(22,61,38,.4)" : C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: oneShotGenerating ? "wait" : "pointer" }}>{oneShotGenerating ? "Creating session…" : "Generate and score"}</button>
             </div>
           </section>
-          <aside style={{ padding: 24, border: `1px solid ${C.border}`, borderRadius: 12, background: C.dark, color: C.white, position: "sticky", top: 180 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", opacity: .75 }}>WHAT WE WILL DO</div>
-            <ol style={{ margin: "16px 0 0", paddingLeft: 18, display: "flex", flexDirection: "column", gap: 12, fontSize: 12, fontWeight: 400, lineHeight: 1.5 }}>
-              {PIPELINE_STEPS.map(p => <li key={p}>{p}</li>)}
-            </ol>
-            <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid rgba(255,255,255,.18)", fontSize: 11, fontWeight: 400, opacity: .75 }}>Typical run: 3 to 5 minutes, 1 credit.</div>
-          </aside>
         </div>
       )}
 
@@ -6412,7 +6405,7 @@ export default function AtelierV2Page() {
       />
 
       <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-        {screen !== "editor" && <PageHeader screen={screen} onGenerate={go("generate")} onKeywords={go("keywords")} />}
+        {screen !== "editor" && screen !== "generate" && <PageHeader screen={screen} onGenerate={go("generate")} onKeywords={go("keywords")} />}
 
         <div style={{ flex: 1, padding: "32px 40px 64px" }}>
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}
