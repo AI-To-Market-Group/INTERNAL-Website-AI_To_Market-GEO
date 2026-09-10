@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { requireUser, requireAdmin } from "@/lib/api-auth";
 import { supabaseAdmin } from "@/lib/supabase/admin";
 import { invalidateBrandVoiceCache } from "@/lib/brand-voice";
+import { logActivity } from "@/lib/log-activity";
 
 export async function GET() {
   const { error: authError } = await requireUser();
@@ -21,7 +22,7 @@ export async function GET() {
 }
 
 export async function PUT(req: NextRequest) {
-  const { error: authError } = await requireAdmin();
+  const { user, error: authError } = await requireAdmin();
   if (authError) return authError;
 
   const body = (await req.json()) as {
@@ -64,5 +65,6 @@ export async function PUT(req: NextRequest) {
   }
 
   invalidateBrandVoiceCache();
+  void logActivity({ userId: user!.id, userEmail: user!.email ?? "", action: "brand_voice.save", entityType: "brand_voice" });
   return NextResponse.json(result.data);
 }

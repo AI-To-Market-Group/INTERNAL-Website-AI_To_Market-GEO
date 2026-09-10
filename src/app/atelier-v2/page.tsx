@@ -998,6 +998,7 @@ function QueueScreen({
         }
       }
       setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 100, stage: "Done" }); return m; });
+      fetch("/api/activity", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "article.batch_build", entityType: "article", entityId: id, entityTitle: title }) }).catch(() => {});
     } catch (e) {
       setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 100, stage: "Failed", error: e instanceof Error ? e.message : String(e) }); return m; });
     }
@@ -4367,6 +4368,32 @@ interface TeamMember {
   invited?: boolean;
 }
 
+interface ActivityLogEntry {
+  id: string;
+  user_id: string;
+  user_email: string;
+  action: string;
+  entity_type: string | null;
+  entity_id: string | null;
+  entity_title: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
+const ACTION_LABELS: Record<string, string> = {
+  "session.login":           "Logged in",
+  "article.generate":        "Started generating article",
+  "article.batch_queue_add": "Sent to batch queue",
+  "article.batch_build":     "Built article (batch)",
+  "article.delete":          "Deleted article",
+  "article.restore":         "Restored article",
+  "brand_voice.save":        "Updated brand voice",
+  "publish.sanity":          "Published to Sanity",
+  "team.invite":             "Invited team member",
+  "team.role_change":        "Changed member role",
+  "team.remove":             "Removed team member",
+};
+
 function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
   const [members, setMembers] = useState<TeamMember[]>([]);
   const [loading, setLoading] = useState(true);
@@ -4377,6 +4404,8 @@ function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [expandedLog, setExpandedLog] = useState<string | null>(null); // member id
   const [presenceMap, setPresenceMap] = useState<Map<string, { active_card_id: string | null; last_seen_at: string }>>(new Map());
+  const [activityLogs, setActivityLogs] = useState<Map<string, ActivityLogEntry[]>>(new Map());
+  const [activityLoading, setActivityLoading] = useState<string | null>(null);
 
   const isAdmin = userRole === "admin";
 
@@ -4602,7 +4631,20 @@ function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
                     {/* Log button — admin only */}
                     {isAdmin && (
                       <button
-                        onClick={() => setExpandedLog(isExpanded ? null : m.id)}
+                        onClick={() => {
+                          const next = isExpanded ? null : m.id;
+                          setExpandedLog(next);
+                          if (next && !activityLogs.has(next)) {
+                            setActivityLoading(next);
+                            fetch(`/api/activity?userId=${next}&limit=30`)
+                              .then(r => r.ok ? r.json() : [])
+                              .then((rows: ActivityLogEntry[]) => {
+                                setActivityLogs(prev => new Map(prev).set(next, rows));
+                              })
+                              .catch(() => {})
+                              .finally(() => setActivityLoading(al => al === next ? null : al));
+                          }
+                        }}
                         style={{
                           padding: "4px 10px", borderRadius: 6, fontSize: 11, fontWeight: 700,
                           letterSpacing: ".05em", border: "1px solid rgba(22,61,38,.18)",
@@ -4632,38 +4674,69 @@ function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
                   {/* Expanded log panel */}
                   {isExpanded && isAdmin && (
                     <div style={{
-                      margin: "0 20px 14px", padding: 16, borderRadius: 8,
+                      margin: "0 20px 14px", borderRadius: 8,
                       background: "rgba(22,61,38,.03)", border: "1px solid rgba(22,61,38,.1)",
+                      overflow: "hidden",
                     }}>
-                      {/* Status row */}
-                      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                        <div style={{
-                          width: 8, height: 8, borderRadius: "50%",
-                          background: STATUS_COLORS[status], flexShrink: 0,
-                        }} />
-                        <span style={{ fontSize: 12, fontWeight: 700, color: C.dark, textTransform: "capitalize" }}>{status}</span>
-                        <span style={{ fontSize: 12, color: C.mid }}>— {formatLastSeen(m.id)}</span>
-                      </div>
-
-                      {/* Current activity */}
-                      {presence?.active_card_id ? (
-                        <div style={{ fontSize: 12, color: C.mid, marginBottom: 10 }}>
-                          <span style={{ fontWeight: 600, color: C.dark }}>Currently editing:</span> card <code style={{ fontSize: 11, background: "rgba(22,61,38,.06)", padding: "1px 5px", borderRadius: 4 }}>{presence.active_card_id.slice(0, 8)}…</code>
+                      {/* Status + presence header */}
+                      <div style={{ padding: "12px 16px", display: "flex", alignItems: "center", gap: 12, borderBottom: "1px solid rgba(22,61,38,.08)", flexWrap: "wrap" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <div style={{ width: 8, height: 8, borderRadius: "50%", background: STATUS_COLORS[status] }} />
+                          <span style={{ fontSize: 12, fontWeight: 700, color: C.dark, textTransform: "capitalize" }}>{status}</span>
+                          <span style={{ fontSize: 12, color: "rgba(22,61,38,.5)" }}>— {formatLastSeen(m.id)}</span>
                         </div>
-                      ) : status !== "offline" ? (
-                        <div style={{ fontSize: 12, color: C.mid, marginBottom: 10 }}>Not currently editing any card</div>
-                      ) : null}
-
-                      {/* Joined */}
-                      <div style={{ fontSize: 11, color: "rgba(22,61,38,.4)", borderTop: "1px solid rgba(22,61,38,.08)", paddingTop: 10, marginTop: 4 }}>
-                        Joined {new Date(m.created_at).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}
-                        {" · "}Role: <strong>{m.role}</strong>
-                        {m.invited ? " · Invite pending" : ""}
+                        {presence?.active_card_id && (
+                          <span style={{ fontSize: 11, color: C.mid }}>
+                            Editing card <code style={{ fontSize: 10, background: "rgba(22,61,38,.08)", padding: "1px 5px", borderRadius: 3 }}>{presence.active_card_id.slice(0, 8)}…</code>
+                          </span>
+                        )}
+                        <span style={{ fontSize: 11, color: "rgba(22,61,38,.4)", marginLeft: "auto" }}>
+                          Joined {new Date(m.created_at).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" })}
+                        </span>
                       </div>
 
-                      <div style={{ fontSize: 11, color: "rgba(22,61,38,.35)", marginTop: 8 }}>
-                        Full audit log (edits, generates, publishes) coming soon
-                      </div>
+                      {/* Activity feed */}
+                      {activityLoading === m.id ? (
+                        <div style={{ padding: "16px", fontSize: 12, color: "rgba(22,61,38,.45)", textAlign: "center" }}>Loading activity…</div>
+                      ) : (activityLogs.get(m.id) ?? []).length === 0 ? (
+                        <div style={{ padding: "16px", fontSize: 12, color: "rgba(22,61,38,.35)", textAlign: "center" }}>No activity recorded yet</div>
+                      ) : (
+                        <div style={{ maxHeight: 300, overflowY: "auto" }}>
+                          {(activityLogs.get(m.id) ?? []).map((log, li) => {
+                            const isLast = li === (activityLogs.get(m.id) ?? []).length - 1;
+                            const ts = new Date(log.created_at);
+                            const diff = Date.now() - ts.getTime();
+                            const mins = Math.floor(diff / 60000);
+                            const relTime = mins < 1 ? "just now" : mins < 60 ? `${mins}m ago` : mins < 1440 ? `${Math.floor(mins / 60)}h ago` : ts.toLocaleDateString([], { day: "numeric", month: "short" });
+                            return (
+                              <div key={log.id} style={{
+                                display: "flex", gap: 12, padding: "10px 16px",
+                                borderBottom: isLast ? "none" : "1px solid rgba(22,61,38,.06)",
+                                alignItems: "flex-start",
+                              }}>
+                                {/* Timeline dot */}
+                                <div style={{ width: 6, height: 6, borderRadius: "50%", background: "rgba(22,61,38,.25)", flexShrink: 0, marginTop: 5 }} />
+                                <div style={{ flex: 1, minWidth: 0 }}>
+                                  <div style={{ fontSize: 12, color: C.dark, fontWeight: 500 }}>
+                                    {ACTION_LABELS[log.action] ?? log.action}
+                                    {log.entity_title && (
+                                      <span style={{ color: "rgba(22,61,38,.55)", fontWeight: 400 }}> — {log.entity_title}</span>
+                                    )}
+                                  </div>
+                                  {log.metadata && Object.keys(log.metadata).length > 0 && (
+                                    <div style={{ fontSize: 11, color: "rgba(22,61,38,.4)", marginTop: 2 }}>
+                                      {Object.entries(log.metadata).map(([k, v]) => `${k}: ${v}`).join(" · ")}
+                                    </div>
+                                  )}
+                                </div>
+                                <div style={{ fontSize: 11, color: "rgba(22,61,38,.35)", flexShrink: 0, whiteSpace: "nowrap" }} title={ts.toLocaleString()}>
+                                  {relTime}
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -5622,6 +5695,18 @@ export default function AtelierV2Page() {
       .catch(() => {});
   }, []);
 
+  // ── Activity logger ───────────────────────────────────────────────────────────
+  function logEvent(action: string, entityType?: string, entityId?: string, entityTitle?: string, metadata?: Record<string, unknown>) {
+    fetch("/api/activity", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, entityType, entityId, entityTitle, metadata }),
+    }).catch(() => {});
+  }
+
+  // Log session start once on mount
+  useEffect(() => { logEvent("session.login"); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // ── Batch queue ───────────────────────────────────────────────────────────────
   const [batchQueueEntries, setBatchQueueEntries] = useState<BatchQueueEntry[]>([]);
   useEffect(() => { setBatchQueueEntries(readBatchQueue()); }, []);
@@ -5633,6 +5718,7 @@ export default function AtelierV2Page() {
       saveBatchQueue(next);
       return next;
     });
+    logEvent("article.batch_queue_add", "article", id, title);
   }
   function handleRemoveFromBatchQueue(id: string) {
     setBatchQueueEntries(prev => {
@@ -5705,6 +5791,7 @@ export default function AtelierV2Page() {
     saveTrashedCards(newTrashed);
     if (activeCardId === id) setActiveCardId(null);
     if (newDraft.length === 0) setActiveCardId(null);
+    logEvent("article.delete", "article", id, card.brief.prompt ?? id);
   }
 
   function handleRestoreCard(id: string) {
@@ -5714,6 +5801,7 @@ export default function AtelierV2Page() {
     setDraftCards(prev => [card, ...prev]);
     setTrashedCards(newTrashed);
     saveTrashedCards(newTrashed);
+    logEvent("article.restore", "article", id, card.brief.prompt ?? id);
   }
 
   function handleDeletePermanently(id: string) {

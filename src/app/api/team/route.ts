@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser, requireAdmin } from "@/lib/api-auth";
 import { supabaseAdmin } from "@/lib/supabase/admin";
+import { logActivity } from "@/lib/log-activity";
 
 /** GET /api/team — list all auth users merged with their team_members role */
 export async function GET() {
@@ -78,5 +79,6 @@ export async function POST(req: NextRequest) {
     .single();
 
   if (upsertErr) return NextResponse.json({ error: upsertErr.message }, { status: 500 });
+  void logActivity({ userId: user.id, userEmail: user.email ?? "", action: "team.invite", entityType: "team_member", entityId: invited.user.id, entityTitle: email, metadata: { role } });
   return NextResponse.json(member, { status: 201 });
 }
