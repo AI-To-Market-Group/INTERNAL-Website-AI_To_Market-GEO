@@ -2006,6 +2006,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [articleTitle, setArticleTitle] = useState("");
   const [outlineLoading, setOutlineLoading] = useState(false);
   const [outlineError, setOutlineError] = useState<string | null>(null);
+  const [outlineRetryCount, setOutlineRetryCount] = useState(0);
   const [expandedSection, setExpandedSection] = useState<number | null>(null);
   const [editingTitles, setEditingTitles] = useState<Record<number, string>>({});
   const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
@@ -2357,7 +2358,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       })
       .catch((e: unknown) => setOutlineError(e instanceof Error ? e.message : String(e)))
       .finally(() => setOutlineLoading(false));
-  }, [activeCardId, draftCards, savedPlans, sentToSanityIds, withArticleIds]);
+  }, [activeCardId, draftCards, savedPlans, sentToSanityIds, withArticleIds, outlineRetryCount]);
 
   // ── Save current plan (org-wide via Supabase) ─────────────────────────────
   async function handleSavePlan() {
@@ -3104,7 +3105,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Could not generate outline</div>
             <div style={{ fontWeight: 400, opacity: .8 }}>{outlineError}</div>
             <button
-              onClick={() => { prevCardIdRef.current = null; setOutlineError(null); }}
+              onClick={() => { prevCardIdRef.current = null; setOutlineError(null); setOutlineRetryCount(c => c + 1); }}
               style={{ marginTop: 14, padding: "8px 14px", borderRadius: 7, background: C.red, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
             >
               Retry
