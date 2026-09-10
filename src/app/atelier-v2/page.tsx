@@ -2938,6 +2938,84 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     finally { setFixingCheckIdx(null); }
   }
 
+  // ── Auto-fix ALL failing GEO checks in sequence ──────────────────────────
+  const [fixingAllGeo, setFixingAllGeo] = useState(false);
+  const [fixAllGeoProgress, setFixAllGeoProgress] = useState<string | null>(null);
+
+  async function autoFixAllGeo() {
+    if (!activeCardId || !articleData || fixingAllGeo) return;
+    const failingChecks = (geoScore?.checks ?? []).filter(ch => !ch.pass);
+    if (!failingChecks.length) return;
+    setFixingAllGeo(true);
+    let currentArticle = { ...articleData, sections: [...articleData.sections] };
+
+    for (const ch of failingChecks) {
+      setFixAllGeoProgress(`Fixing "${ch.label}"…`);
+
+      // AI-tell density: local replace, no LLM
+      if (ch.label === "AI-tell density") {
+        currentArticle = {
+          ...currentArticle,
+          sections: currentArticle.sections.map(s => ({
+            ...s,
+            content: {
+              ...s.content,
+              paragraphs: s.content.paragraphs.map(p => ({ ...p, text: fixAiTells(p.text) })),
+            },
+          })),
+        };
+        continue;
+      }
+
+      try {
+        const res = await fetch(`/api/builder-sessions/${activeCardId}/fix-section-v2`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fixType: "geo_check",
+            checkLabel: ch.label,
+            articleTitle: currentArticle.title,
+            sections: currentArticle.sections,
+          }),
+        });
+        const data = await res.json() as {
+          sectionHeading?: string;
+          paragraphs?: { id: number; text: string }[];
+          multifix?: { sectionHeading: string; paragraphId: number; newText: string }[];
+        };
+        const headingMatch = (a: string, b: string) =>
+          a.trim().toLowerCase() === b.trim().toLowerCase() ||
+          a.trim().toLowerCase().includes(b.trim().toLowerCase()) ||
+          b.trim().toLowerCase().includes(a.trim().toLowerCase());
+
+        if (res.ok && data.multifix?.length) {
+          currentArticle = {
+            ...currentArticle,
+            sections: currentArticle.sections.map(s => {
+              const fixes = data.multifix!.filter(f => headingMatch(s.heading, f.sectionHeading));
+              if (!fixes.length) return s;
+              return { ...s, content: { ...s.content, paragraphs: s.content.paragraphs.map(p => { const fix = fixes.find(f => f.paragraphId === p.id); return fix ? { ...p, text: fix.newText } : p; }) } };
+            }),
+          };
+        } else if (res.ok && data.paragraphs?.length && data.sectionHeading) {
+          currentArticle = {
+            ...currentArticle,
+            sections: currentArticle.sections.map(s =>
+              headingMatch(s.heading, data.sectionHeading!) ? { ...s, content: { ...s.content, paragraphs: data.paragraphs! } } : s
+            ),
+          };
+        }
+      } catch { /* non-fatal — skip this check and continue */ }
+    }
+
+    setArticleData(currentArticle);
+    setExpandedCheckIdx(null);
+    setFixAllGeoProgress("Rescoring…");
+    await rescoreGeo(currentArticle);
+    setFixAllGeoProgress(null);
+    setFixingAllGeo(false);
+  }
+
   // ── Auto-fix ALL quality flags in sequence ────────────────────────────────
   async function autoFixAll() {
     if (!activeCardId || !articleData || fixingAll) return;
@@ -3925,6 +4003,19 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                       ))
                     )}
                   </div>
+
+                  {/* Auto fix all failing GEO checks */}
+                  {checks.filter(ch => !ch.pass).length > 0 && (
+                    <button
+                      onClick={() => void autoFixAllGeo()}
+                      disabled={fixingAllGeo || fixingCheckIdx !== null}
+                      style={{ width: "100%", marginTop: 12, padding: "9px 12px", border: "none", borderRadius: 8, fontSize: 11, fontWeight: 700, background: fixingAllGeo ? "rgba(22,61,38,.55)" : C.dark, color: C.white, cursor: (fixingAllGeo || fixingCheckIdx !== null) ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: fixingCheckIdx !== null && !fixingAllGeo ? 0.5 : 1 }}
+                    >
+                      {fixingAllGeo
+                        ? <><span style={{ display: "inline-block", animation: "spin .8s linear infinite" }}>↻</span>{fixAllGeoProgress ?? "Fixing…"}</>
+                        : <><span>⚡</span> Auto fix all failing ({checks.filter(ch => !ch.pass).length})</>}
+                    </button>
+                  )}
 
                   {/* Word count + quality flags */}
                   {wordCount > 0 && (
