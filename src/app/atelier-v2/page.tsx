@@ -4364,6 +4364,7 @@ interface TeamMember {
   full_name: string | null;
   role: "admin" | "editor";
   created_at: string;
+  invited?: boolean;
 }
 
 function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
@@ -4509,6 +4510,18 @@ function TeamScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
                   )}
                   <div style={{ fontSize: 12, color: C.mid }}>{m.email}</div>
                 </div>
+
+                {/* Invited badge */}
+                {m.invited && (
+                  <span style={{
+                    display: "inline-flex", alignItems: "center", padding: "2px 8px",
+                    borderRadius: 20, fontSize: 11, fontWeight: 700, letterSpacing: ".06em",
+                    background: "rgba(234,160,0,.1)", color: "#9a6800",
+                    border: "1px solid rgba(234,160,0,.3)",
+                  }}>
+                    INVITED
+                  </span>
+                )}
 
                 {/* Role badge / selector */}
                 {isAdmin ? (

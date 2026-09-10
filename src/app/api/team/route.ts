@@ -26,6 +26,7 @@ export async function GET() {
       full_name: tm?.full_name ?? (u.user_metadata?.full_name as string | undefined) ?? null,
       role: (tm?.role ?? "editor") as "admin" | "editor",
       created_at: u.created_at,
+      invited: !u.last_sign_in_at, // true = invite sent but never logged in
     };
   });
 
