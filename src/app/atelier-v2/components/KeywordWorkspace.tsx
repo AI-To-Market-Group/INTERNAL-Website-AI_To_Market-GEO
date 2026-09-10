@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback, useEffect } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Loader2, X, ExternalLink, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -12,7 +11,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { CONTENT_THEME_IDS } from "@/types";
 
 // ── Palette (matches v2) ──────────────────────────────────────────────────────
 const C = {
@@ -59,7 +57,6 @@ interface KeywordWorkspaceProps {
 
 export function KeywordWorkspace({ seedKeywords, onCreated }: KeywordWorkspaceProps) {
   const [userEmail, setUserEmail] = useState<string>("");
-  const queryClient = useQueryClient();
   const [open, setOpen] = useState(true);
 
   // ── Search Console ──────────────────────────────────────────────────────────
@@ -141,42 +138,71 @@ export function KeywordWorkspace({ seedKeywords, onCreated }: KeywordWorkspacePr
 
   const handleCreate = useCallback(async () => {
     const arr = [...selected];
-    const placeholder = arr.slice(0, 3).join(" · ");
 
-    const standardContext = [
-      "CONTENT CONTEXT",
-      "Brand: AI To Market — a B2B AI consultancy helping enterprise revenue teams (CMOs, VP Sales, RevOps leaders) adopt AI across their go-to-market motion.",
-      "Audience: Decision-makers at mid-market to enterprise B2B SaaS and services companies who are evaluating or scaling AI adoption.",
-      "Content goal: Build authoritative, GEO-optimised thought leadership that ranks in both traditional search and is cited by LLMs (ChatGPT, Perplexity, Claude). Depth and specificity beat generic overviews — the reader should leave knowing exactly what to do next.",
+    // Pull brand voice for richer context (best-effort)
+    let bvAudience = "B2B SaaS and services decision-makers evaluating or scaling AI adoption";
+    let bvBrand = "AI To Market — a B2B AI consultancy helping enterprise revenue teams adopt AI across their go-to-market motion";
+    try {
+      const r = await fetch("/api/brand-voice");
+      if (r.ok) {
+        const bv = await r.json() as { audience?: string; brand_description?: string };
+        if (bv.audience) bvAudience = bv.audience;
+        if (bv.brand_description) bvBrand = bv.brand_description;
+      }
+    } catch { /* fallback to defaults above */ }
+
+    // Infer editorial intent from keyword signals
+    const joined = arr.join(" ").toLowerCase();
+    let intent = "awareness";
+    if (/\b(vs|versus|alternative|compare|comparison|review|pricing|cost|hire|agency|roi)\b/.test(joined)) {
+      intent = "decision";
+    } else if (/\b(guide|how to|strategy|framework|best practice|playbook|checklist|optimize|implement|build)\b/.test(joined)) {
+      intent = "consideration";
+    }
+
+    // Derive topic title: use longest keyword (most specific), title-cased
+    const topKw = [...arr].sort((a, b) => b.length - a.length)[0] ?? arr[0];
+    const topicTitle = topKw.replace(/\b\w/g, (c) => c.toUpperCase());
+
+    // Build GEO-optimized content brief (used by outline LLM as "Why this topic now:")
+    const intentLabel = intent === "decision"
+      ? "reader is comparing options or evaluating vendors"
+      : intent === "consideration"
+      ? "reader is learning how to implement or choose a strategy"
+      : "reader is discovering this topic for the first time";
+
+    const briefParts = [
       `Keyword cluster: ${arr.join(", ")}`,
-      "Use the keyword cluster to determine the core topic, map search intent (awareness / consideration / decision), and ensure the outline covers the angle a senior B2B buyer would actually find useful.",
-    ].join("\n");
-
-    const additionalInstructions = instruction.trim();
-    const content_brief = additionalInstructions
-      ? `${standardContext}\n\nADDITIONAL INSTRUCTIONS\n${additionalInstructions}`
-      : standardContext;
+      `Primary audience: ${bvAudience}`,
+      `Brand context: ${bvBrand}`,
+      `Editorial intent: ${intent} — ${intentLabel}`,
+      `GEO objective: produce authoritative, citation-worthy content that AI assistants (ChatGPT, Perplexity, Claude) surface when this audience queries these topics. Depth, specificity, and direct answers beat generic overviews.`,
+    ];
+    if (instruction.trim()) briefParts.push(`Additional angle: ${instruction.trim()}`);
+    const content_brief = briefParts.join("\n");
 
     setSaving(true);
     try {
-      const res = await fetch("/api/opportunities/add", {
+      const res = await fetch("/api/builder-sessions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: placeholder, type: "SEO_GAP", score: 50, theme: CONTENT_THEME_IDS[0], content_brief, tags: arr }),
+        body: JSON.stringify({
+          topic_title: topicTitle,
+          opportunity_context: { content_brief, tags: arr, intents: [intent] },
+        }),
       });
       if (!res.ok) throw new Error("Failed");
-      const data = (await res.json()) as { id: string };
-      await queryClient.invalidateQueries({ queryKey: ["opportunities"] });
+      const data = (await res.json()) as { opportunityId: string; topicTitle: string };
       setDialogOpen(false);
       setSelected(new Set());
       setInstruction("");
-      onCreated?.(data.id, { prompt: placeholder });
+      onCreated?.(data.opportunityId, { prompt: data.topicTitle });
     } catch {
-      toast.error("Failed to create opportunity.");
+      toast.error("Failed to create draft.");
     } finally {
       setSaving(false);
     }
-  }, [instruction, selected, queryClient]);
+  }, [instruction, selected]);
 
   const selectedArr  = [...selected];
   const hasSelection = selectedArr.length > 0;
@@ -351,7 +377,7 @@ export function KeywordWorkspace({ seedKeywords, onCreated }: KeywordWorkspacePr
           </DialogHeader>
           <div className="space-y-4 py-1">
             <p className="text-sm text-slate-500">
-              An opportunity card will be created with these keywords. You&apos;ll pick a title from AI suggestions in the next step.
+              A draft card will be created from these keywords and you&apos;ll land straight in the editor, ready to build the outline.
             </p>
             <div>
               <label className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Keywords attached</label>
@@ -372,7 +398,7 @@ export function KeywordWorkspace({ seedKeywords, onCreated }: KeywordWorkspacePr
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
             <Button onClick={handleCreate} disabled={saving} style={{ background: C.dark }}>
               {saving && <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />}
-              Create opportunity
+              Open in Editor
             </Button>
           </DialogFooter>
         </DialogContent>
