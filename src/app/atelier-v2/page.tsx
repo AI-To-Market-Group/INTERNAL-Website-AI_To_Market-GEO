@@ -4833,6 +4833,9 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
   const [newPhrase, setNewPhrase] = useState("");
   const [newGuardrail, setNewGuardrail] = useState("");
+  // Scan loader: tracks whether the brand-voice animation has completed
+  const [loadAnimDone, setLoadAnimDone] = useState(false);
+  const [saveAnimDone, setSaveAnimDone] = useState(true); // true = not saving
 
   const isDirty = bv !== null && savedBv !== null && JSON.stringify(bv) !== JSON.stringify(savedBv);
 
@@ -4849,6 +4852,7 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
   async function handleSave() {
     if (!bv || !isDirty) return;
     setSaving(true);
+    setSaveAnimDone(false); // animation becomes the gate; content blurs
     try {
       await fetch("/api/brand-voice", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bv) });
       setSavedBv(bv);
@@ -4857,6 +4861,7 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
       setTimeout(() => setSaved(false), 2500);
     } finally {
       setSaving(false);
+      // saveAnimDone stays false until animation calls setSaveAnimDone(true)
     }
   }
 
@@ -4879,31 +4884,31 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
   );
   const ta: React.CSSProperties = { width: "100%", padding: 14, border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, lineHeight: 1.6, color: "#1a1a1a", background: C.white, resize: "vertical", outline: "none", fontFamily: "inherit" };
 
-  if (loading) return (
-    <ComboLoader
-      stages={["Fetch", "Parse", "Ready"]}
-      phases={[
-        { label: "Loading brand voice", text: "Fetching your brand voice settings from the database...\nReading tone rules and style preferences..." },
-        { label: "Parsing configuration", text: "Preparing forbidden phrases list...\nLoading guardrails and audience definition..." },
-        { label: "Almost ready", text: "✓  Brand description\n✓  Audience\n✓  Tone rules\n✓  Style preferences\n✓  Guardrails" },
-      ]}
-    />
-  );
-  if (!bv) return <div style={{ padding: 48, color: C.red, fontSize: 13 }}>Could not load brand voice settings.</div>;
+  // content is gated by BOTH data loaded AND animation finished
+  const showContent = !loading && loadAnimDone;
+  const showSaveOverlay = !saveAnimDone;
+
+  if (!loading && !bv) return <div style={{ padding: 48, color: C.red, fontSize: 13 }}>Could not load brand voice settings.</div>;
 
   return (
     <>
-    {saving && (
-      <ComboLoader
-        stages={["Validate", "Save", "Cache"]}
-        phases={[
-          { label: "Validating changes", text: "Checking brand description...\nVerifying tone rules and forbidden phrases..." },
-          { label: "Saving to database", text: "Writing updated brand voice settings...\nAll generation routes will inherit these changes." },
-          { label: "Busting cache", text: "✓  Cache invalidated\n✓  Next generation picks up new rules\n✓  Brand voice updated" },
-        ]}
-      />
+    {/* Load animation — runs once on mount, content blurs behind it */}
+    {!loadAnimDone && (
+      <BrandVoiceScanLoader onComplete={() => setLoadAnimDone(true)} />
     )}
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 40, alignItems: "start" }}>
+    {/* Save animation — runs once each time Save is clicked */}
+    {showSaveOverlay && (
+      <BrandVoiceScanLoader onComplete={() => setSaveAnimDone(true)} />
+    )}
+    <div style={{
+      display: "grid", gridTemplateColumns: "1fr 300px", gap: 40, alignItems: "start",
+      filter: (showContent && !showSaveOverlay) ? "none" : "blur(6px)",
+      pointerEvents: (showContent && !showSaveOverlay) ? "auto" : "none",
+      userSelect: (showContent && !showSaveOverlay) ? "auto" : "none",
+      transition: "filter .4s ease",
+      minHeight: 400,
+    }}>
+    {bv && <>
 
       {/* ── Left column ── */}
       <div style={{ display: "flex", flexDirection: "column", gap: 36 }}>
@@ -5022,7 +5027,7 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
           </div>
         </div>
       </div>
-
+    </>}
     </div>
     </>
   );
@@ -5522,6 +5527,88 @@ function readTrashedCards(): DraftCard[] {
 function saveTrashedCards(cards: DraftCard[]) {
   try { localStorage.setItem(TRASHED_CARDS_KEY, JSON.stringify(cards)); }
   catch {}
+}
+
+// ── Brand Voice scan loader (Variation B) ────────────────────────────────────
+const BV_SCAN_PHRASES = [
+  "reading brand parameters…",
+  "loading tone profile…",
+  "validating guardrails…",
+  "applying voice rules…",
+];
+
+function BrandVoiceScanLoader({ onComplete }: { onComplete: () => void }) {
+  const [phraseIdx, setPhraseIdx] = useState(0);
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    const PHRASE_MS = 2000;
+    if (phraseIdx < BV_SCAN_PHRASES.length - 1) {
+      const t = setTimeout(() => setPhraseIdx(i => i + 1), PHRASE_MS);
+      return () => clearTimeout(t);
+    }
+    // Last phrase — hold briefly then fade out and call onComplete
+    const t = setTimeout(() => {
+      setVisible(false);
+      setTimeout(onComplete, 400);
+    }, PHRASE_MS);
+    return () => clearTimeout(t);
+  }, [phraseIdx, onComplete]);
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 999,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      background: "rgba(247,245,242,.92)", backdropFilter: "blur(6px)",
+      opacity: visible ? 1 : 0, transition: "opacity .4s ease",
+    }}>
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 28 }}>
+
+        {/* Logo + scan line */}
+        <div style={{ position: "relative", width: 140, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+          <img src="/logo-green.png" alt="AI To Market" style={{ width: 140, height: "auto", position: "relative", zIndex: 1 }} />
+          {/* scan line */}
+          <div style={{
+            position: "absolute", left: -4, right: -4, height: 2,
+            background: "linear-gradient(90deg, transparent 0%, #185F00 30%, #2ecc71 50%, #185F00 70%, transparent 100%)",
+            boxShadow: "0 0 10px 2px rgba(24,95,0,.4)",
+            animation: "bv-scan 2s ease-in-out infinite",
+            zIndex: 2,
+          }} />
+        </div>
+
+        {/* Phrase */}
+        <div style={{
+          fontSize: 11, fontFamily: "'DM Mono', 'Courier New', monospace",
+          color: "rgba(22,61,38,.55)", letterSpacing: ".06em",
+          minWidth: 220, textAlign: "center",
+          transition: "opacity .25s",
+        }}>
+          {BV_SCAN_PHRASES[phraseIdx]}
+        </div>
+
+        {/* Progress dots */}
+        <div style={{ display: "flex", gap: 6 }}>
+          {BV_SCAN_PHRASES.map((_, i) => (
+            <div key={i} style={{
+              width: i === phraseIdx ? 18 : 6, height: 6, borderRadius: 99,
+              background: i <= phraseIdx ? "#185F00" : "rgba(22,61,38,.15)",
+              transition: "all .3s ease",
+            }} />
+          ))}
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes bv-scan {
+          0%   { top: -4px; opacity: 0; }
+          8%   { opacity: 1; }
+          92%  { opacity: 1; }
+          100% { top: calc(100% + 4px); opacity: 0; }
+        }
+      `}</style>
+    </div>
+  );
 }
 
 // ── Option-D loading animation: stage pills + live typewriter stream ──────────
