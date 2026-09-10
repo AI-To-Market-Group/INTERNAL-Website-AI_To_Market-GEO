@@ -2007,6 +2007,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [outlineLoading, setOutlineLoading] = useState(false);
   const [outlineError, setOutlineError] = useState<string | null>(null);
   const [outlineRetryCount, setOutlineRetryCount] = useState(0);
+  const [outlineRetrying, setOutlineRetrying] = useState(false);
   const [expandedSection, setExpandedSection] = useState<number | null>(null);
   const [editingTitles, setEditingTitles] = useState<Record<number, string>>({});
   const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
@@ -2339,7 +2340,6 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     setOutline([]);
     setEditingTitles({});
     setExpandedSection(null);
-    setOutlineError(null);
     setOutlineLoading(true);
 
     fetch(`/api/builder-sessions/${activeCardId}/generate-outline`, {
@@ -2353,10 +2353,12 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         return body;
       })
       .then(data => {
+        setOutlineError(null);
+        setOutlineRetrying(false);
         setArticleTitle(data.article_title ?? card?.brief?.prompt ?? "Article");
         setOutline(data.sections ?? []);
       })
-      .catch((e: unknown) => setOutlineError(e instanceof Error ? e.message : String(e)))
+      .catch((e: unknown) => { setOutlineError(e instanceof Error ? e.message : String(e)); setOutlineRetrying(false); })
       .finally(() => setOutlineLoading(false));
   }, [activeCardId, draftCards, savedPlans, sentToSanityIds, withArticleIds, outlineRetryCount]);
 
@@ -3086,8 +3088,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           )}
         </div>
 
-        {/* Loading — Option D combo */}
-        {outlineLoading && (
+        {/* Loading — full ComboLoader only on first generation, not retry */}
+        {outlineLoading && !outlineRetrying && (
           <ComboLoader
             stages={["Research", "Structure", "Keywords", "Validate"]}
             phases={[
@@ -3099,16 +3101,18 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           />
         )}
 
-        {/* Error state */}
-        {outlineError && !outlineLoading && (
+        {/* Error state — stays visible during retry so the spinning button is shown */}
+        {outlineError && (
           <div style={{ padding: "20px 24px", border: `1px solid rgba(249,57,67,.3)`, borderRadius: 10, background: "rgba(249,57,67,.04)", color: C.red, fontSize: 13 }}>
             <div style={{ fontWeight: 700, marginBottom: 4 }}>Could not generate outline</div>
             <div style={{ fontWeight: 400, opacity: .8 }}>{outlineError}</div>
             <button
-              onClick={() => { prevCardIdRef.current = null; setOutlineError(null); setOutlineRetryCount(c => c + 1); }}
-              style={{ marginTop: 14, padding: "8px 14px", borderRadius: 7, background: C.red, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}
+              disabled={outlineRetrying}
+              onClick={() => { setOutlineRetrying(true); prevCardIdRef.current = null; setOutlineRetryCount(c => c + 1); }}
+              style={{ marginTop: 14, display: "inline-flex", alignItems: "center", gap: 6, padding: "8px 14px", borderRadius: 7, background: C.red, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: outlineRetrying ? "default" : "pointer", opacity: outlineRetrying ? 0.75 : 1 }}
             >
-              Retry
+              <span style={{ display: "inline-block", animation: outlineRetrying ? "spin .8s linear infinite" : "none" }}>↻</span>
+              {outlineRetrying ? "Retrying…" : "Retry"}
             </button>
           </div>
         )}
