@@ -74,6 +74,45 @@ function slugify(text: string): string {
     .slice(0, 80);
 }
 
+function blocksToContentGeo(blocks: ArticleDraftBlock[]) {
+  type GeoSection = {
+    _type: "geoSection";
+    _key: string;
+    sectionType: string;
+    eyebrow: string;
+    heading: string;
+    paragraphs: string[];
+    bullets: string[];
+  };
+
+  const sections: GeoSection[] = [];
+  let current: GeoSection | null = null;
+
+  for (const block of blocks) {
+    if (block.type === "heading") {
+      if (current) sections.push(current);
+      current = {
+        _type: "geoSection",
+        _key: `geo-${sections.length}`,
+        sectionType: block.meta?.sectionType ?? "section",
+        eyebrow: block.meta?.eyebrow ?? "",
+        heading: stripHtmlToPlain(block.content),
+        paragraphs: [],
+        bullets: block.meta?.bullets ?? [],
+      };
+    } else if (block.type === "paragraph" && current) {
+      const isFaq = block.meta?.sectionType === "faq"
+        || /^Q:\s/i.test(block.content.trim())
+        || /^<p>\s*Q:\s/i.test(block.content.trim());
+      const html = isFaq ? faqBlockToHtml(block.content) : sanitizeHtml(block.content);
+      if (html) current.paragraphs.push(html);
+    }
+  }
+  if (current) sections.push(current);
+
+  return { _type: "contentGeo", sections };
+}
+
 function blocksToContentNews(blocks: ArticleDraftBlock[]) {
   const introParagraphs: string[] = [];
   const sections: Array<{
@@ -194,7 +233,7 @@ export async function publishLiveToSanity(sessionId: string): Promise<SanityPubl
   }
 
   const slug = draftDoc.slug?.current ?? publishedId;
-  const liveUrl = `https://www.aitomarketgroup.com/news/${encodeURIComponent(slug)}`;
+  const liveUrl = `https://www.aitomarketgroup.com/blog/${encodeURIComponent(slug)}`;
   return { documentId: publishedId, studioUrl: liveUrl };
 }
 
@@ -226,12 +265,12 @@ export async function publishToSanity(
     _id: documentId,
     title,
     slug: { _type: "slug", current: slug },
-    category: "news",
+    category: "geo",
     excerpt,
     author: "AI To Market",
     publishedAt,
     readTime: estimateReadTime(draft.blocks),
-    contentNews: blocksToContentNews(draft.blocks),
+    contentGeo: blocksToContentGeo(draft.blocks),
   };
 
   const res = await fetch(

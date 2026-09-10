@@ -388,6 +388,10 @@ export interface ArticleDraftBlock {
     sectionOrder?: number;
     sectionType?: string;
     paragraphId?: number;
+    /** Eyebrow label stored on heading blocks (e.g. "THE SIGNAL GAP") */
+    eyebrow?: string;
+    /** Conclusion/how_to bullets stored on the heading block so Sanity publish can use them */
+    bullets?: string[];
   };
 }
 
