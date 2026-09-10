@@ -3005,7 +3005,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
             ),
           };
         }
-      } catch { /* non-fatal — skip this check and continue */ }
+      } catch (e) { console.warn("[autoFixAllGeo] fix failed for", ch.label, e); }
     }
 
     setArticleData(currentArticle);

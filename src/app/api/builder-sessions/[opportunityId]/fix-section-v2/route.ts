@@ -66,31 +66,27 @@ ATTRIBUTION FORMAT — use one of these exactly (the scoring system only recogni
 Choose a source that fits the claim: Gartner/Forrester for tech/software adoption, McKinsey/Bain for strategy/ROI, LinkedIn/HubSpot for sales & marketing, IDC for market size, Salesforce for CRM/revenue data, Deloitte/PwC for enterprise transformation.
 Use 2024 or 2025 — never an older year.`;
 
-const SNIPPET_FORMAT_RULE = `
-Return the FULL updated paragraph text in "newText". For "snippet", copy the first 60 characters of the ORIGINAL paragraph verbatim (the system uses this to find the right paragraph — it must match exactly).`;
 
 const GEO_FIX_PROMPTS: Record<string, string> = {
   "Named sources": `You are a GEO content editor improving a B2B article's source attribution so AI search engines will cite it.
 
-TASK: Find 2 paragraphs that make factual claims without a named source and embed an attribution into each sentence naturally — do NOT append a new sentence at the end.
+TASK: Find 2 paragraphs that make factual claims without a named source. Each paragraph is shown with its id in [id:N] format — you MUST return that exact integer id. Embed an attribution into each sentence naturally — do NOT append a new sentence at the end.
 ${ATTRIBUTION_FORMAT_RULES}
-${SNIPPET_FORMAT_RULE}
 
 Respond with JSON only:
-{ "snippetFixes": [
-  { "snippet": "<first 60 chars of original paragraph>", "newText": "<full paragraph with attribution embedded>" },
-  { "snippet": "<first 60 chars of another paragraph>", "newText": "<full paragraph with attribution embedded>" }
+{ "fixes": [
+  { "sectionHeading": "<exact section heading>", "paragraphId": <id integer>, "newText": "<full paragraph with attribution embedded>" },
+  { "sectionHeading": "<exact section heading>", "paragraphId": <id integer>, "newText": "<full paragraph with attribution embedded>" }
 ] }`,
 
   "Statistics with sources": `You are a GEO content editor strengthening a B2B article's data credibility.
 
-TASK: Find the paragraph best suited for a specific sourced statistic, then rewrite it to include one real, plausible numeric claim attributed to a named source. The stat must fit the paragraph's existing topic — no generic filler.
+TASK: Find the paragraph best suited for a specific sourced statistic. Each paragraph is shown with its id in [id:N] format — you MUST return that exact integer id. Rewrite it to include one real, plausible numeric claim attributed to a named source. The stat must fit the paragraph's existing topic — no generic filler.
 ${ATTRIBUTION_FORMAT_RULES}
-${SNIPPET_FORMAT_RULE}
 
 Respond with JSON only:
-{ "snippetFixes": [
-  { "snippet": "<first 60 chars of original paragraph>", "newText": "<full paragraph with the sourced stat naturally embedded>" }
+{ "fixes": [
+  { "sectionHeading": "<exact section heading>", "paragraphId": <id integer>, "newText": "<full paragraph with the sourced stat naturally embedded>" }
 ] }`,
 
   "Cited claims": `You are a GEO content editor. Add one cited claim to the article.
@@ -167,14 +163,10 @@ export async function POST(req: NextRequest, { params }: Params2) {
     if (!checkLabel) return err("checkLabel required", 400);
 
     const system = GEO_FIX_PROMPTS[checkLabel] ?? GEO_FIX_PROMPTS["Statistics with sources"];
-    // Include enough paragraph text for the LLM to understand context and pick relevant sources.
-    // Snippet-based checks don't need [id:N] — include it only for legacy ID-based checks.
-    const usesSnippets = checkLabel === "Named sources" || checkLabel === "Statistics with sources";
+    // Always send [id:N] prefix so the LLM can echo back the exact paragraph id.
     const articleSummary = sections.map(s =>
-      `Section: "${s.heading}" (type: ${s.type})\nParagraphs:\n${s.content.paragraphs.map((p, i) =>
-        usesSnippets
-          ? `  ${i + 1}. ${p.text.slice(0, 500)}`
-          : `  [id:${p.id}] ${p.text.slice(0, 300)}`
+      `Section: "${s.heading}" (type: ${s.type})\nParagraphs:\n${s.content.paragraphs.map(p =>
+        `  [id:${p.id}] ${p.text.slice(0, 400)}`
       ).join("\n")}`
     ).join("\n\n---\n\n");
 
