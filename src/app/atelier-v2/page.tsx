@@ -517,6 +517,60 @@ const PIPELINE_STEPS = [
   "Stage for human review, never auto publish below 75",
 ];
 
+// ─── Brand-styled dropdown (replaces native <select> to avoid browser blue) ───
+
+function BrandSelect<T extends string | number>({ value, onChange, options }: {
+  value: T;
+  onChange: (v: T) => void;
+  options: { value: T; label: string }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+  const selected = options.find(o => o.value === value);
+  return (
+    <div ref={ref} style={{ position: "relative", width: "100%" }}>
+      <button
+        type="button"
+        onClick={() => setOpen(p => !p)}
+        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", border: `1px solid ${open ? "rgba(22,61,38,.5)" : "rgba(22,61,38,.24)"}`, borderRadius: 8, fontSize: 13, fontWeight: 600, background: C.bg, color: C.dark, cursor: "pointer", outline: "none", textAlign: "left" }}
+      >
+        <span>{selected?.label ?? String(value)}</span>
+        <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="rgba(22,61,38,.5)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transition: "transform .15s", transform: open ? "rotate(180deg)" : "none" }}>
+          <path d="M2 4l4 4 4-4"/>
+        </svg>
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 200, background: "#fff", border: "1px solid rgba(22,61,38,.18)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.12)", overflow: "hidden" }}>
+          {options.map(opt => {
+            const active = opt.value === value;
+            return (
+              <button
+                key={String(opt.value)}
+                type="button"
+                onClick={() => { onChange(opt.value); setOpen(false); }}
+                style={{ display: "block", width: "100%", padding: "11px 14px", textAlign: "left", fontSize: 13, fontWeight: active ? 600 : 400, background: active ? "#163D26" : "transparent", color: active ? "#fff" : "#163D26", border: "none", cursor: "pointer" }}
+                onMouseEnter={e => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "rgba(22,61,38,.06)"; }}
+                onMouseLeave={e => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, defaultFlow }: { onSettings: () => void; onQueue: () => void; onSessionCreated: (opportunityId: string, brief: BriefFields) => void; seedKeywords: string[]; defaultFlow?: FlowMode; }) {
   const [flow, setFlow] = useState<FlowMode>(defaultFlow ?? "wizard");
   const [step, setStep] = useState(1);
@@ -834,15 +888,19 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16 }}>
                 <div>
                   <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>FORMAT</label>
-                  <select value={oneShotFormat} onChange={e => setOneShotFormat(e.target.value)} style={{ width: "100%", padding: "12px 14px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, fontWeight: 600, background: C.bg, color: C.dark, appearance: "none", cursor: "pointer", outline: "none" }}>
-                    {["Definitional explainer", "How-to guide", "Comparison", "Listicle", "Opinion piece"].map(f => <option key={f} value={f}>{f}</option>)}
-                  </select>
+                  <BrandSelect
+                    value={oneShotFormat}
+                    onChange={setOneShotFormat}
+                    options={["Definitional explainer", "How-to guide", "Comparison", "Listicle", "Opinion piece"].map(f => ({ value: f, label: f }))}
+                  />
                 </div>
                 <div>
                   <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>LENGTH (words)</label>
-                  <select value={oneShotLength} onChange={e => setOneShotLength(Number(e.target.value))} style={{ width: "100%", padding: "12px 14px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, fontWeight: 600, background: C.bg, color: C.dark, appearance: "none", cursor: "pointer", outline: "none" }}>
-                    {[[600, "600 – 800"], [900, "900 – 1100"], [1200, "1200 – 1600"], [1800, "1800 – 2200"]].map(([v, label]) => <option key={v} value={v}>{label}</option>)}
-                  </select>
+                  <BrandSelect
+                    value={oneShotLength}
+                    onChange={(v) => setOneShotLength(Number(v))}
+                    options={[[600, "600 – 800"], [900, "900 – 1100"], [1200, "1200 – 1600"], [1800, "1800 – 2200"]].map(([v, label]) => ({ value: v as number, label: label as string }))}
+                  />
                 </div>
                 <div>
                   <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>VOICE</label>
