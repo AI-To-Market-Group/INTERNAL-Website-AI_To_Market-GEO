@@ -1,10 +1,13 @@
 export { getPool, isDbAvailable } from "./client";
 export {
   dbGetAllSessions,
+  dbGetTrashedSessions,
   dbGetSession,
   dbCreateSession,
   dbUpdateSession,
   dbDeleteSession,
+  dbTrashSession,
+  dbRestoreSession,
 } from "./builder-sessions";
 export {
   dbGetGAConnection,

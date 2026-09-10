@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { getSession, createSession, updateSession, deleteSession } from "@/lib/builder-sessions-store";
+import { getSession, createSession, updateSession, deleteSession, trashSession, restoreSession } from "@/lib/builder-sessions-store";
 import { parseBody, ok } from "@/lib/api-response";
 import { builderSessionUpdateSchema } from "@/lib/api-schemas";
 import { requireUser } from "@/lib/api-auth";
@@ -48,4 +48,23 @@ export async function DELETE(_req: NextRequest, { params }: Params) {
   const { opportunityId } = await params;
   await deleteSession(user.id, opportunityId);
   return ok({ deleted: true });
+}
+
+// POST .../trash   → soft-delete (move to trash, org-wide)
+// POST .../restore → restore from trash
+export async function POST(req: NextRequest, { params }: Params) {
+  const { user, error } = await requireUser();
+  if (error) return error;
+  const { opportunityId } = await params;
+  const url = new URL(req.url);
+  const action = url.searchParams.get("action");
+  if (action === "trash") {
+    await trashSession(user.id, opportunityId);
+    return ok({ trashed: true });
+  }
+  if (action === "restore") {
+    await restoreSession(user.id, opportunityId);
+    return ok({ restored: true });
+  }
+  return ok({ error: "Unknown action" });
 }

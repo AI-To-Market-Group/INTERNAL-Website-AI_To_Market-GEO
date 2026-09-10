@@ -5572,19 +5572,9 @@ function TrashScreen({ trashedCards, onRestore, onDeletePermanently, onEmptyTras
 // ─── Root page ────────────────────────────────────────────────────────────────
 
 const BUDGET_KEY        = "v2_monthly_call_budget";
-const TRASHED_CARDS_KEY = "v2_trashed_cards";
-
 function readBudget(): number {
   try { return Math.max(1, Number(localStorage.getItem(BUDGET_KEY) ?? "200") || 200); }
   catch { return 200; }
-}
-function readTrashedCards(): DraftCard[] {
-  try { return JSON.parse(localStorage.getItem(TRASHED_CARDS_KEY) ?? "[]") as DraftCard[]; }
-  catch { return []; }
-}
-function saveTrashedCards(cards: DraftCard[]) {
-  try { localStorage.setItem(TRASHED_CARDS_KEY, JSON.stringify(cards)); }
-  catch {}
 }
 
 // ── Brand Voice scan loader (Variation B) ────────────────────────────────────
@@ -5894,29 +5884,38 @@ export default function AtelierV2Page() {
     });
   }
 
-  // Load trashed cards from localStorage on mount
-  useEffect(() => { setTrashedCards(readTrashedCards()); }, []);
-
-  // Load existing sessions from DB on mount — filter out trashed ones
+  // Load existing active sessions from DB on mount (trashed excluded server-side)
   useEffect(() => {
-    const trashedIds = new Set(readTrashedCards().map(c => c.opportunityId));
     fetch("/api/builder-sessions")
-      .then(r => r.ok ? r.json() as Promise<Array<{ opportunityId: string; topicTitle: string; createdAt: string }>> : null)
+      .then(r => r.ok ? r.json() as Promise<Array<{ opportunityId: string; topicTitle: string; createdAt: string; creatorEmail?: string }>> : null)
       .then(sessions => {
         if (!sessions?.length) return;
         const sorted = [...sessions].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
         setDraftCards(prev => {
           const existingIds = new Set(prev.map(c => c.opportunityId));
           const toAdd = sorted
-            .filter(s => !existingIds.has(s.opportunityId) && !trashedIds.has(s.opportunityId))
+            .filter(s => !existingIds.has(s.opportunityId))
             .map(s => ({
               opportunityId: s.opportunityId,
               brief: { prompt: s.topicTitle } as BriefFields,
               createdAt: s.createdAt,
-              creatorEmail: (s as { creatorEmail?: string }).creatorEmail,
+              creatorEmail: s.creatorEmail,
             }));
           return [...prev, ...toAdd];
         });
+      })
+      .catch(() => {});
+    // Load trashed sessions from DB (org-wide)
+    fetch("/api/builder-sessions?trashed=true")
+      .then(r => r.ok ? r.json() as Promise<Array<{ opportunityId: string; topicTitle: string; createdAt: string; creatorEmail?: string }>> : null)
+      .then(sessions => {
+        if (!sessions?.length) return;
+        setTrashedCards(sessions.map(s => ({
+          opportunityId: s.opportunityId,
+          brief: { prompt: s.topicTitle } as BriefFields,
+          createdAt: s.createdAt,
+          creatorEmail: s.creatorEmail,
+        })));
       })
       .catch(() => {});
   }, []);
@@ -5950,35 +5949,31 @@ export default function AtelierV2Page() {
   function handleTrashCard(id: string) {
     const card = draftCards.find(c => c.opportunityId === id);
     if (!card) return;
-    const newDraft = draftCards.filter(c => c.opportunityId !== id);
-    const newTrashed = [card, ...trashedCards];
-    setDraftCards(newDraft);
-    setTrashedCards(newTrashed);
-    saveTrashedCards(newTrashed);
+    setDraftCards(prev => prev.filter(c => c.opportunityId !== id));
+    setTrashedCards(prev => [card, ...prev]);
     if (activeCardId === id) setActiveCardId(null);
-    if (newDraft.length === 0) setActiveCardId(null);
+    fetch(`/api/builder-sessions/${id}?action=trash`, { method: "POST" }).catch(() => {});
     logEvent("article.delete", "article", id, card.brief.prompt ?? id);
   }
 
   function handleRestoreCard(id: string) {
     const card = trashedCards.find(c => c.opportunityId === id);
     if (!card) return;
-    const newTrashed = trashedCards.filter(c => c.opportunityId !== id);
+    setTrashedCards(prev => prev.filter(c => c.opportunityId !== id));
     setDraftCards(prev => [card, ...prev]);
-    setTrashedCards(newTrashed);
-    saveTrashedCards(newTrashed);
+    fetch(`/api/builder-sessions/${id}?action=restore`, { method: "POST" }).catch(() => {});
     logEvent("article.restore", "article", id, card.brief.prompt ?? id);
   }
 
   function handleDeletePermanently(id: string) {
-    const newTrashed = trashedCards.filter(c => c.opportunityId !== id);
-    setTrashedCards(newTrashed);
-    saveTrashedCards(newTrashed);
+    setTrashedCards(prev => prev.filter(c => c.opportunityId !== id));
+    fetch(`/api/builder-sessions/${id}`, { method: "DELETE" }).catch(() => {});
   }
 
   function handleEmptyTrash() {
+    const ids = trashedCards.map(c => c.opportunityId);
     setTrashedCards([]);
-    saveTrashedCards([]);
+    ids.forEach(id => fetch(`/api/builder-sessions/${id}`, { method: "DELETE" }).catch(() => {}));
   }
 
   // ── Budget (persisted locally, independent of v1) ─────────────────────────

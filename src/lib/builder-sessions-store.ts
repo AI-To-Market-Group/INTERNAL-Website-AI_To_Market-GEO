@@ -6,10 +6,13 @@
 import type { BuilderSessionInfo, OutlineSection, ArticleDraft, WordPressMetadata } from "@/types";
 import {
   dbGetAllSessions,
+  dbGetTrashedSessions,
   dbGetSession,
   dbCreateSession,
   dbUpdateSession,
   dbDeleteSession,
+  dbTrashSession,
+  dbRestoreSession,
 } from "@/lib/db";
 
 export async function getAllSessions(userId: string): Promise<BuilderSessionInfo[]> {
@@ -29,6 +32,18 @@ export async function createSession(
 
 export async function deleteSession(userId: string, opportunityId: string): Promise<void> {
   return dbDeleteSession(userId, opportunityId);
+}
+
+export async function getTrashedSessions(userId: string): Promise<BuilderSessionInfo[]> {
+  return dbGetTrashedSessions(userId);
+}
+
+export async function trashSession(userId: string, opportunityId: string): Promise<void> {
+  return dbTrashSession(userId, opportunityId);
+}
+
+export async function restoreSession(userId: string, opportunityId: string): Promise<void> {
+  return dbRestoreSession(userId, opportunityId);
 }
 
 export async function updateSession(

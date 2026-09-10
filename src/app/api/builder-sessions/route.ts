@@ -1,14 +1,17 @@
 import type { NextRequest } from "next/server";
-import { getAllSessions, createSession } from "@/lib/builder-sessions-store";
+import { getAllSessions, getTrashedSessions, createSession } from "@/lib/builder-sessions-store";
 import { parseBody, ok } from "@/lib/api-response";
 import { builderSessionCreateSchema } from "@/lib/api-schemas";
 import { requireUser } from "@/lib/api-auth";
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const { user, error } = await requireUser();
   if (error) return error;
 
-  const sessions = await getAllSessions(user.id);
+  const trashed = new URL(req.url).searchParams.get("trashed") === "true";
+  const sessions = trashed
+    ? await getTrashedSessions(user.id)
+    : await getAllSessions(user.id);
   return ok(sessions);
 }
 
