@@ -3654,7 +3654,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                                 <span style={{ marginLeft: "auto", fontSize: 9, color: "rgba(22,61,38,.35)", flexShrink: 0 }}>{isExpanded ? "▲" : "▼"}</span>
                               </div>
                               <span style={{ fontSize: 10, fontWeight: 400, color: C.red, lineHeight: 1.4 }}>
-                                {f.message.length > 90 ? f.message.slice(0, 90) + "…" : f.message}
+                                {!isExpanded && f.message.length > 90 ? f.message.slice(0, 90) + "…" : f.message}
                               </span>
                             </button>
                             {isExpanded && (
