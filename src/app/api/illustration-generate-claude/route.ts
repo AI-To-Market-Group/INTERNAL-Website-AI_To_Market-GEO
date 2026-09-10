@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser } from "@/lib/api-auth";
 import { logAiUsage } from "@/lib/ai-usage-logger";
+import { checkBudget } from "@/lib/budget-guard";
 
 // ── Palette ──────────────────────────────────────────────────────────────────
 const PALETTE = ["#F7F5F2", "#163D26", "#185F00", "#FFFFFF", "#F93943", "#F88379"] as const;
@@ -121,6 +122,11 @@ async function callClaude(prompt: string): Promise<{ text: string; inputTokens: 
 export async function POST(req: NextRequest) {
   const { user, error: authError } = await requireUser();
   if (authError) return authError;
+
+  const budget = await checkBudget(user.id);
+  if (!budget.allowed) {
+    return NextResponse.json({ svgString: null }, { status: 429 });
+  }
 
   try {
     const { heading, sectionType, summary } = (await req.json()) as {

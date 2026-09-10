@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
+import { toast } from "sonner";
 import { KeywordWorkspace } from "./components/KeywordWorkspace";
 import { useSettings } from "@/hooks/useSettings";
 
@@ -2443,7 +2444,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ topic_title: title }),
       });
-      if (!res.ok) throw new Error(res.statusText);
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        toast.error(body.error ?? "Could not regenerate section. Try again.");
+        return;
+      }
       const data = await res.json() as { sections: V2OutlineSection[] };
       const match = data.sections?.find(s => s.type === section.type) ?? data.sections?.[0];
       if (match) {
