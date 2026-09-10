@@ -5537,7 +5537,9 @@ function ComboLoader({ stages, phases }: {
           timerRef.current = setTimeout(tick, 10);
         } else {
           erasingRef.current = false;
-          phaseIdxRef.current = (phaseIdxRef.current + 1) % phases.length;
+          const nextIdx = phaseIdxRef.current + 1;
+          if (nextIdx >= phases.length) return; // reached end — stop, no loop
+          phaseIdxRef.current = nextIdx;
           setPhaseIdx(phaseIdxRef.current);
           timerRef.current = setTimeout(tick, 280);
         }
@@ -5549,7 +5551,8 @@ function ComboLoader({ stages, phases }: {
           timerRef.current = setTimeout(tick, ch === "\n" ? 75 : 25);
         } else {
           const isLast = phaseIdxRef.current === phases.length - 1;
-          timerRef.current = setTimeout(() => { erasingRef.current = true; tick(); }, isLast ? 2200 : 900);
+          if (isLast) return; // last phase fully typed — stay here, don't erase
+          timerRef.current = setTimeout(() => { erasingRef.current = true; tick(); }, 900);
         }
       }
     }
