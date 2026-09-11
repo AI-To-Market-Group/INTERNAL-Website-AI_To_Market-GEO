@@ -6380,7 +6380,7 @@ export default function AtelierV2Page() {
     const params = new URLSearchParams(window.location.search);
     const savedCard = params.get("card");
     const savedScreen = params.get("screen") as Screen | null;
-    const validScreens: Screen[] = ["dashboard", "generate", "editor", "queue", "settings"];
+    const validScreens: Screen[] = ["dashboard", "generate", "editor", "queue", "settings", "keywords", "publish", "analytics", "usage", "trash", "team"];
     if (savedCard) {
       // Card takes priority — always opens editor
       setActiveCardId(savedCard);
