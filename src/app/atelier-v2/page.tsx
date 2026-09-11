@@ -1641,6 +1641,7 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
   const [subEmail, setSubEmail] = useState("");
   const [subState, setSubState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [faqOpenIdx, setFaqOpenIdx] = useState<number | null>(0);
+  const [previewFaqOpenIdx, setPreviewFaqOpenIdx] = useState<number | null>(null);
   const articleBodyRef = useRef<HTMLDivElement>(null);
   // Image state — arrays per section order (newest first), active index per section
   const [sectionImages, setSectionImages] = useState<Record<number, string[]>>({});
@@ -1653,6 +1654,23 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
   const [imgModal, setImgModal] = useState<ImgModal | null>(null);
   const [imgPrompt, setImgPrompt] = useState("");
   const [imgGenerating, setImgGenerating] = useState(false);
+  const imgUploadRef = useRef<HTMLInputElement | null>(null);
+
+  function handleImgUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !imgModal) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      if (!dataUrl) return;
+      const order = imgModal.order;
+      setSectionImages(prev => ({ ...prev, [order]: [dataUrl, ...(prev[order] ?? [])] }));
+      setActiveImgIdx(prev => ({ ...prev, [order]: 0 }));
+    };
+    reader.readAsDataURL(file);
+    // Reset so the same file can be re-selected if needed
+    e.target.value = "";
+  }
 
   // Auto-fetch Claude SVG illustrations for body sections on first load
   useEffect(() => {
@@ -1933,14 +1951,9 @@ const hlStyle = (heading: string): React.CSSProperties =>
                     }}
                   >
                     {activeSvg ? (
-                      <div
-                        dangerouslySetInnerHTML={{
-                          __html: activeSvg
-                            .replace(/width="300"/, 'width="300"')
-                            .replace(/height="240"/, 'height="240"'),
-                        }}
-                        style={{ lineHeight: 0, display: "block", width: 300, height: 240 }}
-                      />
+                      activeSvg.startsWith("data:") || activeSvg.startsWith("http")
+                        ? <img src={activeSvg} alt={s.heading} style={{ width: 300, height: 240, objectFit: "contain", display: "block" }} />
+                        : <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="300"').replace(/height="240"/, 'height="240"') }} style={{ lineHeight: 0, display: "block", width: 300, height: 240 }} />
                     ) : isLoading ? (
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, height: "100%" }}>
                         <div style={{ position: "relative", width: 80, height: 80 }}>
@@ -2265,7 +2278,9 @@ const hlStyle = (heading: string): React.CSSProperties =>
                       <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.45)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</div>
                     </div>
                   ) : activeSvg ? (
-                    <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="100%"').replace(/height="240"/, 'height="240"') }} style={{ width: "100%", height: 240, lineHeight: 0 }} />
+                    activeSvg.startsWith("data:") || activeSvg.startsWith("http")
+                      ? <img src={activeSvg} alt={imgModal.heading} style={{ width: "100%", height: 240, objectFit: "contain", display: "block" }} />
+                      : <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="100%"').replace(/height="240"/, 'height="240"') }} style={{ width: "100%", height: 240, lineHeight: 0 }} />
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                       <svg viewBox="0 0 48 48" width="40" height="40" fill="none" stroke="rgba(22,61,38,.25)" strokeWidth="1.5" strokeLinecap="round">
@@ -2286,7 +2301,10 @@ const hlStyle = (heading: string): React.CSSProperties =>
                         style={{ flexShrink: 0, width: 80, height: 50, borderRadius: 8, overflow: "hidden", border: `2px solid ${idx === modalActive ? "#163D26" : "rgba(22,61,38,.15)"}`, cursor: "pointer", background: "#F7F5F2", padding: 0, position: "relative" }}
                         title={`Version ${modalImgs.length - idx}`}
                       >
-                        <div dangerouslySetInnerHTML={{ __html: svg }} style={{ transform: "scale(0.267)", transformOrigin: "top left", width: 300, height: 240, pointerEvents: "none" }} />
+                        {svg.startsWith("data:") || svg.startsWith("http")
+                          ? <img src={svg} style={{ width: 80, height: 50, objectFit: "contain", display: "block", pointerEvents: "none" }} />
+                          : <div dangerouslySetInnerHTML={{ __html: svg }} style={{ transform: "scale(0.267)", transformOrigin: "top left", width: 300, height: 240, pointerEvents: "none" }} />
+                        }
                         <div style={{ position: "absolute", bottom: 2, right: 4, fontSize: 9, fontWeight: 700, color: idx === modalActive ? "#163D26" : "rgba(22,61,38,.45)" }}>
                           v{modalImgs.length - idx}
                         </div>
@@ -2312,14 +2330,33 @@ const hlStyle = (heading: string): React.CSSProperties =>
                       {modalImgs.length} version{modalImgs.length > 1 ? "s" : ""} · showing v{modalImgs.length - modalActive}
                     </div>
                   )}
-                  <button
-                    onClick={() => void generateNewImage()}
-                    disabled={imgGenerating}
-                    style={{ marginLeft: "auto", padding: "10px 22px", borderRadius: 8, background: imgGenerating ? "rgba(22,61,38,.3)" : "#163D26", color: "#fff", fontSize: 13, fontWeight: 700, border: "none", cursor: imgGenerating ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}
-                  >
-                    {imgGenerating && <div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,.25)", borderTop: "2px solid #fff", borderRadius: "50%", animation: "spin 1s linear infinite" }} />}
-                    {imgGenerating ? "Generating…" : "Generate new image"}
-                  </button>
+                  <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+                    {/* Upload custom image */}
+                    <input
+                      ref={imgUploadRef}
+                      type="file"
+                      accept="image/*"
+                      style={{ display: "none" }}
+                      onChange={handleImgUpload}
+                    />
+                    <button
+                      onClick={() => imgUploadRef.current?.click()}
+                      style={{ padding: "10px 18px", borderRadius: 8, background: "rgba(22,61,38,.07)", color: "#163D26", fontSize: 13, fontWeight: 600, border: "1.5px solid rgba(22,61,38,.18)", cursor: "pointer", display: "flex", alignItems: "center", gap: 7, whiteSpace: "nowrap" }}
+                    >
+                      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                        <path d="M8 2v8M5 5l3-3 3 3"/><rect x="2" y="11" width="12" height="3" rx="1"/>
+                      </svg>
+                      Upload image
+                    </button>
+                    <button
+                      onClick={() => void generateNewImage()}
+                      disabled={imgGenerating}
+                      style={{ padding: "10px 22px", borderRadius: 8, background: imgGenerating ? "rgba(22,61,38,.3)" : "#163D26", color: "#fff", fontSize: 13, fontWeight: 700, border: "none", cursor: imgGenerating ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}
+                    >
+                      {imgGenerating && <div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,.25)", borderTop: "2px solid #fff", borderRadius: "50%", animation: "spin 1s linear infinite" }} />}
+                      {imgGenerating ? "Generating…" : "Generate new image"}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2404,7 +2441,10 @@ const hlStyle = (heading: string): React.CSSProperties =>
                       overflow: "hidden", flexShrink: 0, lineHeight: 0,
                       display: "flex", alignItems: "center", justifyContent: "center",
                     }}>
-                      <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="320"').replace(/height="240"/, 'height="240"') }} style={{ lineHeight: 0, display: "block", width: 320, height: 240 }} />
+                      {activeSvg.startsWith("data:") || activeSvg.startsWith("http")
+                        ? <img src={activeSvg} alt={s.heading} style={{ width: 320, height: 240, objectFit: "contain", display: "block" }} />
+                        : <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="320"').replace(/height="240"/, 'height="240"') }} style={{ lineHeight: 0, display: "block", width: 320, height: 240 }} />
+                      }
                     </div>
                   )}
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 10 }}>{s.eyebrow || s.type.replace(/_/g, " ").toUpperCase()}</div>
@@ -2422,14 +2462,96 @@ const hlStyle = (heading: string): React.CSSProperties =>
               );
             })}
 
+            {/* Stats — BY THE NUMBERS */}
+            {statsSection && (() => {
+              const ps = statsSection.content.paragraphs;
+              const STAT_RE = /(\$[\d,.]+\s*(?:billion|million|trillion|[bBmMtTkK])\b|\b\d[\d,.]*\s*(?:%|[xX]\b|×|\+)|\b\d[\d,.]*\s*(?:billion|million|trillion|thousand)\b)/i;
+              const statParas = ps.filter(p => STAT_RE.test(p.text.replace(/<[^>]+>/g, ""))).slice(0, 3);
+              const plainParas = ps.filter(p => !STAT_RE.test(p.text.replace(/<[^>]+>/g, "")));
+              return (
+                <div>
+                  <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "44px 0" }} />
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.mid, marginBottom: 14 }}>BY THE NUMBERS</div>
+                  <h3 style={{ margin: "0 0 22px", fontSize: 19, fontWeight: 700, lineHeight: 1.3, color: C.dark }}>{statsSection.heading}</h3>
+                  {statParas.length > 0 && (
+                    <div style={{ display: "grid", gridTemplateColumns: `repeat(${statParas.length}, 1fr)`, gap: 14, marginBottom: 24 }}>
+                      {statParas.map((p, i) => {
+                        const clean = p.text.replace(/<[^>]+>/g, "");
+                        const m = clean.match(STAT_RE)!;
+                        const stat = m[1].trim();
+                        const caption = clean.replace(stat, "").replace(/\s{2,}/g, " ").trim().slice(0, 80);
+                        return (
+                          <div key={i} style={{ padding: "20px 16px", background: C.dark, borderRadius: 10, textAlign: "center" }}>
+                            <div style={{ fontSize: 30, fontWeight: 700, color: C.salmon, lineHeight: 1, letterSpacing: -1 }}>{stat}</div>
+                            <div style={{ marginTop: 10, fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.6)", lineHeight: 1.45 }}>{caption || clean.slice(0, 60)}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {plainParas.map((p, i) => (
+                    <p key={i} dangerouslySetInnerHTML={{ __html: p.text }} style={{ margin: "0 0 13px", fontSize: 15, fontWeight: 400, lineHeight: 1.75, color: "#222" }} />
+                  ))}
+                </div>
+              );
+            })()}
+
+            {/* FAQ */}
+            {faqSection && (() => {
+              const faqItems = faqSection.content.paragraphs.map((p, i) => {
+                const raw = p.text.replace(/^<p>/i, "").replace(/<\/p>$/i, "").trim();
+                const m = raw.match(/^Q:\s*([\s\S]+?)\s*(?:\n+|\s{2,})A:\s*([\s\S]+)$/i)
+                  ?? raw.match(/^Q:\s*(.+?)\s+A:\s*([\s\S]+)$/i);
+                if (m) return { id: p.id, question: m[1].trim(), answer: m[2].trim() };
+                const splitIdx = raw.search(/(?:\n|^)A:\s/im);
+                if (splitIdx !== -1) {
+                  return { id: p.id, question: raw.slice(0, splitIdx).replace(/^Q:\s*/i, "").trim(), answer: raw.slice(splitIdx).replace(/^A:\s*/i, "").trim() };
+                }
+                return { id: p.id, question: `Question ${i + 1}`, answer: raw };
+              });
+              return (
+                <div>
+                  <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "44px 0" }} />
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.mid, marginBottom: 18 }}>FREQUENTLY ASKED QUESTIONS</div>
+                  <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+                    {faqItems.map((item, i) => {
+                      const open = previewFaqOpenIdx === i;
+                      return (
+                        <div key={item.id} style={{ borderBottom: i < faqItems.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                          <button
+                            onClick={() => setPreviewFaqOpenIdx(open ? null : i)}
+                            style={{ width: "100%", display: "flex", alignItems: "center", gap: 16, padding: "16px 20px", background: open ? C.faint : "transparent", border: "none", cursor: "pointer", textAlign: "left", transition: "background .15s" }}
+                          >
+                            <span style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.45, color: C.dark, flex: 1 }}>{item.question}</span>
+                            <span style={{ width: 22, height: 22, flexShrink: 0, borderRadius: "50%", border: `1.5px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, lineHeight: 1, color: C.mid, transform: open ? "rotate(45deg)" : "none", transition: "transform .18s" }}>+</span>
+                          </button>
+                          {open && item.answer && (
+                            <div style={{ padding: "2px 20px 18px", fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: C.muted }}>{item.answer}</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Conclusion */}
             {conclusion && (() => {
               let takeaways = conclusion.content.bullets.map(b => typeof b === "string" ? b : String(b ?? "")).filter(b => b.trim());
-              if (takeaways.length === 0) {
+              if (takeaways.length === 0 && conclusion.content.paragraphs.length > 0) {
                 for (const para of conclusion.content.paragraphs) {
-                  const sentences = para.text.replace(/<[^>]+>/g, "").trim().split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
-                  takeaways.push(...sentences);
-                  if (takeaways.length > 0) break;
+                  const pText = para.text;
+                  if (/<li/i.test(pText)) {
+                    takeaways = (pText.match(/<li[^>]*>([\s\S]*?)<\/li>/gi) ?? [])
+                      .map(li => li.replace(/<\/?li[^>]*>/gi, "").replace(/<[^>]+>/g, "").trim())
+                      .filter(Boolean);
+                    if (takeaways.length > 0) break;
+                  } else {
+                    const sentences = pText.replace(/<[^>]+>/g, "").trim()
+                      .split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+                    takeaways.push(...sentences);
+                  }
                 }
               }
               return (
@@ -2450,14 +2572,39 @@ const hlStyle = (heading: string): React.CSSProperties =>
             })()}
           </div>
 
-          {/* Footer */}
-          <div style={{ background: C.dark, padding: "32px 56px", borderRadius: "0 0 12px 12px" }}>
+          {/* Footer — identical to article footer */}
+          <div style={{ background: C.dark, padding: "28px 44px", borderRadius: "0 0 12px 12px" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
-              <div style={{ fontSize: 15, fontWeight: 700, color: C.white }}>AI To Market</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.white }}>AI To Market</div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <a href="https://www.linkedin.com/company/ai-to-market" target="_blank" rel="noreferrer"
+                  style={{ width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,.1)", border: "1px solid rgba(255,255,255,.18)", display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill={C.white}>
+                    <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+                  </svg>
+                </a>
+                <a href="https://x.com/aitomarket" target="_blank" rel="noreferrer"
+                  style={{ width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,.1)", border: "1px solid rgba(255,255,255,.18)", display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}>
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill={C.white}>
+                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L2.25 2.25h6.918l4.253 5.623 5.823-5.623zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                  </svg>
+                </a>
+              </div>
             </div>
-            <div style={{ borderTop: "1px solid rgba(255,255,255,.12)", paddingTop: 18 }}>
-              <div style={{ fontSize: 12, fontWeight: 400, color: "rgba(255,255,255,.4)" }}>
-                Have a suggestion? Reach us at <span style={{ color: C.salmon }}>socials@aitomarketgroup.com</span>
+            <div style={{ borderTop: "1px solid rgba(255,255,255,.12)", paddingTop: 20 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.white, marginBottom: 4 }}>Get our blogs in your DMs</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                <input
+                  type="email"
+                  placeholder="your@email.com"
+                  style={{ flex: 1, padding: "9px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,.2)", background: "rgba(255,255,255,.08)", color: C.white, fontSize: 12, outline: "none" }}
+                />
+                <button style={{ padding: "9px 16px", borderRadius: 7, background: C.salmon, color: C.dark, fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer", whiteSpace: "nowrap" }}>
+                  Subscribe
+                </button>
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.4)" }}>
+                Have a suggestion? Tell us more at <span style={{ color: C.salmon }}>socials@aitomarketgroup.com</span>
               </div>
             </div>
           </div>
