@@ -2387,6 +2387,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const outlineTargetRef = useRef(0);
   const articleBarRafRef = useRef<number | null>(null);
   const articleBarTargetRef = useRef(0); // mutated by real events; rAF eases toward it
+  const articlePhaseRef = useRef(0);    // mirrors articlePhase so rAF can read it without stale closure
   const [articleError, setArticleError] = useState<string | null>(null);
   const [geoScore, setGeoScore] = useState<{ score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number } | null>(null);
   const [qualityFlags, setQualityFlags] = useState<{ section?: string; type: string; message: string }[]>([]);
@@ -2770,12 +2771,14 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     articleBarTargetRef.current = 6; // instant early nudge so bar visibly starts
     setArticleProgress(0);
     function tick() {
-      // Organic trickle: phase caps keep early stages meaningful; after scoring stage (>90%)
-      // slow trickle to 99.2 so bar never freezes during long citation web-search waits
+      // Organic trickle: each phase has a hard ceiling so the bar only advances
+      // when a real stage event bumps the target past it. This prevents the bar
+      // from running ahead of what has actually happened server-side.
+      const PHASE_CAPS = [67, 79, 89, 99.2]; // Drafting / Reviewing / Citing / Scoring
+      const phaseCap = PHASE_CAPS[articlePhaseRef.current] ?? 99.2;
       const t = articleBarTargetRef.current;
-      const organicCap = t < 68 ? 68 : t < 80 ? 80 : t < 90 ? 90 : 99.2;
       const rate = t < 90 ? 0.018 : 0.003;
-      if (t < organicCap) articleBarTargetRef.current = Math.min(t + rate, organicCap);
+      if (t < phaseCap) articleBarTargetRef.current = Math.min(t + rate, phaseCap);
 
       setArticleProgress(prev => {
         const target = articleBarTargetRef.current;
@@ -3258,6 +3261,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     setArticleError(null);
     setArticleProgress(0);
     setArticlePhase(0);
+    articlePhaseRef.current = 0;
     setEditorStep("article");
     try {
       const finalOutline = outline.map((s, i) => ({
@@ -3306,14 +3310,14 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               );
             }
             // Stage events: open a new target ceiling; pill advances simultaneously
-            if (parsed.stage === "brand_voice") { setArticlePhase(1); articleBarTargetRef.current = Math.max(articleBarTargetRef.current, 72); }
-            if (parsed.stage === "citation")    { setArticlePhase(2); articleBarTargetRef.current = Math.max(articleBarTargetRef.current, 83); }
-            if (parsed.stage === "scoring")     { setArticlePhase(3); articleBarTargetRef.current = Math.max(articleBarTargetRef.current, 93); }
+            if (parsed.stage === "brand_voice") { setArticlePhase(1); articlePhaseRef.current = 1; articleBarTargetRef.current = Math.max(articleBarTargetRef.current, 72); }
+            if (parsed.stage === "citation")    { setArticlePhase(2); articlePhaseRef.current = 2; articleBarTargetRef.current = Math.max(articleBarTargetRef.current, 83); }
+            if (parsed.stage === "scoring")     { setArticlePhase(3); articlePhaseRef.current = 3; articleBarTargetRef.current = Math.max(articleBarTargetRef.current, 93); }
             if (parsed.article) {
               articleBarTargetRef.current = 100;
               setArticleProgress(100); // snap bar to 100% immediately
-              // Hold the loader open briefly so the user sees 100% before content reveals
-              setTimeout(() => setArticleLoaderVisible(false), 700);
+              // Hold the loader open so the user clearly sees 100% before content reveals
+              setTimeout(() => setArticleLoaderVisible(false), 1500);
               setArticleData(parsed.article);
               if (parsed.geo_score) setGeoScore(parsed.geo_score);
               if (parsed.quality_flags) setQualityFlags(parsed.quality_flags);
