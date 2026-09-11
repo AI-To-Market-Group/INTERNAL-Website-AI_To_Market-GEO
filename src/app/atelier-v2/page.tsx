@@ -1649,6 +1649,10 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
   const [imgLoadingOrders, setImgLoadingOrders] = useState<Set<number>>(new Set());
   const [imgFailedOrders, setImgFailedOrders] = useState<Set<number>>(new Set());
   const [hoveredImg, setHoveredImg] = useState<number | null>(null);
+  // Per-slot image display settings (position = CSS objectPosition, fit = objectFit)
+  const [imgPositions, setImgPositions] = useState<Record<number, string>>({});
+  const [imgFitMode, setImgFitMode] = useState<Record<number, "contain" | "cover">>({});
+  const [isDraggingPos, setIsDraggingPos] = useState(false);
   // Image modal state
   type ImgModal = { order: number; heading: string; sType: string; prompt: string };
   const [imgModal, setImgModal] = useState<ImgModal | null>(null);
@@ -1849,7 +1853,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
           >
             {heroSvg ? (
               heroSvg.startsWith("data:") || heroSvg.startsWith("http")
-                ? <img src={heroSvg} alt={article.title} style={{ width: "100%", height: 260, objectFit: "cover", display: "block" }} />
+                ? <img src={heroSvg} alt={article.title} style={{ width: "100%", height: 260, objectFit: imgFitMode[0] ?? "cover", objectPosition: imgPositions[0] ?? "50% 50%", display: "block" }} />
                 : <div dangerouslySetInnerHTML={{ __html: heroSvg }} style={{ width: 300, height: 240, flexShrink: 0, lineHeight: 0 }} />
             ) : (
               <>
@@ -1954,7 +1958,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
                   >
                     {activeSvg ? (
                       activeSvg.startsWith("data:") || activeSvg.startsWith("http")
-                        ? <img src={activeSvg} alt={s.heading} style={{ width: 300, height: 240, objectFit: "contain", display: "block" }} />
+                        ? <img src={activeSvg} alt={s.heading} style={{ width: 300, height: 240, objectFit: imgFitMode[s.order] ?? "contain", objectPosition: imgPositions[s.order] ?? "50% 50%", display: "block" }} />
                         : <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="300"').replace(/height="240"/, 'height="240"') }} style={{ lineHeight: 0, display: "block", width: 300, height: 240 }} />
                     ) : isLoading ? (
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, height: "100%" }}>
@@ -2240,14 +2244,39 @@ const hlStyle = (heading: string): React.CSSProperties =>
 
       {/* Image Modal */}
       {imgModal && (() => {
-        const modalImgs = sectionImages[imgModal.order] ?? [];
-        const modalActive = activeImgIdx[imgModal.order] ?? 0;
+        const modalOrder = imgModal.order;
+        const modalImgs = sectionImages[modalOrder] ?? [];
+        const modalActive = activeImgIdx[modalOrder] ?? 0;
         const activeSvg = modalImgs[modalActive] ?? null;
-        const autoGenerating = imgLoadingOrders.has(imgModal.order);
+        const autoGenerating = imgLoadingOrders.has(modalOrder);
+        const isUploadedImg = !!activeSvg && (activeSvg.startsWith("data:") || activeSvg.startsWith("http"));
+        const currentFit = imgFitMode[modalOrder] ?? (modalOrder === 0 ? "cover" : "contain");
+        const currentPos = imgPositions[modalOrder] ?? "50% 50%";
+        const [posX, posY] = currentPos.split(" ").map(v => parseFloat(v));
+
+        function handlePreviewMouseDown(e: React.MouseEvent<HTMLDivElement>) {
+          if (!isUploadedImg) return;
+          e.preventDefault();
+          setIsDraggingPos(true);
+          const rect = e.currentTarget.getBoundingClientRect();
+          const x = Math.max(0, Math.min(100, Math.round(((e.clientX - rect.left) / rect.width) * 100)));
+          const y = Math.max(0, Math.min(100, Math.round(((e.clientY - rect.top) / rect.height) * 100)));
+          setImgPositions(prev => ({ ...prev, [modalOrder]: `${x}% ${y}%` }));
+        }
+        function handlePreviewMouseMove(e: React.MouseEvent<HTMLDivElement>) {
+          if (!isDraggingPos || !isUploadedImg) return;
+          const rect = e.currentTarget.getBoundingClientRect();
+          const x = Math.max(0, Math.min(100, Math.round(((e.clientX - rect.left) / rect.width) * 100)));
+          const y = Math.max(0, Math.min(100, Math.round(((e.clientY - rect.top) / rect.height) * 100)));
+          setImgPositions(prev => ({ ...prev, [modalOrder]: `${x}% ${y}%` }));
+        }
+
         return (
           <div
             style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
             onClick={e => { if (e.target === e.currentTarget) setImgModal(null); }}
+            onMouseUp={() => setIsDraggingPos(false)}
+            onMouseLeave={() => setIsDraggingPos(false)}
           >
             <div style={{ background: "#fff", borderRadius: 16, width: "100%", maxWidth: 720, maxHeight: "90vh", overflow: "auto", boxShadow: "0 24px 80px rgba(0,0,0,.4)" }}>
               {/* Modal header */}
@@ -2264,7 +2293,12 @@ const hlStyle = (heading: string): React.CSSProperties =>
 
               {/* Large image preview */}
               <div style={{ padding: "20px 24px 0" }}>
-                <div style={{ background: "#F7F5F2", borderRadius: 12, overflow: "hidden", width: "100%", height: 240, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <div
+                  style={{ background: "#F7F5F2", borderRadius: 12, overflow: "hidden", width: "100%", height: 260, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", cursor: isUploadedImg ? (isDraggingPos ? "grabbing" : "crosshair") : "default", userSelect: "none" }}
+                  onMouseDown={handlePreviewMouseDown}
+                  onMouseMove={handlePreviewMouseMove}
+                  onMouseUp={() => setIsDraggingPos(false)}
+                >
                   {(imgGenerating || autoGenerating) ? (
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
                       <div style={{ position: "relative", width: 80, height: 80 }}>
@@ -2280,9 +2314,15 @@ const hlStyle = (heading: string): React.CSSProperties =>
                       <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.45)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</div>
                     </div>
                   ) : activeSvg ? (
-                    activeSvg.startsWith("data:") || activeSvg.startsWith("http")
-                      ? <img src={activeSvg} alt={imgModal.heading} style={{ width: "100%", height: 240, objectFit: "contain", display: "block" }} />
-                      : <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="100%"').replace(/height="240"/, 'height="240"') }} style={{ width: "100%", height: 240, lineHeight: 0 }} />
+                    isUploadedImg
+                      ? <>
+                          <img src={activeSvg} alt={imgModal.heading} style={{ width: "100%", height: 260, objectFit: currentFit, objectPosition: currentPos, display: "block", pointerEvents: "none" }} />
+                          {/* Focal point crosshair */}
+                          <div style={{ position: "absolute", pointerEvents: "none", left: `${posX}%`, top: `${posY}%`, transform: "translate(-50%, -50%)" }}>
+                            <div style={{ width: 20, height: 20, borderRadius: "50%", border: "2px solid #fff", boxShadow: "0 0 0 1px rgba(0,0,0,.5), inset 0 0 0 1px rgba(0,0,0,.2)", background: "rgba(255,255,255,.2)" }} />
+                          </div>
+                        </>
+                      : <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="100%"').replace(/height="240"/, 'height="260"') }} style={{ width: "100%", height: 260, lineHeight: 0 }} />
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                       <svg viewBox="0 0 48 48" width="40" height="40" fill="none" stroke="rgba(22,61,38,.25)" strokeWidth="1.5" strokeLinecap="round">
@@ -2293,13 +2333,34 @@ const hlStyle = (heading: string): React.CSSProperties =>
                   )}
                 </div>
 
+                {/* Crop / reposition controls — only for uploaded images */}
+                {isUploadedImg && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "rgba(22,61,38,.45)", textTransform: "uppercase", whiteSpace: "nowrap" }}>Display</span>
+                    <button
+                      onClick={() => setImgFitMode(prev => ({ ...prev, [modalOrder]: "contain" }))}
+                      style={{ padding: "5px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, border: `1.5px solid ${currentFit === "contain" ? "#163D26" : "rgba(22,61,38,.18)"}`, background: currentFit === "contain" ? "#163D26" : "transparent", color: currentFit === "contain" ? "#fff" : "#163D26", cursor: "pointer" }}
+                    >Fit</button>
+                    <button
+                      onClick={() => setImgFitMode(prev => ({ ...prev, [modalOrder]: "cover" }))}
+                      style={{ padding: "5px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, border: `1.5px solid ${currentFit === "cover" ? "#163D26" : "rgba(22,61,38,.18)"}`, background: currentFit === "cover" ? "#163D26" : "transparent", color: currentFit === "cover" ? "#fff" : "#163D26", cursor: "pointer" }}
+                    >Fill</button>
+                    <div style={{ width: 1, height: 16, background: "rgba(22,61,38,.15)", margin: "0 2px" }} />
+                    <button
+                      onClick={() => setImgPositions(prev => ({ ...prev, [modalOrder]: "50% 50%" }))}
+                      style={{ padding: "5px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, border: "1.5px solid rgba(22,61,38,.18)", background: "transparent", color: "#163D26", cursor: "pointer" }}
+                    >Center</button>
+                    <span style={{ fontSize: 11, color: "rgba(22,61,38,.35)", marginLeft: "auto" }}>Drag image to reposition focal point</span>
+                  </div>
+                )}
+
                 {/* Version thumbnails */}
                 {modalImgs.length > 1 && (
                   <div style={{ display: "flex", gap: 8, marginTop: 12, overflowX: "auto", paddingBottom: 4 }}>
                     {modalImgs.map((svg, idx) => (
                       <button
                         key={idx}
-                        onClick={() => setActiveImgIdx(prev => ({ ...prev, [imgModal.order]: idx }))}
+                        onClick={() => setActiveImgIdx(prev => ({ ...prev, [modalOrder]: idx }))}
                         style={{ flexShrink: 0, width: 80, height: 50, borderRadius: 8, overflow: "hidden", border: `2px solid ${idx === modalActive ? "#163D26" : "rgba(22,61,38,.15)"}`, cursor: "pointer", background: "#F7F5F2", padding: 0, position: "relative" }}
                         title={`Version ${modalImgs.length - idx}`}
                       >
@@ -2403,7 +2464,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
               <div style={{ height: 260, overflow: "hidden", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 {heroSvg ? (
                   heroSvg.startsWith("data:") || heroSvg.startsWith("http")
-                    ? <img src={heroSvg} alt={article.title} style={{ width: "100%", height: 260, objectFit: "cover", display: "block" }} />
+                    ? <img src={heroSvg} alt={article.title} style={{ width: "100%", height: 260, objectFit: imgFitMode[0] ?? "cover", objectPosition: imgPositions[0] ?? "50% 50%", display: "block" }} />
                     : <div dangerouslySetInnerHTML={{ __html: heroSvg }} style={{ width: 300, height: 240, flexShrink: 0, lineHeight: 0 }} />
                 ) : (
                   <svg viewBox="0 0 48 48" width="44" height="44" fill="none" stroke="rgba(255,255,255,.25)" strokeWidth="1.5" strokeLinecap="round"><rect x="4" y="4" width="40" height="40" rx="4"/><circle cx="16" cy="18" r="4"/><path d="M44 32l-10-10-14 14"/></svg>
@@ -2413,7 +2474,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
           })()}
 
           {/* Body */}
-          <div style={{ background: C.white, padding: "52px 56px" }}>
+          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", padding: "52px 56px" }}>
             {/* Intro */}
             {intro && (
               <div style={{ marginBottom: 8 }}>
@@ -2446,7 +2507,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
                       display: "flex", alignItems: "center", justifyContent: "center",
                     }}>
                       {activeSvg.startsWith("data:") || activeSvg.startsWith("http")
-                        ? <img src={activeSvg} alt={s.heading} style={{ width: 320, height: 240, objectFit: "contain", display: "block" }} />
+                        ? <img src={activeSvg} alt={s.heading} style={{ width: 320, height: 240, objectFit: imgFitMode[s.order] ?? "contain", objectPosition: imgPositions[s.order] ?? "50% 50%", display: "block" }} />
                         : <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="320"').replace(/height="240"/, 'height="240"') }} style={{ lineHeight: 0, display: "block", width: 320, height: 240 }} />
                       }
                     </div>
