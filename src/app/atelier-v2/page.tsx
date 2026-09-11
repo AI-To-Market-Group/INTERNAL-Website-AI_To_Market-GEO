@@ -1656,7 +1656,6 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
       !/frequently.asked/i.test(s.type) &&
       !/frequently asked/i.test(s.heading)
     );
-    if (!bodySections.length) return;
     setSectionImages({});
     setActiveImgIdx({});
     const orders = new Set([0, ...bodySections.map(s => s.order)]);
@@ -1828,7 +1827,11 @@ const hlStyle = (heading: string): React.CSSProperties =>
                       <div style={{ position: "relative", width: 90, height: 90 }}>
                         <div style={{ position: "absolute", inset: 0, border: "2.5px solid rgba(255,255,255,.15)", borderTop: "2.5px solid rgba(255,255,255,.8)", borderRadius: "50%", animation: "spin 1.1s linear infinite" }} />
                         <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                          <img src="/logo-white.svg" alt="AI To Market" style={{ width: 58, height: 30, objectFit: "contain", opacity: 0.9 }} />
+                          <svg viewBox="0 0 91 59" width="46" height="30" xmlns="http://www.w3.org/2000/svg" style={{ color: "rgba(255,255,255,.9)" }}>
+                            <path d="M26.66 0V13.32C36.72 13.32 45.24 19.96 48.08 29.1H26.66V13.32H13.34V35.76V58.2H26.66V42.42H49.1V58.2H62.42V35.76C62.42 16.04 46.38 0 26.66 0Z" fill="currentColor"/>
+                            <path d="M13.32 0H0V13.32H13.32V0Z" fill="currentColor"/>
+                            <path d="M90.26 35.76C90.26 16.04 74.22 0 54.48 0V13.32C66.86 13.32 76.92 23.38 76.92 35.76V58.2H90.24V35.76H90.26Z" fill="currentColor"/>
+                          </svg>
                         </div>
                       </div>
                       <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,.5)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</span>
@@ -1922,7 +1925,11 @@ const hlStyle = (heading: string): React.CSSProperties =>
                         <div style={{ position: "relative", width: 80, height: 80 }}>
                           <div style={{ position: "absolute", inset: 0, border: "2.5px solid rgba(22,61,38,.1)", borderTop: "2.5px solid rgba(22,61,38,.65)", borderRadius: "50%", animation: "spin 1.1s linear infinite" }} />
                           <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                            <img src="/logo-green.svg" alt="AI To Market" style={{ width: 52, height: 28, objectFit: "contain" }} />
+                            <svg viewBox="0 0 91 59" width="42" height="27" xmlns="http://www.w3.org/2000/svg" style={{ color: "#163D26" }}>
+                            <path d="M26.66 0V13.32C36.72 13.32 45.24 19.96 48.08 29.1H26.66V13.32H13.34V35.76V58.2H26.66V42.42H49.1V58.2H62.42V35.76C62.42 16.04 46.38 0 26.66 0Z" fill="currentColor"/>
+                            <path d="M13.32 0H0V13.32H13.32V0Z" fill="currentColor"/>
+                            <path d="M90.26 35.76C90.26 16.04 74.22 0 54.48 0V13.32C66.86 13.32 76.92 23.38 76.92 35.76V58.2H90.24V35.76H90.26Z" fill="currentColor"/>
+                          </svg>
                           </div>
                         </div>
                         <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.45)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</span>
@@ -2195,6 +2202,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
         const modalImgs = sectionImages[imgModal.order] ?? [];
         const modalActive = activeImgIdx[imgModal.order] ?? 0;
         const activeSvg = modalImgs[modalActive] ?? null;
+        const autoGenerating = imgLoadingOrders.has(imgModal.order);
         return (
           <div
             style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
@@ -2216,12 +2224,16 @@ const hlStyle = (heading: string): React.CSSProperties =>
               {/* Large image preview */}
               <div style={{ padding: "20px 24px 0" }}>
                 <div style={{ background: "#F7F5F2", borderRadius: 12, overflow: "hidden", width: "100%", height: 240, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  {imgGenerating ? (
+                  {(imgGenerating || autoGenerating) ? (
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
                       <div style={{ position: "relative", width: 80, height: 80 }}>
                         <div style={{ position: "absolute", inset: 0, border: "2.5px solid rgba(22,61,38,.1)", borderTop: "2.5px solid rgba(22,61,38,.65)", borderRadius: "50%", animation: "spin 1.1s linear infinite" }} />
                         <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                          <img src="/logo-green.svg" alt="AI To Market" style={{ width: 52, height: 28, objectFit: "contain" }} />
+                          <svg viewBox="0 0 91 59" width="42" height="27" xmlns="http://www.w3.org/2000/svg" style={{ color: "#163D26" }}>
+                            <path d="M26.66 0V13.32C36.72 13.32 45.24 19.96 48.08 29.1H26.66V13.32H13.34V35.76V58.2H26.66V42.42H49.1V58.2H62.42V35.76C62.42 16.04 46.38 0 26.66 0Z" fill="currentColor"/>
+                            <path d="M13.32 0H0V13.32H13.32V0Z" fill="currentColor"/>
+                            <path d="M90.26 35.76C90.26 16.04 74.22 0 54.48 0V13.32C66.86 13.32 76.92 23.38 76.92 35.76V58.2H90.24V35.76H90.26Z" fill="currentColor"/>
+                          </svg>
                         </div>
                       </div>
                       <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.45)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</div>
@@ -2363,6 +2375,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   // ── Article generation state ────────────────────────────────────────────────
   const [articleData, setArticleData] = useState<GeneratedArticle | null>(null);
   const [articleLoading, setArticleLoading] = useState(false);
+  const [articleLoaderVisible, setArticleLoaderVisible] = useState(false);
   const [articleProgress, setArticleProgress] = useState(0);
   const [articlePhase, setArticlePhase] = useState(0);
   const [outlineProgress, setOutlineProgress] = useState(0);
@@ -2742,10 +2755,16 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     articleBarTargetRef.current = 6; // instant early nudge so bar visibly starts
     setArticleProgress(0);
     function tick() {
+      // Organic trickle: slowly push target forward so bar never looks frozen
+      // Caps are set just below the next stage milestone so real events still feel meaningful
+      const t = articleBarTargetRef.current;
+      const organicCap = t < 68 ? 68 : t < 80 ? 80 : t < 90 ? 90 : t < 97 ? 97 : t;
+      if (t < organicCap) articleBarTargetRef.current = Math.min(t + 0.018, organicCap);
+
       setArticleProgress(prev => {
-        const t = articleBarTargetRef.current;
-        const diff = t - prev;
-        if (Math.abs(diff) < 0.05) return t;
+        const target = articleBarTargetRef.current;
+        const diff = target - prev;
+        if (Math.abs(diff) < 0.05) return target;
         return prev + diff * 0.08; // ease: fast when far, slows near target
       });
       articleBarRafRef.current = requestAnimationFrame(tick);
@@ -3219,6 +3238,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     setQualityFlags([]);
     setBrandVoiceStatus(null);
     setArticleLoading(true);
+    setArticleLoaderVisible(true);
     setArticleError(null);
     setArticleProgress(0);
     setArticlePhase(0);
@@ -3275,7 +3295,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
             if (parsed.stage === "scoring")     { setArticlePhase(3); articleBarTargetRef.current = Math.max(articleBarTargetRef.current, 93); }
             if (parsed.article) {
               articleBarTargetRef.current = 100;
-              setArticleProgress(100);
+              setArticleProgress(100); // snap bar to 100% immediately
+              // Hold the loader open briefly so the user sees 100% before content reveals
+              setTimeout(() => setArticleLoaderVisible(false), 700);
               setArticleData(parsed.article);
               if (parsed.geo_score) setGeoScore(parsed.geo_score);
               if (parsed.quality_flags) setQualityFlags(parsed.quality_flags);
@@ -3292,6 +3314,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       }
     } catch (e) {
       setArticleError(e instanceof Error ? e.message : "Failed to generate article");
+      setArticleLoaderVisible(false);
       setEditorStep("plan");
     } finally {
       setArticleLoading(false);
@@ -3893,7 +3916,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       <StepBar current={2} />
 
       {/* Loading — Option D combo */}
-      {articleLoading && (
+      {articleLoaderVisible && (
         <ComboLoader
           stages={["Drafting", "Reviewing", "Citing", "Scoring"]}
           phases={[
@@ -3908,7 +3931,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       )}
 
       {/* Error state */}
-      {articleError && !articleLoading && (
+      {articleError && !articleLoaderVisible && (
         <div style={{ padding: "20px 24px", border: "1px solid rgba(249,57,67,.3)", borderRadius: 10, background: "rgba(249,57,67,.04)", color: C.red, fontSize: 13, maxWidth: 720 }}>
           <div style={{ fontWeight: 700, marginBottom: 4 }}>Could not generate article</div>
           <div style={{ fontWeight: 400, opacity: .8 }}>{articleError}</div>
@@ -3920,7 +3943,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       )}
 
       {/* Newsletter + right sidebar */}
-      {articleData && !articleLoading && (() => {
+      {articleData && !articleLoaderVisible && (() => {
         const score = geoScore?.score ?? 0;
         const scoreColor = score >= 80 ? C.mid : score >= 60 ? "#F5A623" : C.red;
         const checks = geoScore?.checks ?? [];
