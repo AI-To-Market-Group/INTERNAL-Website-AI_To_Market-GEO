@@ -3626,7 +3626,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               { label: "Researching topic", text: "Scanning top-ranking content for this topic...\nIdentifying audience pain points and search intent...\nMapping the competitive keyword landscape..." },
               { label: "Structuring outline", text: "Introduction → Market Context → Strategy Deep-Dive → Case Study → FAQ → Key Takeaways" },
               { label: "Mapping keywords", text: "Embedding primary and secondary keywords into each section...\nAligning section types: introduction, section, comparison, faq, conclusion..." },
-              { label: "Validating plan", text: "✓  GEO section coverage — complete\n✓  Keyword density — balanced\n✓  Conclusion bullets — ready\n✓  FAQ fan-out — structured" },
+              { label: "Validating plan", text: "✓  GEO section coverage — complete\n✓  Keyword density — balanced\n✓  Conclusion bullets — ready\n✓  FAQ fan-out — structured\n✓  Eyebrow labels — confirmed\n✓  Section order — enforced\n✓  Stats section — present\n✓  Introduction angle — scenario-driven\n✓  Keyword alignment — verified\n✓  Outline finalising…" },
             ]}
             progress={outlineProgress}
           />
