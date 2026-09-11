@@ -1877,7 +1877,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
           >
             {heroSvg ? (
               heroSvg.startsWith("data:") || heroSvg.startsWith("http")
-                ? <img src={heroSvg} alt={article.title} style={{ width: "100%", height: 260, objectFit: imgFitMode[0] ?? "cover", objectPosition: imgPositions[0] ?? "50% 50%", display: "block" }} />
+                ? <img src={heroSvg} alt={article.title} style={{ width: "100%", height: 260, objectFit: imgFitMode[0] ?? "contain", objectPosition: imgPositions[0] ?? "50% 50%", display: "block" }} />
                 : <div dangerouslySetInnerHTML={{ __html: heroSvg }} style={{ width: 300, height: 240, flexShrink: 0, lineHeight: 0 }} />
             ) : (
               <>
@@ -2274,7 +2274,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
         const activeSvg = modalImgs[modalActive] ?? null;
         const autoGenerating = imgLoadingOrders.has(modalOrder);
         const isUploadedImg = !!activeSvg && (activeSvg.startsWith("data:") || activeSvg.startsWith("http"));
-        const currentFit = imgFitMode[modalOrder] ?? (modalOrder === 0 ? "cover" : "contain");
+        const currentFit = imgFitMode[modalOrder] ?? "contain";
         const currentPos = imgPositions[modalOrder] ?? "50% 50%";
         const [posX, posY] = currentPos.split(" ").map(v => parseFloat(v));
 
@@ -2488,7 +2488,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
               <div style={{ height: 260, overflow: "hidden", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)`, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none" }}>
                 {heroSvg ? (
                   heroSvg.startsWith("data:") || heroSvg.startsWith("http")
-                    ? <img src={heroSvg} alt={article.title} style={{ width: "100%", height: 260, objectFit: imgFitMode[0] ?? "cover", objectPosition: imgPositions[0] ?? "50% 50%", display: "block" }} />
+                    ? <img src={heroSvg} alt={article.title} style={{ width: "100%", height: 260, objectFit: imgFitMode[0] ?? "contain", objectPosition: imgPositions[0] ?? "50% 50%", display: "block" }} />
                     : <div dangerouslySetInnerHTML={{ __html: heroSvg }} style={{ width: 300, height: 240, flexShrink: 0, lineHeight: 0 }} />
                 ) : (
                   <svg viewBox="0 0 48 48" width="44" height="44" fill="none" stroke="rgba(255,255,255,.25)" strokeWidth="1.5" strokeLinecap="round"><rect x="4" y="4" width="40" height="40" rx="4"/><circle cx="16" cy="18" r="4"/><path d="M44 32l-10-10-14 14"/></svg>
@@ -2878,14 +2878,17 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
             .filter(s => s.opportunityId && s.sentToWordPressAt)
             .map(s => s.opportunityId!)
         );
-        setSentToSanityIds(sent);
-        // Cards with a generated article (step 2+) that haven't been sent to Sanity yet
+        setSentToSanityIds(prev => new Set([...prev, ...sent]));
+        // Cards with a generated article (step 2+) that haven't been sent to Sanity yet.
+        // Merge rather than replace: this fetch can race with an in-flight save-article
+        // POST (e.g. right after generation completes), and a stale GET response here
+        // must never wipe out an id that generateArticle() already added in memory.
         const withArticle = new Set(
           sessions
             .filter(s => s.opportunityId && (s.currentStep ?? 1) >= 2 && !s.sentToWordPressAt)
             .map(s => s.opportunityId!)
         );
-        setWithArticleIds(withArticle);
+        setWithArticleIds(prev => new Set([...prev, ...withArticle]));
       })
       .catch(() => {});
   }, []);
