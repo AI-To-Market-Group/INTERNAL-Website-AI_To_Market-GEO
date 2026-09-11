@@ -2218,9 +2218,14 @@ const hlStyle = (heading: string): React.CSSProperties =>
               <div style={{ padding: "20px 24px 0" }}>
                 <div style={{ background: "#F7F5F2", borderRadius: 12, overflow: "hidden", width: "100%", height: 240, display: "flex", alignItems: "center", justifyContent: "center" }}>
                   {imgGenerating ? (
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
-                      <div style={{ width: 32, height: 32, border: "2.5px solid rgba(22,61,38,.15)", borderTop: "2.5px solid #163D26", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
-                      <div style={{ fontSize: 11, fontWeight: 600, color: "rgba(22,61,38,.4)", letterSpacing: ".08em" }}>GENERATING…</div>
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+                      <div style={{ position: "relative", width: 80, height: 80 }}>
+                        <div style={{ position: "absolute", inset: 0, border: "2.5px solid rgba(22,61,38,.1)", borderTop: "2.5px solid rgba(22,61,38,.65)", borderRadius: "50%", animation: "spin 1.1s linear infinite" }} />
+                        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <img src="/logo-green.png" alt="AI To Market" style={{ width: 48, height: 48, objectFit: "contain", opacity: 0.85 }} />
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.45)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</div>
                     </div>
                   ) : activeSvg ? (
                     <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="340"/, 'width="100%"').replace(/height="130"/, 'height="240"').replace(/viewBox="0 0 340 130"/, 'viewBox="0 0 340 130" preserveAspectRatio="xMidYMid meet"') }} style={{ width: "100%", height: 240, lineHeight: 0 }} />
@@ -2364,6 +2369,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [outlineProgress, setOutlineProgress] = useState(0);
   const outlineRafRef = useRef<number | null>(null);
   const outlineProgressRef = useRef(0);
+  const articleDripRafRef = useRef<number | null>(null);
+  const articleDripCeilingRef = useRef(64); // updated as stage events arrive
   const [articleError, setArticleError] = useState<string | null>(null);
   const [geoScore, setGeoScore] = useState<{ score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number } | null>(null);
   const [qualityFlags, setQualityFlags] = useState<{ section?: string; type: string; message: string }[]>([]);
@@ -2720,6 +2727,38 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       }
     };
   }, [outlineLoading]);
+
+  // ── Article progress drip: update ceiling when server stage events advance phase ──
+  useEffect(() => {
+    const ceilings = [64, 77, 87, 98];
+    articleDripCeilingRef.current = ceilings[articlePhase] ?? 98;
+  }, [articlePhase]);
+
+  // ── Article progress drip: rubber-band toward ceiling so bar never freezes ──
+  useEffect(() => {
+    if (!articleLoading) {
+      if (articleDripRafRef.current !== null) {
+        cancelAnimationFrame(articleDripRafRef.current);
+        articleDripRafRef.current = null;
+      }
+      return;
+    }
+    function tick() {
+      setArticleProgress(p => {
+        const ceil = articleDripCeilingRef.current;
+        if (p >= ceil) return p;
+        return p + (ceil - p) * 0.0018; // ~0.1-1%/s depending on distance
+      });
+      articleDripRafRef.current = requestAnimationFrame(tick);
+    }
+    articleDripRafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (articleDripRafRef.current !== null) {
+        cancelAnimationFrame(articleDripRafRef.current);
+        articleDripRafRef.current = null;
+      }
+    };
+  }, [articleLoading]);
 
   // ── Save current plan (org-wide via Supabase) ─────────────────────────────
   async function handleSavePlan() {
@@ -3855,10 +3894,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         <ComboLoader
           stages={["Drafting", "Reviewing", "Citing", "Scoring"]}
           phases={[
-            { label: "Writing article", text: "Generating introduction and body sections...\nEmbedding named sources and GEO-ready structure..." },
-            { label: "Reviewing brand voice", text: "Checking brand voice compliance...\nCorrecting AI-tell phrases and tone mismatches..." },
-            { label: "Adding citations", text: "Searching live web for verifiable B2B sources...\nEmbedding real citations with hyperlinked attribution..." },
-            { label: "Scoring GEO quality", text: "✓  Named sources — checking\n✓  Statistics with attribution — checking\n⟳  Computing final GEO score..." },
+            { label: "Writing article", text: "Generating introduction and body sections...\nEmbedding named sources and GEO-ready structure...\nExpanding outline bullets into full paragraphs..." },
+            { label: "Reviewing brand voice", text: "Scanning for AI-tell phrases: 'leveraging', 'cutting-edge', 'revolutionize'...\nFlagged terms found — rewriting in direct, specific language...\nReplacing vague qualifiers with concrete claims and named examples...\nVerifying tone consistency across all sections...\nFinalising brand voice corrections..." },
+            { label: "Adding citations", text: "Searching live web for verifiable B2B statistics...\nQuerying Gartner, McKinsey, Forrester and similar publishers...\nFound relevant report — validating URL and publication date...\nConfirmed: real, indexed source from 2023 or later...\nRewriting paragraph to embed citation naturally...\nHyperlink attached — readers can click through to verify..." },
+            { label: "Scoring GEO quality", text: "✓  Named sources — verified\n✓  Statistics with attribution — checked\n✓  AI-tell density — assessed\n✓  FAQ fan-out coverage — structured\n⟳  Computing final GEO score..." },
           ]}
           progress={articleProgress}
           phaseOverride={articlePhase}
