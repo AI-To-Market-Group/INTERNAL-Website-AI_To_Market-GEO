@@ -1190,7 +1190,7 @@ function QueueScreen({
 
         {batchQueueEntries.map(entry => {
           const prog = buildProgress.get(entry.id);
-          const stage = prog?.stage ?? "Queued";
+          const stage = prog?.stage ?? "Outline Validated";
           const pct = prog?.pct ?? 0;
           const isSelected = selectedSet.has(entry.id);
           const isDone = stage === "Done";
@@ -1199,7 +1199,7 @@ function QueueScreen({
           const fill = isFailed ? C.red : isDone ? C.mid : C.dark;
           const s = stageStyle(stage);
           return (
-            <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "28px 2.8fr 1fr 1.5fr 80px", gap: 16, alignItems: "center", padding: "15px 20px", borderTop: "1px solid rgba(22,61,38,.08)" }}>
+            <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "28px 2.8fr 1fr 1.5fr 110px", gap: 16, alignItems: "center", padding: "15px 20px", borderTop: "1px solid rgba(22,61,38,.08)" }}>
               <button onClick={() => toggleSelect(entry.id)} style={{ width: 18, height: 18, borderRadius: 5, border: isSelected ? "none" : "1.5px solid rgba(22,61,38,.3)", background: isSelected ? C.dark : "transparent", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 {isSelected && <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>}
               </button>
@@ -1216,7 +1216,7 @@ function QueueScreen({
                 </div>
                 <div style={{ fontSize: 11, fontWeight: 600, width: 34, textAlign: "right", color: "rgba(22,61,38,.6)" }}>{pct}%</div>
               </div>
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center" }}>
                 {isDone && (
                   <button onClick={() => { onActivateCard(entry.id); onEditor(); }} style={{ fontSize: 11, fontWeight: 700, color: C.dark, background: "none", border: "none", cursor: "pointer" }}>Open</button>
                 )}
@@ -1224,7 +1224,24 @@ function QueueScreen({
                   <button onClick={() => void buildArticle(entry)} style={{ fontSize: 11, fontWeight: 700, color: C.red, background: "none", border: "none", cursor: "pointer" }}>Retry</button>
                 )}
                 {!isDone && !isBuilding && (
-                  <button onClick={() => { onRemoveFromBatchQueue(entry.id); setSelected(prev => prev.filter(x => x !== entry.id)); }} title="Remove from queue" style={{ width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid rgba(249,57,67,.35)`, background: "rgba(249,57,67,.07)", color: C.red, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
+                  <>
+                    <button
+                      onClick={() => { onRemoveFromBatchQueue(entry.id); setSelected(prev => prev.filter(x => x !== entry.id)); }}
+                      title="Undo queue — card stays in Draft Editor"
+                      style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px", borderRadius: 6, border: "1px solid rgba(22,61,38,.2)", background: "rgba(22,61,38,.04)", color: "rgba(22,61,38,.7)", cursor: "pointer", fontSize: 11, fontWeight: 600, lineHeight: 1, whiteSpace: "nowrap" }}
+                    >
+                      <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M1.5 4.5H7A2.5 2.5 0 0 1 7 9.5H4"/>
+                        <path d="M1.5 4.5L4 2M1.5 4.5L4 7"/>
+                      </svg>
+                      Undo
+                    </button>
+                    <button
+                      onClick={() => { onRemoveFromBatchQueue(entry.id); setSelected(prev => prev.filter(x => x !== entry.id)); }}
+                      title="Remove from queue"
+                      style={{ width: 20, height: 20, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(249,57,67,.3)", background: "rgba(249,57,67,.06)", color: C.red, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0, flexShrink: 0 }}
+                    >×</button>
+                  </>
                 )}
               </div>
             </div>
@@ -1265,7 +1282,7 @@ function UserAvatar({ email, size = 24 }: { email: string; size?: number }) {
   );
 }
 
-function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity, hasArticle, isNew, batchQueued, onSendToBatchQueue }: {
+function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity, hasArticle, isNew, batchQueued, onSendToBatchQueue, onRemoveFromBatchQueue }: {
   card: DraftCard;
   onCreateArticle: () => void;
   onResume?: () => void;
@@ -1277,6 +1294,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
   isNew?: boolean;
   batchQueued?: boolean;
   onSendToBatchQueue?: () => void;
+  onRemoveFromBatchQueue?: () => void;
 }) {
   const rawScore = card.brief.predictedScore ? parseInt(card.brief.predictedScore) : NaN;
   const scoreNum = isNaN(rawScore) ? null : rawScore;
@@ -1407,7 +1425,16 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
             >
               Resume Plan
             </button>
-            {!batchQueued && onSendToBatchQueue && (
+            {batchQueued ? (
+              <button
+                onClick={e => { e.stopPropagation(); onRemoveFromBatchQueue?.(); }}
+                title="Click to remove from batch queue"
+                style={{ padding: "11px 13px", borderRadius: 8, background: "rgba(24,95,0,.07)", border: `1px solid rgba(22,61,38,.18)`, display: "flex", alignItems: "center", gap: 5, color: C.mid, fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer" }}
+              >
+                <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>
+                Queued
+              </button>
+            ) : onSendToBatchQueue ? (
               <button
                 onClick={e => { e.stopPropagation(); onSendToBatchQueue(); }}
                 title="Add to batch queue for bulk generation"
@@ -1416,7 +1443,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
                 Queue
               </button>
-            )}
+            ) : null}
           </>
         ) : (
           <button
@@ -1623,7 +1650,7 @@ function EditablePara({ text, style, paraKey, sectionOrder, paraId, onEditParagr
   return <p key={paraKey} {...shared} ref={elRef as React.RefObject<HTMLParagraphElement>} />;
 }
 
-function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet, sidebarCollapsed, previewMode, onExitPreview }: {
+function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet, sidebarCollapsed, previewMode, onExitPreview, skipAutoImagesRef }: {
   article: GeneratedArticle;
   outline: V2OutlineSection[];
   onScore: () => void;
@@ -1636,6 +1663,7 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
   sidebarCollapsed?: boolean;
   previewMode?: boolean;
   onExitPreview?: () => void;
+  skipAutoImagesRef?: React.MutableRefObject<boolean>;
 }) {
   const { sections } = article;
   const [subEmail, setSubEmail] = useState("");
@@ -1678,6 +1706,11 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
 
   // Auto-fetch Claude SVG illustrations for body sections on first load
   useEffect(() => {
+    // Skip auto-generation when resuming a saved article — images must be manually generated
+    if (skipAutoImagesRef?.current) {
+      skipAutoImagesRef.current = false;
+      return;
+    }
     const bodySections = sections.filter(s =>
       !/^(introduction|stats|conclusion|faq)$/i.test(s.type) &&
       !/frequently.asked/i.test(s.type) &&
@@ -1849,7 +1882,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
             onClick={() => { setImgModal({ order: 0, heading: article.title, sType: "hero", prompt: `Hero illustration for article: ${article.title}` }); setImgPrompt(`Hero illustration for article: ${article.title}`); }}
             onMouseEnter={() => setHoveredImg(0)}
             onMouseLeave={() => setHoveredImg(null)}
-            style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", cursor: "pointer", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)` }}
+            style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", cursor: "pointer", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)`, border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none" }}
           >
             {heroSvg ? (
               heroSvg.startsWith("data:") || heroSvg.startsWith("http")
@@ -2452,9 +2485,9 @@ const hlStyle = (heading: string): React.CSSProperties =>
         {/* Article content */}
         <div style={{ maxWidth: 820, margin: "0 auto", padding: "0 0 80px" }}>
           {/* Masthead */}
-          <div style={{ background: C.dark, padding: "40px 56px 32px" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".22em", color: C.salmon, marginBottom: 12 }}>AI To Market · Blog</div>
-            <h1 style={{ margin: 0, fontSize: 32, fontWeight: 700, lineHeight: 1.2, color: C.white, letterSpacing: "-.5px" }}>{article.title}</h1>
+          <div style={{ background: C.dark, padding: "28px 44px" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".22em", color: C.salmon, marginBottom: 10 }}>AI To Market · Blog</div>
+            <h1 style={{ margin: "0 0 10px", fontSize: 24, fontWeight: 700, lineHeight: 1.2, color: C.white, letterSpacing: "-.3px" }}>{article.title}</h1>
           </div>
 
           {/* Hero image */}
@@ -2715,7 +2748,7 @@ function sectionTypeStyle(type: string) {
 
 // ─── Editor screen ────────────────────────────────────────────────────────────
 
-function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, sidebarCollapsed, newCardId, batchQueuedIds, onSendToBatchQueue, cardsLoading }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; sidebarCollapsed?: boolean; newCardId?: string | null; batchQueuedIds?: string[]; onSendToBatchQueue?: (id: string, title: string, outline: V2OutlineSection[]) => void; cardsLoading?: boolean }) {
+function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, sidebarCollapsed, newCardId, batchQueuedIds, onSendToBatchQueue, onRemoveFromBatchQueue, cardsLoading }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; sidebarCollapsed?: boolean; newCardId?: string | null; batchQueuedIds?: string[]; onSendToBatchQueue?: (id: string, title: string, outline: V2OutlineSection[]) => void; onRemoveFromBatchQueue?: (id: string) => void; cardsLoading?: boolean }) {
   // ── Plan step state ────────────────────────────────────────────────────────
   type EditorStep = "plan" | "article";
   const [editorStep, setEditorStep] = useState<EditorStep>("plan");
@@ -2731,7 +2764,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [dashFilter, setDashFilter] = useState<"all" | "plans" | "article" | "build" | "sanity">("all");
   const [sentToSanityIds, setSentToSanityIds] = useState<Set<string>>(new Set());
   const [withArticleIds, setWithArticleIds] = useState<Set<string>>(new Set());
-  const [savePulse, setSavePulse] = useState(false);
+  const [isPlanSaved, setIsPlanSaved] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [autoSaving, setAutoSaving] = useState(false);
   const [bvExpanded, setBvExpanded] = useState(false);
@@ -2742,8 +2775,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [hoveredBtn, setHoveredBtn] = useState<string | null>(null);
   const [regeneratingSections, setRegeneratingSections] = useState<Set<number>>(new Set());
   const prevCardIdRef = useRef<string | null>(null);
+  const outlineActiveRef = useRef(false); // true while outline fetch is in-flight — blocks re-runs
   const preloadedPlanRef = useRef<{ outline: V2OutlineSection[]; title: string; brief: BriefFields } | null>(null);
   const metadataAutoFetchRef = useRef(false);
+  const skipAutoImagesRef = useRef(false); // true when resuming — prevents auto-regeneration of images
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Article generation state ────────────────────────────────────────────────
@@ -2942,6 +2977,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         });
       }
       prevCardIdRef.current = null;
+      outlineActiveRef.current = false;
       metadataAutoFetchRef.current = false;
       // Clear article state so the next card activation starts from a clean slate
       setEditorStep("plan");
@@ -2963,6 +2999,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       setSeoFocusKeyword("");
       return;
     }
+    // If an outline fetch is already in-flight for this card, don't interrupt it
+    if (outlineActiveRef.current) return;
     if (prevCardIdRef.current === activeCardId) return;
     prevCardIdRef.current = activeCardId;
 
@@ -2978,6 +3016,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       setExpandedSection(null);
       setOutlineError(null);
       setOutlineLoading(false);
+      setIsPlanSaved(false);
       return;
     }
 
@@ -2989,6 +3028,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       setArticleTitle(cached.articleTitle ?? "");
       setEditingTitles({});
       setExpandedSection(null);
+      setIsPlanSaved(false);
       setOutlineError(null);
       setOutlineLoading(false);
       if (cached.editorStep === "article" && cached.articleData) {
@@ -3071,6 +3111,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     setEditingTitles({});
     setExpandedSection(null);
     setOutlineLoading(true);
+    outlineActiveRef.current = true;
 
     fetch(`/api/builder-sessions/${activeCardId}/generate-outline`, {
       method: "POST",
@@ -3089,7 +3130,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         setOutline(data.sections ?? []);
       })
       .catch((e: unknown) => { setOutlineError(e instanceof Error ? e.message : String(e)); setOutlineRetrying(false); })
-      .finally(() => setOutlineLoading(false));
+      .finally(() => { outlineActiveRef.current = false; setOutlineLoading(false); });
   }, [activeCardId, draftCards, savedPlans, sentToSanityIds, withArticleIds, outlineRetryCount]);
 
   // ── Outline progress: NProgress-style easing + organic trickle, 100% before reveal ──
@@ -3186,8 +3227,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       savedAt: new Date().toISOString(),
     };
     setSavedPlans(prev => [plan, ...prev.filter(p => p.opportunityId !== activeCardId)]);
-    setSavePulse(true);
-    setTimeout(() => setSavePulse(false), 1400);
+    setIsPlanSaved(true);
     await fetch("/api/saved-plans", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -3215,6 +3255,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
 
   // ── Section manipulation ───────────────────────────────────────────────────
   function handleDeleteSection(idx: number) {
+    setIsPlanSaved(false);
     setOutline(prev => prev.filter((_, i) => i !== idx));
     setEditingTitles(prev => {
       const next: Record<number, string> = {};
@@ -3230,6 +3271,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   }
 
   function handleDuplicateSection(idx: number) {
+    setIsPlanSaved(false);
     const section = outline[idx];
     const copy = { ...section, title: getSectionTitle(idx, section.title) };
     setOutline(prev => { const next = [...prev]; next.splice(idx + 1, 0, copy); return next; });
@@ -3263,6 +3305,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       const data = await res.json() as { sections: V2OutlineSection[] };
       const match = data.sections?.find(s => s.type === section.type) ?? data.sections?.[0];
       if (match) {
+        setIsPlanSaved(false);
         setOutline(prev => prev.map((s, i) => i === idx ? { ...s, description: match.description, keywords: match.keywords } : s));
       }
     } catch { /* silently keep existing section */ } finally {
@@ -3284,6 +3327,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     e.preventDefault();
     if (dragIdx === null || dragIdx === dropIdx) { setDragIdx(null); setDragOverIdx(null); return; }
     const from = dragIdx;
+    setIsPlanSaved(false);
     setOutline(prev => { const next = [...prev]; const [m] = next.splice(from, 1); next.splice(dropIdx, 0, m); return next; });
     setEditingTitles(prev => {
       const order = Array.from({ length: outline.length }, (_, i) => i);
@@ -3702,6 +3746,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               // Hold the loader open so the user clearly sees 100% before content reveals
               setTimeout(() => setArticleLoaderVisible(false), 1500);
               setArticleData(parsed.article);
+              // Auto-save plan when article generation completes
+              void handleSavePlan();
               if (parsed.geo_score) setGeoScore(parsed.geo_score);
               if (parsed.quality_flags) setQualityFlags(parsed.quality_flags);
               if (parsed.brand_voice_status) setBrandVoiceStatus(parsed.brand_voice_status);
@@ -3738,7 +3784,21 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   // While cards are still loading from the server and no card is selected,
   // show nothing so we don't flash a blank plan view before the card grid appears
   if (!activeCardId && cardsLoading) {
-    return <div style={{ padding: 48, textAlign: "center", color: "rgba(22,61,38,.4)", fontSize: 13 }}>Loading…</div>;
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 420, gap: 16 }}>
+        <div style={{ position: "relative", width: 90, height: 90 }}>
+          <div style={{ position: "absolute", inset: 0, border: "2.5px solid rgba(22,61,38,.12)", borderTop: "2.5px solid rgba(22,61,38,.7)", borderRadius: "50%", animation: "spin 1.1s linear infinite" }} />
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <svg viewBox="0 0 91 59" width="46" height="30" xmlns="http://www.w3.org/2000/svg" style={{ color: "#163D26" }}>
+              <path d="M26.66 0V13.32C36.72 13.32 45.24 19.96 48.08 29.1H26.66V13.32H13.34V35.76V58.2H26.66V42.42H49.1V58.2H62.42V35.76C62.42 16.04 46.38 0 26.66 0Z" fill="currentColor"/>
+              <path d="M13.32 0H0V13.32H13.32V0Z" fill="currentColor"/>
+              <path d="M90.26 35.76C90.26 16.04 74.22 0 54.48 0V13.32C66.86 13.32 76.92 23.38 76.92 35.76V58.2H90.24V35.76H90.26Z" fill="currentColor"/>
+            </svg>
+          </div>
+        </div>
+        <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.4)", letterSpacing: ".12em", textTransform: "uppercase" }}>Loading</span>
+      </div>
+    );
   }
 
   if (showCardGrid) {
@@ -3749,9 +3809,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     const _sentCards   = (draftCards ?? []).filter(c => _isSent(c.opportunityId));
     const _articleCards = (draftCards ?? []).filter(c => !_isSent(c.opportunityId) && _hasArticle(c.opportunityId));
     const _buildCards  = (draftCards ?? []).filter(c => !_isSent(c.opportunityId) && !_hasArticle(c.opportunityId) && !_hasPlan(c.opportunityId));
+    // Plans that have NOT yet had an article generated — graduated plans move to Articles section
+    const _planCards = savedPlans.filter(p => !_hasArticle(p.opportunityId) && !_isSent(p.opportunityId));
     const tabCounts = {
-      all: savedPlans.length + _articleCards.length + _buildCards.length + _sentCards.length,
-      plans: savedPlans.length,
+      all: _planCards.length + _articleCards.length + _buildCards.length + _sentCards.length,
+      plans: _planCards.length,
       article: _articleCards.length,
       build: _buildCards.length,
       sanity: _sentCards.length,
@@ -3799,18 +3861,18 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         </div>
 
         {/* ── Saved plans section ── */}
-        {savedPlans.length > 0 && (dashFilter === "all" || dashFilter === "plans") && (
+        {_planCards.length > 0 && (dashFilter === "all" || dashFilter === "plans") && (
           <div style={{ marginBottom: 48 }}>
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 20 }}>
               <div>
                 <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 8 }}>SAVED PLANS</div>
                 <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
-                  {savedPlans.length} plan{savedPlans.length !== 1 ? "s" : ""} in progress
+                  {_planCards.length} plan{_planCards.length !== 1 ? "s" : ""} in progress
                 </h2>
               </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
-              {savedPlans.map(plan => (
+              {_planCards.map(plan => (
                 <div key={plan.opportunityId} style={{ padding: 24, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", height: 260, position: "relative" }}>
                   {/* Remove button */}
                   <button
@@ -3874,10 +3936,14 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         Queue
                       </button>
                     ) : batchQueuedIds?.includes(plan.opportunityId) ? (
-                      <div style={{ padding: "11px 13px", borderRadius: 8, background: "rgba(24,95,0,.07)", border: `1px solid rgba(22,61,38,.18)`, display: "flex", alignItems: "center", gap: 5, color: C.mid, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>
+                      <button
+                        onClick={() => onRemoveFromBatchQueue?.(plan.opportunityId)}
+                        title="Click to remove from batch queue"
+                        style={{ padding: "11px 13px", borderRadius: 8, background: "rgba(24,95,0,.07)", border: `1px solid rgba(22,61,38,.18)`, display: "flex", alignItems: "center", gap: 5, color: C.mid, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer" }}
+                      >
                         <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>
                         Queued
-                      </div>
+                      </button>
                     ) : null}
                   </div>
                 </div>
@@ -3921,6 +3987,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                           isNew={card.opportunityId === newCardId}
                           batchQueued={batchQueuedIds?.includes(card.opportunityId)}
                           onSendToBatchQueue={onSendToBatchQueue ? () => onSendToBatchQueue(card.opportunityId, plan?.articleTitle ?? card.brief.prompt ?? "Untitled", plan?.outline ?? []) : undefined}
+                          onRemoveFromBatchQueue={() => onRemoveFromBatchQueue?.(card.opportunityId)}
                         />
                       );
                     })}
@@ -3955,6 +4022,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                           isNew={card.opportunityId === newCardId}
                           batchQueued={batchQueuedIds?.includes(card.opportunityId)}
                           onSendToBatchQueue={onSendToBatchQueue ? () => onSendToBatchQueue(card.opportunityId, plan?.articleTitle ?? card.brief.prompt ?? "Untitled", plan?.outline ?? []) : undefined}
+                          onRemoveFromBatchQueue={() => onRemoveFromBatchQueue?.(card.opportunityId)}
                         />
                       );
                     })}
@@ -4167,7 +4235,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         {isExpanded ? (
                           <input
                             value={editedTitle}
-                            onChange={e => setEditingTitles(prev => ({ ...prev, [idx]: e.target.value }))}
+                            onChange={e => { setIsPlanSaved(false); setEditingTitles(prev => ({ ...prev, [idx]: e.target.value })); }}
                             onClick={e => e.stopPropagation()}
                             style={{ width: "100%", fontSize: 14, fontWeight: 600, color: C.dark, border: "none", background: "transparent", outline: "none", padding: 0 }}
                           />
@@ -4247,6 +4315,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                                 value={line}
                                 onChange={e => {
                                   const val = e.target.value;
+                                  setIsPlanSaved(false);
                                   setOutline(prev => prev.map((s, i) => i !== idx ? s : ({ ...s, description: s.description.map((d, di) => di === li ? val : d) })));
                                 }}
                                 rows={Math.max(1, Math.ceil(line.length / 72))}
@@ -4278,6 +4347,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                     if (!activeCardId) return;
                     const cached = readCardCache(activeCardId);
                     if (!cached?.articleData) return;
+                    skipAutoImagesRef.current = true;
                     setArticleData(cached.articleData);
                     setGeoScore(cached.geoScore ?? null);
                     setQualityFlags(cached.qualityFlags ?? []);
@@ -4316,6 +4386,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         error?: string;
                       };
                       if (res.ok && data.article) {
+                        skipAutoImagesRef.current = true;
                         setArticleData(data.article);
                         setGeoScore(data.geoScore ?? null);
                         setQualityFlags(data.qualityFlags ?? []);
@@ -4353,15 +4424,21 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               </button>
               <button
                 onClick={handleSavePlan}
-                style={{ padding: "13px 18px", border: `1.5px solid ${savePulse ? C.mid : "rgba(22,61,38,.28)"}`, borderRadius: 8, fontSize: 13, fontWeight: 600, background: savePulse ? "rgba(24,95,0,.07)" : "none", cursor: "pointer", color: savePulse ? C.mid : C.dark, display: "flex", alignItems: "center", gap: 7, transition: "all .2s" }}
+                style={{ padding: "13px 18px", border: `1.5px solid ${isPlanSaved ? C.mid : "rgba(22,61,38,.28)"}`, borderRadius: 8, fontSize: 13, fontWeight: 600, background: isPlanSaved ? "rgba(24,95,0,.07)" : "none", cursor: "pointer", color: isPlanSaved ? C.mid : C.dark, display: "flex", alignItems: "center", gap: 7, transition: "all .2s" }}
               >
-                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M13 2H4L2 4v10h12V4l-1-2z" /><path d="M5 2v4h6V2" /><rect x="4" y="10" width="8" height="4" />
-                </svg>
-                {savePulse ? "Saved!" : "Save"}
+                {isPlanSaved ? (
+                  <svg viewBox="0 0 12 9" width="13" height="10" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="1,4.5 4.5,8 11,1" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M13 2H4L2 4v10h12V4l-1-2z" /><path d="M5 2v4h6V2" /><rect x="4" y="10" width="8" height="4" />
+                  </svg>
+                )}
+                {isPlanSaved ? "Saved" : "Save"}
               </button>
               <button
-                onClick={() => { prevCardIdRef.current = null; setOutlineLoading(true); setOutline([]); }}
+                onClick={() => { prevCardIdRef.current = null; setOutlineLoading(true); setOutline([]); setIsPlanSaved(false); }}
                 style={{ padding: "13px 18px", border: "1px solid rgba(22,61,38,.28)", borderRadius: 8, fontSize: 13, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark }}
               >
                 Regenerate outline
@@ -4437,6 +4514,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               sidebarCollapsed={sidebarCollapsed}
               previewMode={previewMode}
               onExitPreview={() => setPreviewMode(false)}
+              skipAutoImagesRef={skipAutoImagesRef}
               brandVoiceMatches={
                 brandVoiceStatus?.status === "partial"
                   ? (brandVoiceStatus.residuals?.flatMap(r => r.violations.map(v => v.match)) ?? [])
@@ -7143,7 +7221,7 @@ function AtelierV2Page() {
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}
           {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} onFlowChange={setGenerateDefaultFlow} />}
           {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} batchQueueEntries={batchQueueEntries} onRemoveFromBatchQueue={handleRemoveFromBatchQueue} onActivateCard={handleActivateCard} />}
-          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} newCardId={newCardId} batchQueuedIds={batchQueueEntries.map(e => e.id)} onSendToBatchQueue={handleSendToBatchQueue} cardsLoading={cardsLoading} />}
+          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} newCardId={newCardId} batchQueuedIds={batchQueueEntries.map(e => e.id)} onSendToBatchQueue={handleSendToBatchQueue} onRemoveFromBatchQueue={handleRemoveFromBatchQueue} cardsLoading={cardsLoading} />}
           {/* {screen === "score" && <ScoreScreen onEditor={go("editor")} />} — score lives inside the article editor */}
           {screen === "keywords"   && <KeywordsScreen />}
           {screen === "publish"    && <PublishScreen />}
