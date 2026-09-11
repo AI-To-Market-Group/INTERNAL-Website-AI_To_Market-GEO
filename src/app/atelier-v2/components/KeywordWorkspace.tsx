@@ -105,8 +105,17 @@ export function KeywordWorkspace({ seedKeywords, onCreated }: KeywordWorkspacePr
   }, []);
 
   // ── Custom ──────────────────────────────────────────────────────────────────
-  const [customKeywords, setCustomKeywords] = useState<string[]>([]);
-  const [customInput, setCustomInput]       = useState("");
+  const [customKeywords, setCustomKeywords] = useState<string[]>(() => {
+    try {
+      const stored = localStorage.getItem("geo-custom-keywords");
+      return stored ? (JSON.parse(stored) as string[]) : [];
+    } catch { return []; }
+  });
+  const [customInput, setCustomInput] = useState("");
+
+  useEffect(() => {
+    try { localStorage.setItem("geo-custom-keywords", JSON.stringify(customKeywords)); } catch { /* ignore */ }
+  }, [customKeywords]);
 
   const addCustom = useCallback(() => {
     const kw = customInput.trim();
@@ -114,6 +123,11 @@ export function KeywordWorkspace({ seedKeywords, onCreated }: KeywordWorkspacePr
     setCustomKeywords((prev) => (prev.includes(kw) ? prev : [...prev, kw]));
     setCustomInput("");
   }, [customInput]);
+
+  const removeCustomKeyword = useCallback((kw: string) => {
+    setCustomKeywords((prev) => prev.filter((k) => k !== kw));
+    setSelected((prev) => { const next = new Set(prev); next.delete(kw); return next; });
+  }, []);
 
   // ── Selection ───────────────────────────────────────────────────────────────
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -297,7 +311,23 @@ export function KeywordWorkspace({ seedKeywords, onCreated }: KeywordWorkspacePr
               <ColHeader title="CUSTOM" subtitle="Add your own" count={customKeywords.length} />
               <div style={{ display: "flex", flexWrap: "wrap", alignContent: "flex-start", gap: 6, padding: 14, flex: 1, overflowY: "auto" }}>
                 {customKeywords.map((kw) => (
-                  <Chip key={kw} kw={kw} selected={selected.has(kw)} onToggle={toggleChip} />
+                  <span key={kw} style={{ display: "inline-flex", alignItems: "center", borderRadius: 20, border: `1px solid ${selected.has(kw) ? C.dark : "rgba(22,61,38,.18)"}`, background: selected.has(kw) ? C.dark : "rgba(22,61,38,.05)", overflow: "hidden" }}>
+                    <button
+                      type="button"
+                      onClick={() => toggleChip(kw)}
+                      style={{ padding: "6px 8px 6px 11px", fontSize: 11, fontWeight: 600, color: selected.has(kw) ? C.white : C.dark, background: "none", border: "none", cursor: "pointer", fontFamily: "inherit" }}
+                    >
+                      {kw}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => removeCustomKeyword(kw)}
+                      aria-label={`Delete ${kw}`}
+                      style={{ display: "flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, marginRight: 4, borderRadius: "50%", background: selected.has(kw) ? "rgba(255,255,255,.2)" : "rgba(22,61,38,.12)", border: "none", cursor: "pointer", padding: 0, flexShrink: 0 }}
+                    >
+                      <X style={{ width: 8, height: 8, color: selected.has(kw) ? C.white : C.dark }} />
+                    </button>
+                  </span>
                 ))}
               </div>
               <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderTop: `1px solid ${C.border}` }}>
