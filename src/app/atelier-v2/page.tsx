@@ -85,22 +85,13 @@ function writeCardCache(id: string, data: V2CardCache) {
   catch {}
 }
 
-// ─── Batch queue (localStorage) ───────────────────────────────────────────────
+// ─── Batch queue ──────────────────────────────────────────────────────────────
 
 interface BatchQueueEntry {
   id: string;
   title: string;
   outline: V2OutlineSection[];
   addedAt: string;
-}
-const BATCH_QUEUE_KEY = "v2_batch_queue";
-function readBatchQueue(): BatchQueueEntry[] {
-  try { return JSON.parse(localStorage.getItem(BATCH_QUEUE_KEY) ?? "[]") as BatchQueueEntry[]; }
-  catch { return []; }
-}
-function saveBatchQueue(entries: BatchQueueEntry[]) {
-  try { localStorage.setItem(BATCH_QUEUE_KEY, JSON.stringify(entries)); }
-  catch {}
 }
 
 // ─── Palette constants ────────────────────────────────────────────────────────
@@ -3126,8 +3117,12 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       .then(data => {
         setOutlineError(null);
         setOutlineRetrying(false);
-        setArticleTitle(data.article_title ?? card?.brief?.prompt ?? "Article");
-        setOutline(data.sections ?? []);
+        const freshSections = data.sections ?? [];
+        const freshTitle = data.article_title ?? card?.brief?.prompt ?? "Article";
+        setArticleTitle(freshTitle);
+        setOutline(freshSections);
+        // Auto-save plan immediately with fresh data (state not yet propagated)
+        void handleSavePlan(freshSections, freshTitle);
       })
       .catch((e: unknown) => { setOutlineError(e instanceof Error ? e.message : String(e)); setOutlineRetrying(false); })
       .finally(() => { outlineActiveRef.current = false; setOutlineLoading(false); });
@@ -3212,16 +3207,19 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   }, [articleLoading]);
 
   // ── Save current plan (org-wide via Supabase) ─────────────────────────────
-  async function handleSavePlan() {
-    if (!activeCardId || outline.length === 0) return;
+  // overrideOutline / overrideTitle let callers pass fresh data before React state updates
+  async function handleSavePlan(overrideOutline?: V2OutlineSection[], overrideTitle?: string) {
+    const effectiveOutline = overrideOutline ?? outline;
+    const effectiveTitle   = overrideTitle   ?? articleTitle;
+    if (!activeCardId || effectiveOutline.length === 0) return;
     const card = draftCards?.find(c => c.opportunityId === activeCardId);
-    const finalOutline = outline.map((s, i) => ({
+    const finalOutline = effectiveOutline.map((s, i) => ({
       ...s,
       title: editingTitles[i] !== undefined ? editingTitles[i] : s.title,
     }));
     const plan: SavedPlan = {
       opportunityId: activeCardId,
-      articleTitle,
+      articleTitle: effectiveTitle,
       outline: finalOutline,
       brief: card?.brief ?? {},
       savedAt: new Date().toISOString(),
@@ -4423,7 +4421,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                 </svg>
               </button>
               <button
-                onClick={handleSavePlan}
+                onClick={() => void handleSavePlan()}
                 style={{ padding: "13px 18px", border: `1.5px solid ${isPlanSaved ? C.mid : "rgba(22,61,38,.28)"}`, borderRadius: 8, fontSize: 13, fontWeight: 600, background: isPlanSaved ? "rgba(24,95,0,.07)" : "none", cursor: "pointer", color: isPlanSaved ? C.mid : C.dark, display: "flex", alignItems: "center", gap: 7, transition: "all .2s" }}
               >
                 {isPlanSaved ? (
@@ -6972,29 +6970,32 @@ function AtelierV2Page() {
 
   // ── Batch queue ───────────────────────────────────────────────────────────────
   const [batchQueueEntries, setBatchQueueEntries] = useState<BatchQueueEntry[]>([]);
-  useEffect(() => { setBatchQueueEntries(readBatchQueue()); }, []);
 
   function handleSendToBatchQueue(id: string, title: string, outline: V2OutlineSection[]) {
     setBatchQueueEntries(prev => {
       if (prev.some(e => e.id === id)) return prev;
-      const next = [...prev, { id, title, outline, addedAt: new Date().toISOString() }];
-      saveBatchQueue(next);
-      return next;
+      return [...prev, { id, title, outline, addedAt: new Date().toISOString() }];
     });
+    fetch(`/api/builder-sessions/${id}/batch-queue`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ queued: true }),
+    }).catch(() => {});
     logEvent("article.batch_queue_add", "article", id, title);
   }
   function handleRemoveFromBatchQueue(id: string) {
-    setBatchQueueEntries(prev => {
-      const next = prev.filter(e => e.id !== id);
-      saveBatchQueue(next);
-      return next;
-    });
+    setBatchQueueEntries(prev => prev.filter(e => e.id !== id));
+    fetch(`/api/builder-sessions/${id}/batch-queue`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ queued: false }),
+    }).catch(() => {});
   }
 
   // Load existing active sessions from DB on mount (trashed excluded server-side)
   useEffect(() => {
     fetch("/api/builder-sessions")
-      .then(r => r.ok ? r.json() as Promise<Array<{ opportunityId: string; topicTitle: string; createdAt: string; creatorEmail?: string }>> : null)
+      .then(r => r.ok ? r.json() as Promise<Array<{ opportunityId: string; topicTitle: string; createdAt: string; creatorEmail?: string; batchQueuedAt?: string | null; outline?: V2OutlineSection[] }>> : null)
       .then(sessions => {
         if (sessions?.length) {
           const sorted = [...sessions].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -7010,6 +7011,17 @@ function AtelierV2Page() {
               }));
             return [...prev, ...toAdd];
           });
+          // Seed batch queue from server (source of truth across all tabs/sessions)
+          const queued = sorted.filter(s => s.batchQueuedAt);
+          if (queued.length) {
+            setBatchQueueEntries(prev => {
+              const existingIds = new Set(prev.map(e => e.id));
+              const toAdd = queued
+                .filter(s => !existingIds.has(s.opportunityId))
+                .map(s => ({ id: s.opportunityId, title: s.topicTitle, outline: s.outline ?? [], addedAt: s.batchQueuedAt! }));
+              return toAdd.length ? [...prev, ...toAdd] : prev;
+            });
+          }
         }
       })
       .catch(() => {})
