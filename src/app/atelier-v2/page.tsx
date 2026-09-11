@@ -2379,8 +2379,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [articleProgress, setArticleProgress] = useState(0);
   const [articlePhase, setArticlePhase] = useState(0);
   const [outlineProgress, setOutlineProgress] = useState(0);
+  const [outlineLoaderVisible, setOutlineLoaderVisible] = useState(false);
   const outlineRafRef = useRef<number | null>(null);
-  const outlineProgressRef = useRef(0);
+  const outlineTargetRef = useRef(0);
   const articleBarRafRef = useRef<number | null>(null);
   const articleBarTargetRef = useRef(0); // mutated by real events; rAF eases toward it
   const [articleError, setArticleError] = useState<string | null>(null);
@@ -2714,14 +2715,22 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       .finally(() => setOutlineLoading(false));
   }, [activeCardId, draftCards, savedPlans, sentToSanityIds, withArticleIds, outlineRetryCount]);
 
-  // ── Outline progress: rubber-band rAF toward 84%, snaps to 100 on completion ──
+  // ── Outline progress: NProgress-style easing + organic trickle, 100% before reveal ──
   useEffect(() => {
     if (outlineLoading) {
-      outlineProgressRef.current = 0;
+      outlineTargetRef.current = 8;
       setOutlineProgress(0);
+      setOutlineLoaderVisible(true);
       function tick() {
-        outlineProgressRef.current += (84 - outlineProgressRef.current) * 0.009;
-        setOutlineProgress(outlineProgressRef.current);
+        // Organic trickle — keeps bar moving, caps below 97 so fetch completion still feels meaningful
+        const t = outlineTargetRef.current;
+        if (t < 97) outlineTargetRef.current = Math.min(t + 0.018, 97);
+        setOutlineProgress(prev => {
+          const target = outlineTargetRef.current;
+          const diff = target - prev;
+          if (Math.abs(diff) < 0.05) return target;
+          return prev + diff * 0.08;
+        });
         outlineRafRef.current = requestAnimationFrame(tick);
       }
       outlineRafRef.current = requestAnimationFrame(tick);
@@ -2730,7 +2739,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         cancelAnimationFrame(outlineRafRef.current);
         outlineRafRef.current = null;
       }
+      outlineTargetRef.current = 100;
       setOutlineProgress(100);
+      setTimeout(() => setOutlineLoaderVisible(false), 700);
     }
     return () => {
       if (outlineRafRef.current !== null) {
@@ -3595,7 +3606,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         <div style={{ marginBottom: 32 }}>
           <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 10 }}>ARTICLE PLAN</div>
           <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700, lineHeight: 1.2, letterSpacing: "-.4px" }}>
-            {outlineLoading ? "Generating outline…" : (articleTitle || activeCard?.brief?.prompt || "Article plan")}
+            {outlineLoaderVisible ? "Generating outline…" : (articleTitle || activeCard?.brief?.prompt || "Article plan")}
           </h2>
           {activeCard?.brief?.client && (
             <div style={{ marginTop: 8, fontSize: 12, color: "rgba(22,61,38,.6)", fontWeight: 500 }}>
@@ -3606,7 +3617,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         </div>
 
         {/* Loading — full ComboLoader only on first generation, not retry */}
-        {outlineLoading && !outlineRetrying && (
+        {outlineLoaderVisible && !outlineRetrying && (
           <ComboLoader
             stages={["Research", "Structure", "Keywords", "Validate"]}
             phases={[
@@ -3636,7 +3647,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         )}
 
         {/* Outline sections */}
-        {!outlineLoading && outline.length > 0 && (
+        {!outlineLoaderVisible && outline.length > 0 && (
           <>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {outline.map((section, idx) => {
