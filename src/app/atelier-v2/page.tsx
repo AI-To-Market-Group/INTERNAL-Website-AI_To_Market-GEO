@@ -1848,7 +1848,9 @@ const hlStyle = (heading: string): React.CSSProperties =>
             style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", cursor: "pointer", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)` }}
           >
             {heroSvg ? (
-              <div dangerouslySetInnerHTML={{ __html: heroSvg }} style={{ width: 300, height: 240, flexShrink: 0, lineHeight: 0 }} />
+              heroSvg.startsWith("data:") || heroSvg.startsWith("http")
+                ? <img src={heroSvg} alt={article.title} style={{ width: "100%", height: 260, objectFit: "cover", display: "block" }} />
+                : <div dangerouslySetInnerHTML={{ __html: heroSvg }} style={{ width: 300, height: 240, flexShrink: 0, lineHeight: 0 }} />
             ) : (
               <>
                 <svg viewBox="0 0 400 240" width="100%" height="100%" style={{ position: "absolute", inset: 0, opacity: .06 }} preserveAspectRatio="xMidYMid slice">
@@ -2400,7 +2402,9 @@ const hlStyle = (heading: string): React.CSSProperties =>
             return (
               <div style={{ height: 260, overflow: "hidden", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 {heroSvg ? (
-                  <div dangerouslySetInnerHTML={{ __html: heroSvg }} style={{ width: 300, height: 240, flexShrink: 0, lineHeight: 0 }} />
+                  heroSvg.startsWith("data:") || heroSvg.startsWith("http")
+                    ? <img src={heroSvg} alt={article.title} style={{ width: "100%", height: 260, objectFit: "cover", display: "block" }} />
+                    : <div dangerouslySetInnerHTML={{ __html: heroSvg }} style={{ width: 300, height: 240, flexShrink: 0, lineHeight: 0 }} />
                 ) : (
                   <svg viewBox="0 0 48 48" width="44" height="44" fill="none" stroke="rgba(255,255,255,.25)" strokeWidth="1.5" strokeLinecap="round"><rect x="4" y="4" width="40" height="40" rx="4"/><circle cx="16" cy="18" r="4"/><path d="M44 32l-10-10-14 14"/></svg>
                 )}
