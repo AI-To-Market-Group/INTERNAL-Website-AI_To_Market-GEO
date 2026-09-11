@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useLayoutEffect } from "react";
+import dynamic from "next/dynamic";
 import { toast } from "sonner";
 import { KeywordWorkspace } from "./components/KeywordWorkspace";
 import { useSettings } from "@/hooks/useSettings";
@@ -6337,7 +6338,7 @@ function readInitialUrlState() {
   return { screen, cardId, flow };
 }
 
-export default function AtelierV2Page() {
+function AtelierV2Page() {
   const [screen, setScreen] = useState<Screen>(() => readInitialUrlState().screen);
   const [collapsed, setCollapsed] = useState(false);
   const [dataState] = useState<DataState>("normal");
@@ -6685,3 +6686,5 @@ export default function AtelierV2Page() {
     </div>
   );
 }
+
+export default dynamic(() => Promise.resolve({ default: AtelierV2Page }), { ssr: false });
