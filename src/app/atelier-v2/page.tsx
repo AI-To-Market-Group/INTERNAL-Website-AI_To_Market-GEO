@@ -3267,10 +3267,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               charsReceived += parsed.chunk.length;
               setArticleProgress(Math.min((charsReceived / 4000) * 60, 60));
             }
-            // Real server stage events: advance pill + push progress milestone
-            if (parsed.stage === "brand_voice") { setArticlePhase(1); setArticleProgress(p => Math.max(p, 65)); }
-            if (parsed.stage === "citation")    { setArticlePhase(2); setArticleProgress(p => Math.max(p, 78)); }
-            if (parsed.stage === "scoring")     { setArticlePhase(3); setArticleProgress(p => Math.max(p, 88)); }
+            // Real server stage events: advance pill only — drip ceiling widens automatically,
+            // bar flows forward without any jump
+            if (parsed.stage === "brand_voice") setArticlePhase(1);
+            if (parsed.stage === "citation")    setArticlePhase(2);
+            if (parsed.stage === "scoring")     setArticlePhase(3);
             if (parsed.article) {
               setArticleProgress(100);
               setArticleData(parsed.article);
