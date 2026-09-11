@@ -1623,7 +1623,7 @@ function EditablePara({ text, style, paraKey, sectionOrder, paraId, onEditParagr
   return <p key={paraKey} {...shared} ref={elRef as React.RefObject<HTMLParagraphElement>} />;
 }
 
-function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet, sidebarCollapsed }: {
+function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet, sidebarCollapsed, previewMode, onExitPreview }: {
   article: GeneratedArticle;
   outline: V2OutlineSection[];
   onScore: () => void;
@@ -1634,6 +1634,8 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
   onEditHeading?: (sectionOrder: number, heading: string) => void;
   onEditBullet?: (sectionOrder: number, bulletIdx: number, text: string) => void;
   sidebarCollapsed?: boolean;
+  previewMode?: boolean;
+  onExitPreview?: () => void;
 }) {
   const { sections } = article;
   const [subEmail, setSubEmail] = useState("");
@@ -1684,10 +1686,25 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
         .finally(() => setImgLoadingOrders(prev => { const n = new Set(prev); n.delete(order); return n; }));
     };
 
-    runFetch(0, article.title, "concept", `Hero overview illustration for: ${article.title}`);
-    bodySections.forEach(s => {
-      const summary = s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400);
-      runFetch(s.order, s.heading, s.type, summary);
+    // Hero uses first body section's type + content so it hits the same reliable generation path
+    const heroAnchor = bodySections[0];
+    const heroType = heroAnchor?.type ?? "overview";
+    const heroSummary = heroAnchor
+      ? heroAnchor.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400)
+      : article.title;
+
+    // Stagger requests 2.5s apart to avoid Anthropic rate-limiting that causes "no <svg> block" failures
+    const allRequests = [
+      { order: 0, heading: article.title, type: heroType, summary: heroSummary },
+      ...bodySections.map(s => ({
+        order: s.order,
+        heading: s.heading,
+        type: s.type,
+        summary: s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400),
+      })),
+    ];
+    allRequests.forEach(({ order, heading, type, summary }, i) => {
+      setTimeout(() => runFetch(order, heading, type, summary), i * 2500);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [article.title]);
@@ -1787,6 +1804,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
   const divider = <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "40px 0" }} />;
 
   return (
+    <>
     <div ref={articleBodyRef} style={{ maxWidth: sidebarCollapsed ? 900 : 720, margin: 0, transition: "max-width .22s ease" }}>
 
       {/* Newsletter masthead */}
@@ -1809,10 +1827,10 @@ const hlStyle = (heading: string): React.CSSProperties =>
             onClick={() => { setImgModal({ order: 0, heading: article.title, sType: "hero", prompt: `Hero illustration for article: ${article.title}` }); setImgPrompt(`Hero illustration for article: ${article.title}`); }}
             onMouseEnter={() => setHoveredImg(0)}
             onMouseLeave={() => setHoveredImg(null)}
-            style={{ height: 240, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", cursor: "pointer", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)` }}
+            style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", cursor: "pointer", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)` }}
           >
             {heroSvg ? (
-              <div dangerouslySetInnerHTML={{ __html: heroSvg.replace(/width="340"/, 'width="100%"').replace(/height="130"/, 'height="240"').replace(/viewBox="0 0 340 130"/, 'viewBox="0 0 340 130" preserveAspectRatio="xMidYMid slice"') }} style={{ width: "100%", height: 240, lineHeight: 0 }} />
+              <div dangerouslySetInnerHTML={{ __html: heroSvg }} style={{ width: 300, height: 240, flexShrink: 0, lineHeight: 0 }} />
             ) : (
               <>
                 <svg viewBox="0 0 400 240" width="100%" height="100%" style={{ position: "absolute", inset: 0, opacity: .06 }} preserveAspectRatio="xMidYMid slice">
@@ -1918,9 +1936,8 @@ const hlStyle = (heading: string): React.CSSProperties =>
                       <div
                         dangerouslySetInnerHTML={{
                           __html: activeSvg
-                            .replace(/width="340"/, 'width="300"')
-                            .replace(/height="130"/, 'height="240"')
-                            .replace(/viewBox="0 0 340 130"/, 'viewBox="0 0 340 130" preserveAspectRatio="xMidYMid meet"'),
+                            .replace(/width="300"/, 'width="300"')
+                            .replace(/height="240"/, 'height="240"'),
                         }}
                         style={{ lineHeight: 0, display: "block", width: 300, height: 240 }}
                       />
@@ -2095,7 +2112,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
         {/* Conclusion / Key takeaways */}
         {conclusion && (() => {
           // Gather bullets — prefer the bullets array, then extract <li> from HTML paragraph
-          let takeaways = conclusion.content.bullets.filter(b => b.trim());
+          let takeaways = conclusion.content.bullets.map(b => typeof b === "string" ? b : String(b ?? "")).filter(b => b.trim());
           if (takeaways.length === 0 && conclusion.content.paragraphs.length > 0) {
             // Try each paragraph; stop when we get bullets
             for (const para of conclusion.content.paragraphs) {
@@ -2248,7 +2265,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
                       <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.45)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</div>
                     </div>
                   ) : activeSvg ? (
-                    <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="340"/, 'width="100%"').replace(/height="130"/, 'height="240"').replace(/viewBox="0 0 340 130"/, 'viewBox="0 0 340 130" preserveAspectRatio="xMidYMid meet"') }} style={{ width: "100%", height: 240, lineHeight: 0 }} />
+                    <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="100%"').replace(/height="240"/, 'height="240"') }} style={{ width: "100%", height: 240, lineHeight: 0 }} />
                   ) : (
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                       <svg viewBox="0 0 48 48" width="40" height="40" fill="none" stroke="rgba(22,61,38,.25)" strokeWidth="1.5" strokeLinecap="round">
@@ -2269,7 +2286,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
                         style={{ flexShrink: 0, width: 80, height: 50, borderRadius: 8, overflow: "hidden", border: `2px solid ${idx === modalActive ? "#163D26" : "rgba(22,61,38,.15)"}`, cursor: "pointer", background: "#F7F5F2", padding: 0, position: "relative" }}
                         title={`Version ${modalImgs.length - idx}`}
                       >
-                        <div dangerouslySetInnerHTML={{ __html: svg }} style={{ transform: "scale(0.235)", transformOrigin: "top left", width: 340, height: 130, pointerEvents: "none" }} />
+                        <div dangerouslySetInnerHTML={{ __html: svg }} style={{ transform: "scale(0.267)", transformOrigin: "top left", width: 300, height: 240, pointerEvents: "none" }} />
                         <div style={{ position: "absolute", bottom: 2, right: 4, fontSize: 9, fontWeight: 700, color: idx === modalActive ? "#163D26" : "rgba(22,61,38,.45)" }}>
                           v{modalImgs.length - idx}
                         </div>
@@ -2311,8 +2328,143 @@ const hlStyle = (heading: string): React.CSSProperties =>
       })()}
 
       {/* Keyframe for spinner */}
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } } @keyframes previewFadeIn { from { opacity: 0; } to { opacity: 1; } }`}</style>
     </div>
+
+    {/* ── Preview overlay ── */}
+    {previewMode && (
+      <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "#F7F5F2", overflowY: "auto", animation: "previewFadeIn .22s ease" }}>
+        {/* Sticky exit bar */}
+        <div style={{ position: "sticky", top: 0, zIndex: 1, background: "rgba(22,61,38,.96)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 24px", borderBottom: "1px solid rgba(255,255,255,.12)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#F93943" }} />
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".14em", color: "rgba(255,255,255,.6)", textTransform: "uppercase" }}>Website preview</span>
+          </div>
+          <button
+            onClick={onExitPreview}
+            style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 14px", borderRadius: 7, background: "rgba(255,255,255,.12)", border: "1px solid rgba(255,255,255,.18)", color: "rgba(255,255,255,.85)", fontSize: 12, fontWeight: 600, cursor: "pointer", letterSpacing: ".02em" }}
+          >
+            <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M2 2l10 10M12 2L2 12"/></svg>
+            Exit preview
+          </button>
+        </div>
+
+        {/* Article content */}
+        <div style={{ maxWidth: 820, margin: "0 auto", padding: "0 0 80px" }}>
+          {/* Masthead */}
+          <div style={{ background: C.dark, padding: "40px 56px 32px" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".22em", color: C.salmon, marginBottom: 12 }}>AI To Market · Blog</div>
+            <h1 style={{ margin: 0, fontSize: 32, fontWeight: 700, lineHeight: 1.2, color: C.white, letterSpacing: "-.5px" }}>{article.title}</h1>
+          </div>
+
+          {/* Hero image */}
+          {(() => {
+            const heroSvg = (sectionImages[0] ?? [])[activeImgIdx[0] ?? 0] ?? null;
+            return (
+              <div style={{ height: 260, overflow: "hidden", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                {heroSvg ? (
+                  <div dangerouslySetInnerHTML={{ __html: heroSvg }} style={{ width: 300, height: 240, flexShrink: 0, lineHeight: 0 }} />
+                ) : (
+                  <svg viewBox="0 0 48 48" width="44" height="44" fill="none" stroke="rgba(255,255,255,.25)" strokeWidth="1.5" strokeLinecap="round"><rect x="4" y="4" width="40" height="40" rx="4"/><circle cx="16" cy="18" r="4"/><path d="M44 32l-10-10-14 14"/></svg>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Body */}
+          <div style={{ background: C.white, padding: "52px 56px" }}>
+            {/* Intro */}
+            {intro && (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.salmon, marginBottom: 14 }}>{intro.eyebrow || "LEAD ITEM"}</div>
+                <h2 style={{ margin: "0 0 18px", fontSize: 22, fontWeight: 700, lineHeight: 1.25, letterSpacing: "-.3px", color: C.dark }}>{intro.heading}</h2>
+                {intro.content.paragraphs.map((p, i) => (
+                  <p key={i} dangerouslySetInnerHTML={{ __html: p.text }} style={{ margin: i < intro.content.paragraphs.length - 1 ? "0 0 15px" : 0, fontSize: 16, fontWeight: 400, lineHeight: 1.75, color: "#222" }} />
+                ))}
+              </div>
+            )}
+
+            {/* Body sections */}
+            {body.map((s, bi) => {
+              const imgLeft = bi % 2 === 0;
+              const activeSvg = (sectionImages[s.order] ?? [])[activeImgIdx[s.order] ?? 0] ?? null;
+              return (
+                <div key={s.order} style={{ overflow: "hidden" }}>
+                  <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "44px 0" }} />
+                  {activeSvg && (
+                    <div style={{
+                      float: imgLeft ? "left" : "right",
+                      marginRight: imgLeft ? 32 : 0,
+                      marginLeft: imgLeft ? 0 : 32,
+                      marginBottom: 18,
+                      width: 320, height: 240,
+                      borderRadius: 9,
+                      background: "rgba(22,61,38,.04)",
+                      border: "1px solid rgba(22,61,38,.1)",
+                      overflow: "hidden", flexShrink: 0, lineHeight: 0,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                    }}>
+                      <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="320"').replace(/height="240"/, 'height="240"') }} style={{ lineHeight: 0, display: "block", width: 320, height: 240 }} />
+                    </div>
+                  )}
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 10 }}>{s.eyebrow || s.type.replace(/_/g, " ").toUpperCase()}</div>
+                  <h3 style={{ margin: "0 0 15px", fontSize: 19, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-.2px", color: C.dark }}>{s.heading}</h3>
+                  {s.content.paragraphs.map((p, i) => (
+                    <p key={i} dangerouslySetInnerHTML={{ __html: p.text }} style={{ margin: i < s.content.paragraphs.length - 1 ? "0 0 13px" : 0, fontSize: 15, fontWeight: 400, lineHeight: 1.75, color: "#222" }} />
+                  ))}
+                  {s.content.bullets.length > 0 && (
+                    <ul style={{ margin: "12px 0 0", paddingLeft: 22, display: "flex", flexDirection: "column", gap: 7 }}>
+                      {s.content.bullets.map((b, i) => <li key={i} style={{ fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: "#222" }}>{b}</li>)}
+                    </ul>
+                  )}
+                  <div style={{ clear: "both" }} />
+                </div>
+              );
+            })}
+
+            {/* Conclusion */}
+            {conclusion && (() => {
+              let takeaways = conclusion.content.bullets.map(b => typeof b === "string" ? b : String(b ?? "")).filter(b => b.trim());
+              if (takeaways.length === 0) {
+                for (const para of conclusion.content.paragraphs) {
+                  const sentences = para.text.replace(/<[^>]+>/g, "").trim().split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+                  takeaways.push(...sentences);
+                  if (takeaways.length > 0) break;
+                }
+              }
+              return (
+                <div>
+                  <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "44px 0" }} />
+                  <div style={{ background: C.dark, borderRadius: 12, padding: "36px 40px" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.salmon, marginBottom: 14 }}>KEY TAKEAWAYS</div>
+                    <h3 style={{ margin: "0 0 22px", fontSize: 19, fontWeight: 700, color: C.white, lineHeight: 1.3 }}>{conclusion.heading}</h3>
+                    {takeaways.map((b, i) => (
+                      <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: i < takeaways.length - 1 ? 14 : 0 }}>
+                        <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.salmon, marginTop: 6, flexShrink: 0 }} />
+                        <div style={{ fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: "rgba(255,255,255,.85)" }}>{b}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Footer */}
+          <div style={{ background: C.dark, padding: "32px 56px", borderRadius: "0 0 12px 12px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.white }}>AI To Market</div>
+            </div>
+            <div style={{ borderTop: "1px solid rgba(255,255,255,.12)", paddingTop: 18 }}>
+              <div style={{ fontSize: 12, fontWeight: 400, color: "rgba(255,255,255,.4)" }}>
+                Have a suggestion? Reach us at <span style={{ color: C.salmon }}>socials@aitomarketgroup.com</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+  </>
   );
 }
 
@@ -2417,6 +2569,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [liveState, setLiveState] = useState<"idle"|"loading"|"success"|"error">("idle");
   const [liveError, setLiveError] = useState<string | null>(null);
   const [liveUrl, setLiveUrl] = useState<string | null>(null);
+  const [previewMode, setPreviewMode] = useState(false);
 
   const [highlightedSectionId, setHighlightedSectionId] = useState<string | null>(null);
 
@@ -4004,6 +4157,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               onPublish={onPublish}
               highlightedSectionId={highlightedSectionId}
               sidebarCollapsed={sidebarCollapsed}
+              previewMode={previewMode}
+              onExitPreview={() => setPreviewMode(false)}
               brandVoiceMatches={
                 brandVoiceStatus?.status === "partial"
                   ? (brandVoiceStatus.residuals?.flatMap(r => r.violations.map(v => v.match)) ?? [])
@@ -4430,6 +4585,15 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".12em", color: C.mid }}>PUBLISH</div>
                 </div>
                 <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+                  {/* Preview button */}
+                  <button
+                    onClick={() => setPreviewMode(true)}
+                    disabled={!articleData}
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, border: `1px solid ${C.border}`, background: "none", color: C.dark, cursor: !articleData ? "default" : "pointer", opacity: !articleData ? 0.45 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}
+                  >
+                    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M1 8s2.8-5 7-5 7 5 7 5-2.8 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2"/></svg>
+                    Preview
+                  </button>
                   {/* Draft status */}
                   {draftState === "success" && (
                     <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 8, background: "rgba(24,95,0,.07)", border: "1px solid rgba(24,95,0,.18)" }}>
