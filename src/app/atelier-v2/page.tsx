@@ -2461,7 +2461,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
           {(() => {
             const heroSvg = (sectionImages[0] ?? [])[activeImgIdx[0] ?? 0] ?? null;
             return (
-              <div style={{ height: 260, overflow: "hidden", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)`, display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <div style={{ height: 260, overflow: "hidden", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)`, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none" }}>
                 {heroSvg ? (
                   heroSvg.startsWith("data:") || heroSvg.startsWith("http")
                     ? <img src={heroSvg} alt={article.title} style={{ width: "100%", height: 260, objectFit: imgFitMode[0] ?? "cover", objectPosition: imgPositions[0] ?? "50% 50%", display: "block" }} />
@@ -2715,7 +2715,7 @@ function sectionTypeStyle(type: string) {
 
 // ─── Editor screen ────────────────────────────────────────────────────────────
 
-function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, sidebarCollapsed, newCardId, batchQueuedIds, onSendToBatchQueue }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; sidebarCollapsed?: boolean; newCardId?: string | null; batchQueuedIds?: string[]; onSendToBatchQueue?: (id: string, title: string, outline: V2OutlineSection[]) => void }) {
+function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, sidebarCollapsed, newCardId, batchQueuedIds, onSendToBatchQueue, cardsLoading }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; sidebarCollapsed?: boolean; newCardId?: string | null; batchQueuedIds?: string[]; onSendToBatchQueue?: (id: string, title: string, outline: V2OutlineSection[]) => void; cardsLoading?: boolean }) {
   // ── Plan step state ────────────────────────────────────────────────────────
   type EditorStep = "plan" | "article";
   const [editorStep, setEditorStep] = useState<EditorStep>("plan");
@@ -2728,6 +2728,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [expandedSection, setExpandedSection] = useState<number | null>(null);
   const [editingTitles, setEditingTitles] = useState<Record<number, string>>({});
   const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
+  const [dashFilter, setDashFilter] = useState<"all" | "plans" | "article" | "build" | "sanity">("all");
   const [sentToSanityIds, setSentToSanityIds] = useState<Set<string>>(new Set());
   const [withArticleIds, setWithArticleIds] = useState<Set<string>>(new Set());
   const [savePulse, setSavePulse] = useState(false);
@@ -3705,11 +3706,19 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               if (parsed.quality_flags) setQualityFlags(parsed.quality_flags);
               if (parsed.brand_voice_status) setBrandVoiceStatus(parsed.brand_voice_status);
               const t = parsed.article.title ?? "";
-              setSeoPageTitle(t);   // article title → SEO "Title" field
-              setSeoTitle("");      // clear until LLM generates it
-              setSeoSlug("");       // clear until LLM generates it
+              setSeoPageTitle(t);
+              setSeoTitle("");
+              setSeoSlug("");
               setSeoMetaDesc("");
               setSeoTags([]);
+              // Mark card as having an article immediately so card grid shows "Resume article"
+              setWithArticleIds(prev => { const n = new Set(prev); n.add(activeCardId); return n; });
+              // Persist to Supabase immediately (don't wait for debounce)
+              fetch(`/api/builder-sessions/${activeCardId}/save-article`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ article: parsed.article }),
+              }).catch(() => {});
             }
           } catch { /* partial chunk, keep buffering */ }
         }
@@ -3726,11 +3735,71 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   // ── Card grid ──────────────────────────────────────────────────────────────
   const showCardGrid = (draftCards?.length ?? 0) > 0 && !activeCardId;
 
+  // While cards are still loading from the server and no card is selected,
+  // show nothing so we don't flash a blank plan view before the card grid appears
+  if (!activeCardId && cardsLoading) {
+    return <div style={{ padding: 48, textAlign: "center", color: "rgba(22,61,38,.4)", fontSize: 13 }}>Loading…</div>;
+  }
+
   if (showCardGrid) {
+    // Pre-compute category counts for tab badges
+    const _isSent      = (id: string) => sentToSanityIds.has(id) || !!readCardCache(id)?.draftSentAt;
+    const _hasArticle  = (id: string) => withArticleIds.has(id) || (!_isSent(id) && !!readCardCache(id)?.articleData);
+    const _hasPlan     = (id: string) => savedPlans.some(p => p.opportunityId === id);
+    const _sentCards   = (draftCards ?? []).filter(c => _isSent(c.opportunityId));
+    const _articleCards = (draftCards ?? []).filter(c => !_isSent(c.opportunityId) && _hasArticle(c.opportunityId));
+    const _buildCards  = (draftCards ?? []).filter(c => !_isSent(c.opportunityId) && !_hasArticle(c.opportunityId) && !_hasPlan(c.opportunityId));
+    const tabCounts = {
+      all: savedPlans.length + _articleCards.length + _buildCards.length + _sentCards.length,
+      plans: savedPlans.length,
+      article: _articleCards.length,
+      build: _buildCards.length,
+      sanity: _sentCards.length,
+    };
+    const tabs: { key: typeof dashFilter; label: string }[] = [
+      { key: "all",     label: "All" },
+      { key: "plans",   label: "Plans" },
+      { key: "article", label: "Article" },
+      { key: "build",   label: "Build" },
+      { key: "sanity",  label: "Sanity" },
+    ];
+
     return (
       <div>
+        {/* ── Filter tabs ── */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 32, flexWrap: "wrap" }}>
+          {tabs.map(t => {
+            const active = dashFilter === t.key;
+            const count = tabCounts[t.key];
+            return (
+              <button
+                key={t.key}
+                onClick={() => setDashFilter(t.key)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 7,
+                  padding: "8px 16px", borderRadius: 20,
+                  fontSize: 12, fontWeight: 600, cursor: "pointer",
+                  border: active ? `1.5px solid ${C.dark}` : `1.5px solid ${C.border}`,
+                  background: active ? C.dark : C.white,
+                  color: active ? C.white : "rgba(22,61,38,.65)",
+                  transition: "all .15s",
+                }}
+              >
+                {t.label}
+                <span style={{
+                  fontSize: 10, fontWeight: 700, minWidth: 18, height: 18,
+                  borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center",
+                  padding: "0 5px",
+                  background: active ? "rgba(255,255,255,.2)" : "rgba(22,61,38,.08)",
+                  color: active ? "rgba(255,255,255,.9)" : "rgba(22,61,38,.55)",
+                }}>{count}</span>
+              </button>
+            );
+          })}
+        </div>
+
         {/* ── Saved plans section ── */}
-        {savedPlans.length > 0 && (
+        {savedPlans.length > 0 && (dashFilter === "all" || dashFilter === "plans") && (
           <div style={{ marginBottom: 48 }}>
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 20 }}>
               <div>
@@ -3817,18 +3886,15 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           </div>
         )}
 
-        {/* ── Sent to Sanity + All opportunities ── */}
+        {/* ── Articles / Build / Sanity sections ── */}
         {(() => {
-          const isSent      = (id: string) => sentToSanityIds.has(id) || !!readCardCache(id)?.draftSentAt;
-          const hasArticleSaved = (id: string) => withArticleIds.has(id) || (!isSent(id) && !!readCardCache(id)?.articleData);
-          const hasPlan     = (id: string) => savedPlans.some(p => p.opportunityId === id);
-          const sentCards    = draftCards!.filter(card => isSent(card.opportunityId));
-          const articleCards = draftCards!.filter(card => !isSent(card.opportunityId) && hasArticleSaved(card.opportunityId));
-          const pendingCards = draftCards!.filter(card => !isSent(card.opportunityId) && !hasArticleSaved(card.opportunityId) && !hasPlan(card.opportunityId));
+          const sentCards    = _sentCards;
+          const articleCards = _articleCards;
+          const pendingCards = _buildCards;
           return (
             <>
               {/* ── Articles with saved drafts ── */}
-              {articleCards.length > 0 && (
+              {articleCards.length > 0 && (dashFilter === "all" || dashFilter === "article") && (
                 <div style={{ marginBottom: 48 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
                     <div>
@@ -3863,7 +3929,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               )}
 
               {/* ── Ready to build ── */}
-              {pendingCards.length > 0 && (
+              {pendingCards.length > 0 && (dashFilter === "all" || dashFilter === "build") && (
                 <div style={{ marginBottom: 48 }}>
                   <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 28 }}>
                     <div>
@@ -3897,7 +3963,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               )}
 
               {/* ── Sent to Sanity — least actionable, shown last ── */}
-              {sentCards.length > 0 && (
+              {sentCards.length > 0 && (dashFilter === "all" || dashFilter === "sanity") && (
                 <div style={{ marginBottom: 48 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
                     <div>
@@ -6746,6 +6812,7 @@ function AtelierV2Page() {
   const [dataState] = useState<DataState>("normal");
   const [currentOpportunityId, setCurrentOpportunityId] = useState<string | null>(null);
   const [draftCards, setDraftCards] = useState<DraftCard[]>([]);
+  const [cardsLoading, setCardsLoading] = useState(true);
   const [trashedCards, setTrashedCards] = useState<DraftCard[]>([]);
   const [activeCardId, setActiveCardId] = useState<string | null>(() => readInitialUrlState().cardId);
   const [newCardId, setNewCardId] = useState<string | null>(null);
@@ -6851,22 +6918,24 @@ function AtelierV2Page() {
     fetch("/api/builder-sessions")
       .then(r => r.ok ? r.json() as Promise<Array<{ opportunityId: string; topicTitle: string; createdAt: string; creatorEmail?: string }>> : null)
       .then(sessions => {
-        if (!sessions?.length) return;
-        const sorted = [...sessions].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-        setDraftCards(prev => {
-          const existingIds = new Set(prev.map(c => c.opportunityId));
-          const toAdd = sorted
-            .filter(s => !existingIds.has(s.opportunityId))
-            .map(s => ({
-              opportunityId: s.opportunityId,
-              brief: { prompt: s.topicTitle } as BriefFields,
-              createdAt: s.createdAt,
-              creatorEmail: s.creatorEmail,
-            }));
-          return [...prev, ...toAdd];
-        });
+        if (sessions?.length) {
+          const sorted = [...sessions].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+          setDraftCards(prev => {
+            const existingIds = new Set(prev.map(c => c.opportunityId));
+            const toAdd = sorted
+              .filter(s => !existingIds.has(s.opportunityId))
+              .map(s => ({
+                opportunityId: s.opportunityId,
+                brief: { prompt: s.topicTitle } as BriefFields,
+                createdAt: s.createdAt,
+                creatorEmail: s.creatorEmail,
+              }));
+            return [...prev, ...toAdd];
+          });
+        }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setCardsLoading(false));
     // Load trashed sessions from DB (org-wide)
     fetch("/api/builder-sessions?trashed=true")
       .then(r => r.ok ? r.json() as Promise<Array<{ opportunityId: string; topicTitle: string; createdAt: string; creatorEmail?: string }>> : null)
@@ -7074,7 +7143,7 @@ function AtelierV2Page() {
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}
           {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} onFlowChange={setGenerateDefaultFlow} />}
           {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} batchQueueEntries={batchQueueEntries} onRemoveFromBatchQueue={handleRemoveFromBatchQueue} onActivateCard={handleActivateCard} />}
-          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} newCardId={newCardId} batchQueuedIds={batchQueueEntries.map(e => e.id)} onSendToBatchQueue={handleSendToBatchQueue} />}
+          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} newCardId={newCardId} batchQueuedIds={batchQueueEntries.map(e => e.id)} onSendToBatchQueue={handleSendToBatchQueue} cardsLoading={cardsLoading} />}
           {/* {screen === "score" && <ScoreScreen onEditor={go("editor")} />} — score lives inside the article editor */}
           {screen === "keywords"   && <KeywordsScreen />}
           {screen === "publish"    && <PublishScreen />}
