@@ -6249,8 +6249,6 @@ function ComboLoader({ stages, phases, progress, phaseOverride }: {
 
   const pct = Math.min(100, Math.max(0, progress));
   const pctDisplay = Math.round(pct);
-  const isDoneTyping = displayed.length >= (phases[activePhase]?.text.length ?? 0);
-
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(247,245,242,.82)", backdropFilter: "blur(4px)" }}>
     <div style={{ width: "100%", maxWidth: 540, padding: "0 24px" }}>
@@ -6282,7 +6280,7 @@ function ComboLoader({ stages, phases, progress, phaseOverride }: {
         </div>
         <div style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace", fontSize: 12.5, lineHeight: 1.75, color: "#163D26", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
           {displayed}
-          {!isDoneTyping && <span style={{ display: "inline-block", width: 2, height: 14, background: "#185F00", verticalAlign: "middle", marginLeft: 1, animation: "blink .65s step-end infinite" }} />}
+          <span style={{ display: "inline-block", width: 2, height: 14, background: "#185F00", verticalAlign: "middle", marginLeft: 1, animation: "blink .65s step-end infinite" }} />
         </div>
       </div>
 
