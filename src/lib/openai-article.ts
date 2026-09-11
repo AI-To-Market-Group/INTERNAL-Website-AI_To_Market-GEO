@@ -71,7 +71,7 @@ export function chatJsonStream(
   system: string,
   user: string,
   model: string,
-  onComplete: (accumulated: string) => Promise<Record<string, unknown>>,
+  onComplete: (accumulated: string, sendEvent: (obj: Record<string, unknown>) => void) => Promise<Record<string, unknown>>,
   ctx?: AiCallCtx
 ): ReadableStream<Uint8Array> {
   const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -156,7 +156,7 @@ export function chatJsonStream(
       }
 
       try {
-        const payload = await onComplete(accumulated);
+        const payload = await onComplete(accumulated, (obj) => send(controller, obj));
         send(controller, { done: true, ...payload });
       } catch (e) {
         send(controller, { error: `Parse failed: ${String(e)}` });

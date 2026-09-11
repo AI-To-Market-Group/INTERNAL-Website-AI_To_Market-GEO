@@ -1809,7 +1809,15 @@ const hlStyle = (heading: string): React.CSSProperties =>
                 </svg>
                 <div style={{ position: "relative", textAlign: "center" }}>
                   {heroLoading ? (
-                    <div style={{ width: 28, height: 28, border: "2px solid rgba(255,255,255,.2)", borderTop: "2px solid rgba(255,255,255,.7)", borderRadius: "50%", animation: "spin 1s linear infinite", margin: "0 auto" }} />
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+                      <div style={{ position: "relative", width: 90, height: 90 }}>
+                        <div style={{ position: "absolute", inset: 0, border: "2.5px solid rgba(255,255,255,.15)", borderTop: "2.5px solid rgba(255,255,255,.8)", borderRadius: "50%", animation: "spin 1.1s linear infinite" }} />
+                        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <img src="/logo-white-aitom.png" alt="AI To Market" style={{ width: 54, height: 54, objectFit: "contain", opacity: 0.9 }} />
+                        </div>
+                      </div>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,.5)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</span>
+                    </div>
                   ) : (
                     <svg viewBox="0 0 48 48" width="44" height="44" fill="none" stroke="rgba(255,255,255,.32)" strokeWidth="1.5" strokeLinecap="round">
                       <rect x="4" y="4" width="40" height="40" rx="4"/><circle cx="16" cy="18" r="4"/><path d="M44 32l-10-10-14 14"/>
@@ -1895,9 +1903,30 @@ const hlStyle = (heading: string): React.CSSProperties =>
                         style={{ lineHeight: 0, display: "block", width: 300, height: 240 }}
                       />
                     ) : isLoading ? (
-                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
-                        <div style={{ width: 24, height: 24, border: "2px solid rgba(22,61,38,.15)", borderTop: "2px solid rgba(22,61,38,.5)", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
-                        <span style={{ fontSize: 10, fontWeight: 600, color: "rgba(22,61,38,.4)", letterSpacing: ".08em" }}>GENERATING</span>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, height: "100%" }}>
+                        {/* Branded generating ring */}
+                        <div style={{ position: "relative", width: 80, height: 80 }}>
+                          {/* Spinning ring */}
+                          <div style={{
+                            position: "absolute", inset: 0,
+                            border: "2.5px solid rgba(22,61,38,.1)",
+                            borderTop: "2.5px solid rgba(22,61,38,.65)",
+                            borderRadius: "50%",
+                            animation: "spin 1.1s linear infinite",
+                          }} />
+                          {/* Logo centred inside ring */}
+                          <div style={{
+                            position: "absolute", inset: 0,
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                          }}>
+                            <img
+                              src="/logo-green.png"
+                              alt="AI To Market"
+                              style={{ width: 48, height: 48, objectFit: "contain", opacity: 0.85 }}
+                            />
+                          </div>
+                        </div>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.45)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</span>
                       </div>
                     ) : (
                       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(22,61,38,.22)" strokeWidth="1.5" strokeLinecap="round">
@@ -2330,6 +2359,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   // ── Article generation state ────────────────────────────────────────────────
   const [articleData, setArticleData] = useState<GeneratedArticle | null>(null);
   const [articleLoading, setArticleLoading] = useState(false);
+  const [articleProgress, setArticleProgress] = useState(0);
+  const [articlePhase, setArticlePhase] = useState(0);
+  const [outlineProgress, setOutlineProgress] = useState(0);
+  const outlineRafRef = useRef<number | null>(null);
+  const outlineProgressRef = useRef(0);
   const [articleError, setArticleError] = useState<string | null>(null);
   const [geoScore, setGeoScore] = useState<{ score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number } | null>(null);
   const [qualityFlags, setQualityFlags] = useState<{ section?: string; type: string; message: string }[]>([]);
@@ -2660,6 +2694,32 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       .catch((e: unknown) => { setOutlineError(e instanceof Error ? e.message : String(e)); setOutlineRetrying(false); })
       .finally(() => setOutlineLoading(false));
   }, [activeCardId, draftCards, savedPlans, sentToSanityIds, withArticleIds, outlineRetryCount]);
+
+  // ── Outline progress: rubber-band rAF toward 84%, snaps to 100 on completion ──
+  useEffect(() => {
+    if (outlineLoading) {
+      outlineProgressRef.current = 0;
+      setOutlineProgress(0);
+      function tick() {
+        outlineProgressRef.current += (84 - outlineProgressRef.current) * 0.009;
+        setOutlineProgress(outlineProgressRef.current);
+        outlineRafRef.current = requestAnimationFrame(tick);
+      }
+      outlineRafRef.current = requestAnimationFrame(tick);
+    } else {
+      if (outlineRafRef.current !== null) {
+        cancelAnimationFrame(outlineRafRef.current);
+        outlineRafRef.current = null;
+      }
+      setOutlineProgress(100);
+    }
+    return () => {
+      if (outlineRafRef.current !== null) {
+        cancelAnimationFrame(outlineRafRef.current);
+        outlineRafRef.current = null;
+      }
+    };
+  }, [outlineLoading]);
 
   // ── Save current plan (org-wide via Supabase) ─────────────────────────────
   async function handleSavePlan() {
@@ -3122,6 +3182,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     setBrandVoiceStatus(null);
     setArticleLoading(true);
     setArticleError(null);
+    setArticleProgress(0);
+    setArticlePhase(0);
     setEditorStep("article");
     try {
       const finalOutline = outline.map((s, i) => ({
@@ -3141,6 +3203,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
+      let charsReceived = 0;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -3154,11 +3217,23 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           try {
             const parsed = JSON.parse(json) as {
               article?: GeneratedArticle;
+              chunk?: string;
+              stage?: string;
               quality_flags?: { section?: string; type: string; message: string }[];
               geo_score?: { score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number };
               brand_voice_status?: { status: string; residuals?: { paragraphIndex: number; violations: { type: string; match: string }[] }[] };
             };
+            // Live token progress: asymptote toward 60% (~4000 chars typical article)
+            if (parsed.chunk) {
+              charsReceived += parsed.chunk.length;
+              setArticleProgress(Math.min((charsReceived / 4000) * 60, 60));
+            }
+            // Real server stage events: advance pill + push progress milestone
+            if (parsed.stage === "brand_voice") { setArticlePhase(1); setArticleProgress(p => Math.max(p, 65)); }
+            if (parsed.stage === "citation")    { setArticlePhase(2); setArticleProgress(p => Math.max(p, 78)); }
+            if (parsed.stage === "scoring")     { setArticlePhase(3); setArticleProgress(p => Math.max(p, 88)); }
             if (parsed.article) {
+              setArticleProgress(100);
               setArticleData(parsed.article);
               if (parsed.geo_score) setGeoScore(parsed.geo_score);
               if (parsed.quality_flags) setQualityFlags(parsed.quality_flags);
@@ -3475,6 +3550,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               { label: "Mapping keywords", text: "Embedding primary and secondary keywords into each section...\nAligning section types: introduction, section, comparison, faq, conclusion..." },
               { label: "Validating plan", text: "✓  GEO section coverage — complete\n✓  Keyword density — balanced\n✓  Conclusion bullets — ready\n✓  FAQ fan-out — structured" },
             ]}
+            progress={outlineProgress}
           />
         )}
 
@@ -3777,13 +3853,15 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       {/* Loading — Option D combo */}
       {articleLoading && (
         <ComboLoader
-          stages={["Intro", "Sections", "FAQ", "GEO"]}
+          stages={["Drafting", "Reviewing", "Citing", "Scoring"]}
           phases={[
-            { label: "Writing introduction", text: "Crafting the opening hook and framing the reader's challenge...\nEmbedding market context with named sources and statistics..." },
-            { label: "Writing body sections", text: "Expanding each outline section into full paragraphs...\nAdding concrete examples, named tools, and source attribution..." },
-            { label: "Writing FAQ + conclusion", text: "Generating Q&A pairs for AI fan-out coverage...\nCrafting key takeaways as specific, actionable bullets..." },
-            { label: "Running GEO checks", text: "✓  Named sources — scanning\n✓  Statistics with attribution — scanning\n✓  AI-tell density — scanning\n⟳  Finalising GEO score..." },
+            { label: "Writing article", text: "Generating introduction and body sections...\nEmbedding named sources and GEO-ready structure..." },
+            { label: "Reviewing brand voice", text: "Checking brand voice compliance...\nCorrecting AI-tell phrases and tone mismatches..." },
+            { label: "Adding citations", text: "Searching live web for verifiable B2B sources...\nEmbedding real citations with hyperlinked attribution..." },
+            { label: "Scoring GEO quality", text: "✓  Named sources — checking\n✓  Statistics with attribution — checking\n⟳  Computing final GEO score..." },
           ]}
+          progress={articleProgress}
+          phaseOverride={articlePhase}
         />
       )}
 
@@ -6050,55 +6128,48 @@ function BrandVoiceScanLoader({ onComplete, phrases: phrasesProp, phraseMs = 200
   );
 }
 
-// ── Option-D loading animation: stage pills + live typewriter stream ──────────
-function ComboLoader({ stages, phases }: {
+// ── Loading animation: stage pills + typewriter + real-progress bar ──────────
+// progress (0-100) drives the bar continuously from parent data.
+// phaseOverride drives the pill highlight when the server emits real stage events.
+// When phaseOverride is absent, active pill is derived linearly from progress.
+function ComboLoader({ stages, phases, progress, phaseOverride }: {
   stages: string[];
   phases: { label: string; text: string }[];
+  progress: number;
+  phaseOverride?: number;
 }) {
-  const [phaseIdx, setPhaseIdx] = useState(0);
-  const [displayed, setDisplayed] = useState("");
-  const phaseIdxRef = useRef(0);
-  const displayedRef = useRef("");
-  const erasingRef   = useRef(false);
-  const timerRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activePhase = phaseOverride !== undefined
+    ? Math.min(phaseOverride, stages.length - 1)
+    : Math.min(Math.floor((progress / 100) * stages.length), stages.length - 1);
 
+  const [displayed, setDisplayed] = useState("");
+  const displayedRef = useRef("");
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const phasesRef = useRef(phases);
+  phasesRef.current = phases;
+
+  // Restart typewriter whenever the active phase changes
   useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    displayedRef.current = "";
+    setDisplayed("");
+
     function tick() {
-      const ph = phases[phaseIdxRef.current];
+      const ph = phasesRef.current[activePhase];
       if (!ph) return;
-      if (erasingRef.current) {
-        if (displayedRef.current.length > 0) {
-          displayedRef.current = displayedRef.current.slice(0, Math.max(0, displayedRef.current.length - 5));
-          setDisplayed(displayedRef.current);
-          timerRef.current = setTimeout(tick, 10);
-        } else {
-          erasingRef.current = false;
-          const nextIdx = phaseIdxRef.current + 1;
-          if (nextIdx >= phases.length) return; // reached end — stop, no loop
-          phaseIdxRef.current = nextIdx;
-          setPhaseIdx(phaseIdxRef.current);
-          timerRef.current = setTimeout(tick, 280);
-        }
-      } else {
-        if (displayedRef.current.length < ph.text.length) {
-          const ch = ph.text[displayedRef.current.length];
-          displayedRef.current += ch;
-          setDisplayed(displayedRef.current);
-          timerRef.current = setTimeout(tick, ch === "\n" ? 75 : 25);
-        } else {
-          const isLast = phaseIdxRef.current === phases.length - 1;
-          if (isLast) return; // last phase fully typed — stay here, don't erase
-          timerRef.current = setTimeout(() => { erasingRef.current = true; tick(); }, 900);
-        }
+      if (displayedRef.current.length < ph.text.length) {
+        const ch = ph.text[displayedRef.current.length];
+        displayedRef.current += ch;
+        setDisplayed(displayedRef.current);
+        timerRef.current = setTimeout(tick, ch === "\n" ? 75 : 22);
       }
     }
-    tick();
+    timerRef.current = setTimeout(tick, 60);
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activePhase]);
 
-  const phaseProgress = phases[phaseIdx] ? displayed.length / Math.max(1, phases[phaseIdx].text.length) : 0;
-  const progressPct = Math.min(100, Math.round(((phaseIdx + phaseProgress) / stages.length) * 100));
+  const pct = Math.min(100, Math.round(progress));
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(247,245,242,.82)", backdropFilter: "blur(4px)" }}>
@@ -6106,17 +6177,12 @@ function ComboLoader({ stages, phases }: {
       {/* Stage pills */}
       <div style={{ display: "flex", borderRadius: 10, border: "1.5px solid rgba(22,61,38,.15)", overflow: "hidden", marginBottom: 16 }}>
         {stages.map((s, i) => {
-          const isDone   = i < phaseIdx;
-          const isActive = i === phaseIdx;
+          const isDone   = i < activePhase;
+          const isActive = i === activePhase;
           return (
             <div key={i} style={{
-              flex: 1,
-              padding: "9px 4px",
-              textAlign: "center",
-              fontSize: 10,
-              fontWeight: 600,
-              letterSpacing: ".04em",
-              lineHeight: 1.3,
+              flex: 1, padding: "9px 4px", textAlign: "center", fontSize: 10,
+              fontWeight: 600, letterSpacing: ".04em", lineHeight: 1.3,
               borderRight: i < stages.length - 1 ? "1px solid rgba(22,61,38,.15)" : "none",
               background: isActive ? "#185F00" : isDone ? "rgba(24,95,0,.1)" : "transparent",
               color: isActive ? "#FFFFFF" : isDone ? "#185F00" : "rgba(22,61,38,.38)",
@@ -6131,7 +6197,7 @@ function ComboLoader({ stages, phases }: {
         <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
           <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#185F00", animation: "pulse 1.1s ease-in-out infinite" }} />
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".09em", textTransform: "uppercase" as const, color: "#185F00" }}>
-            {phases[phaseIdx]?.label ?? ""}
+            {phases[activePhase]?.label ?? ""}
           </span>
         </div>
         <div style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace", fontSize: 12.5, lineHeight: 1.75, color: "#163D26", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
@@ -6140,13 +6206,13 @@ function ComboLoader({ stages, phases }: {
         </div>
       </div>
 
-      {/* Progress bar + percentage */}
+      {/* Progress bar — driven by real data from parent */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14 }}>
         <div style={{ flex: 1, height: 3, background: "rgba(22,61,38,.1)", borderRadius: 99, overflow: "hidden" }}>
-          <div style={{ height: "100%", width: `${progressPct}%`, background: "linear-gradient(90deg,#185F00,#50C878)", borderRadius: 99, transition: "width .25s ease" }} />
+          <div style={{ height: "100%", width: `${pct}%`, background: "linear-gradient(90deg,#185F00,#50C878)", borderRadius: 99, transition: "width .3s ease" }} />
         </div>
         <span style={{ fontSize: 12, fontWeight: 700, color: "#185F00", fontVariantNumeric: "tabular-nums", minWidth: 34, textAlign: "right" as const }}>
-          {progressPct}%
+          {pct}%
         </span>
       </div>
     </div>

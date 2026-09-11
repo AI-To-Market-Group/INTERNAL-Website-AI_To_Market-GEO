@@ -389,7 +389,7 @@ ${getGenerationLengthPrompt(outline.length, targetWords)}${flagModifiers.length 
 
   const TARGET_WORDS = 900;
 
-  const stream = chatJsonStream(system, userPrompt, "gpt-5.4-mini", async (accumulated) => {
+  const stream = chatJsonStream(system, userPrompt, "gpt-5.4-mini", async (accumulated, sendEvent) => {
     let response: GenerateArticleResponse;
     try {
       response = processResponse(JSON.parse(accumulated) as GenerateArticleResponse, articleTitle, outline);
@@ -406,6 +406,8 @@ ${getGenerationLengthPrompt(outline.length, targetWords)}${flagModifiers.length 
         // non-fatal — keep the over-length article rather than crashing
       }
     }
+
+    sendEvent({ stage: "brand_voice" });
 
     // ── Brand voice correction — applied in-place before quality + GEO ──
     let brand_voice_status: import("@/types").BrandVoiceStatus | null = null;
@@ -457,6 +459,8 @@ ${getGenerationLengthPrompt(outline.length, targetWords)}${flagModifiers.length 
       brand_voice_status = { status: "error" };
     }
 
+    sendEvent({ stage: "citation" });
+
     // ── Auto-embed citation so "Cited claims" GEO check passes from the start ──
     // Non-fatal: if the web search or rewrite fails, the article still ships.
     try {
@@ -483,6 +487,8 @@ ${getGenerationLengthPrompt(outline.length, targetWords)}${flagModifiers.length 
     } catch (e) {
       console.warn("[validate-plan] auto-citation failed (non-fatal):", e);
     }
+
+    sendEvent({ stage: "scoring" });
 
     const qualityFlags = reviewArticleQuality(response, targetKeywords, wordCountTargets);
 
