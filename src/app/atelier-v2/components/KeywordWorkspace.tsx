@@ -337,12 +337,12 @@ export function KeywordWorkspace({ seedKeywords, onCreated }: KeywordWorkspacePr
                   onChange={(e) => setCustomInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCustom(); } }}
                   placeholder="Type a keyword…"
-                  style={{ flex: 1, padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 400, color: C.dark, background: C.bg, outline: "none", fontFamily: "inherit" }}
+                  style={{ flex: 1, minWidth: 0, padding: "8px 12px", border: `1px solid ${C.border}`, borderRadius: 8, fontSize: 12, fontWeight: 400, color: C.dark, background: C.bg, outline: "none", fontFamily: "inherit" }}
                 />
                 <button
                   type="button"
                   onClick={addCustom}
-                  style={{ padding: "8px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer", fontFamily: "inherit" }}
+                  style={{ flexShrink: 0, padding: "8px 14px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer", fontFamily: "inherit" }}
                 >
                   Add
                 </button>
