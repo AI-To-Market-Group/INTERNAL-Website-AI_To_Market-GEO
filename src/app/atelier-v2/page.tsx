@@ -1659,8 +1659,23 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
     if (!bodySections.length) return;
     setSectionImages({});
     setActiveImgIdx({});
-    const orders = new Set(bodySections.map(s => s.order));
+    const orders = new Set([0, ...bodySections.map(s => s.order)]);
     setImgLoadingOrders(orders);
+    // Hero image (order 0)
+    fetch("/api/illustration-generate-claude", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ heading: article.title, sectionType: "hero", summary: `Hero illustration for article: ${article.title}` }),
+    })
+      .then(r => r.json())
+      .then((data: { svgString?: string | null }) => {
+        if (data.svgString) {
+          setSectionImages(prev => ({ ...prev, [0]: [data.svgString!, ...(prev[0] ?? [])] }));
+          setActiveImgIdx(prev => ({ ...prev, [0]: 0 }));
+        }
+      })
+      .catch(() => {})
+      .finally(() => setImgLoadingOrders(prev => { const n = new Set(prev); n.delete(0); return n; }));
     bodySections.forEach(s => {
       const summary = s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400);
       fetch("/api/illustration-generate-claude", {
@@ -1813,7 +1828,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
                       <div style={{ position: "relative", width: 90, height: 90 }}>
                         <div style={{ position: "absolute", inset: 0, border: "2.5px solid rgba(255,255,255,.15)", borderTop: "2.5px solid rgba(255,255,255,.8)", borderRadius: "50%", animation: "spin 1.1s linear infinite" }} />
                         <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                          <img src="/logo-white-aitom.png" alt="AI To Market" style={{ width: 54, height: 54, objectFit: "contain", opacity: 0.9 }} />
+                          <img src="/logo-white.svg" alt="AI To Market" style={{ width: 58, height: 30, objectFit: "contain", opacity: 0.9 }} />
                         </div>
                       </div>
                       <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,.5)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</span>
@@ -1904,26 +1919,10 @@ const hlStyle = (heading: string): React.CSSProperties =>
                       />
                     ) : isLoading ? (
                       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, height: "100%" }}>
-                        {/* Branded generating ring */}
                         <div style={{ position: "relative", width: 80, height: 80 }}>
-                          {/* Spinning ring */}
-                          <div style={{
-                            position: "absolute", inset: 0,
-                            border: "2.5px solid rgba(22,61,38,.1)",
-                            borderTop: "2.5px solid rgba(22,61,38,.65)",
-                            borderRadius: "50%",
-                            animation: "spin 1.1s linear infinite",
-                          }} />
-                          {/* Logo centred inside ring */}
-                          <div style={{
-                            position: "absolute", inset: 0,
-                            display: "flex", alignItems: "center", justifyContent: "center",
-                          }}>
-                            <img
-                              src="/logo-green.png"
-                              alt="AI To Market"
-                              style={{ width: 48, height: 48, objectFit: "contain", opacity: 0.85 }}
-                            />
+                          <div style={{ position: "absolute", inset: 0, border: "2.5px solid rgba(22,61,38,.1)", borderTop: "2.5px solid rgba(22,61,38,.65)", borderRadius: "50%", animation: "spin 1.1s linear infinite" }} />
+                          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <img src="/logo-green.svg" alt="AI To Market" style={{ width: 52, height: 28, objectFit: "contain" }} />
                           </div>
                         </div>
                         <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.45)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</span>
@@ -2222,7 +2221,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
                       <div style={{ position: "relative", width: 80, height: 80 }}>
                         <div style={{ position: "absolute", inset: 0, border: "2.5px solid rgba(22,61,38,.1)", borderTop: "2.5px solid rgba(22,61,38,.65)", borderRadius: "50%", animation: "spin 1.1s linear infinite" }} />
                         <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                          <img src="/logo-green.png" alt="AI To Market" style={{ width: 48, height: 48, objectFit: "contain", opacity: 0.85 }} />
+                          <img src="/logo-green.svg" alt="AI To Market" style={{ width: 52, height: 28, objectFit: "contain" }} />
                         </div>
                       </div>
                       <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.45)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</div>
@@ -2369,8 +2368,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [outlineProgress, setOutlineProgress] = useState(0);
   const outlineRafRef = useRef<number | null>(null);
   const outlineProgressRef = useRef(0);
-  const articleDripRafRef = useRef<number | null>(null);
-  const articleDripCeilingRef = useRef(64); // updated as stage events arrive
+  const articleBarRafRef = useRef<number | null>(null);
+  const articleBarTargetRef = useRef(0); // mutated by real events; rAF eases toward it
   const [articleError, setArticleError] = useState<string | null>(null);
   const [geoScore, setGeoScore] = useState<{ score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number } | null>(null);
   const [qualityFlags, setQualityFlags] = useState<{ section?: string; type: string; message: string }[]>([]);
@@ -2728,34 +2727,34 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     };
   }, [outlineLoading]);
 
-  // ── Article progress drip: update ceiling when server stage events advance phase ──
-  useEffect(() => {
-    const ceilings = [73, 84, 93, 99];
-    articleDripCeilingRef.current = ceilings[articlePhase] ?? 98;
-  }, [articlePhase]);
-
-  // ── Article progress drip: rubber-band toward ceiling so bar never freezes ──
+  // ── Article progress: NProgress-style single rAF easing toward a target ─────
+  // Real events (chunks, stage signals) only mutate articleBarTargetRef — never
+  // call setArticleProgress directly. The rAF reads the ref and eases toward it
+  // at 8% of remaining distance per frame (~60fps), so the bar cannot jump or drop.
   useEffect(() => {
     if (!articleLoading) {
-      if (articleDripRafRef.current !== null) {
-        cancelAnimationFrame(articleDripRafRef.current);
-        articleDripRafRef.current = null;
+      if (articleBarRafRef.current !== null) {
+        cancelAnimationFrame(articleBarRafRef.current);
+        articleBarRafRef.current = null;
       }
       return;
     }
+    articleBarTargetRef.current = 6; // instant early nudge so bar visibly starts
+    setArticleProgress(0);
     function tick() {
-      setArticleProgress(p => {
-        const ceil = articleDripCeilingRef.current;
-        if (p >= ceil) return p;
-        return p + (ceil - p) * 0.006; // ~0.5-3%/s depending on distance
+      setArticleProgress(prev => {
+        const t = articleBarTargetRef.current;
+        const diff = t - prev;
+        if (Math.abs(diff) < 0.05) return t;
+        return prev + diff * 0.08; // ease: fast when far, slows near target
       });
-      articleDripRafRef.current = requestAnimationFrame(tick);
+      articleBarRafRef.current = requestAnimationFrame(tick);
     }
-    articleDripRafRef.current = requestAnimationFrame(tick);
+    articleBarRafRef.current = requestAnimationFrame(tick);
     return () => {
-      if (articleDripRafRef.current !== null) {
-        cancelAnimationFrame(articleDripRafRef.current);
-        articleDripRafRef.current = null;
+      if (articleBarRafRef.current !== null) {
+        cancelAnimationFrame(articleBarRafRef.current);
+        articleBarRafRef.current = null;
       }
     };
   }, [articleLoading]);
@@ -3262,17 +3261,20 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               geo_score?: { score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number };
               brand_voice_status?: { status: string; residuals?: { paragraphIndex: number; violations: { type: string; match: string }[] }[] };
             };
-            // Live token progress: asymptote toward 60% (~4000 chars typical article)
+            // Chunks: push target forward — never backward, never call setState
             if (parsed.chunk) {
               charsReceived += parsed.chunk.length;
-              setArticleProgress(Math.min((charsReceived / 4000) * 60, 60));
+              articleBarTargetRef.current = Math.max(
+                articleBarTargetRef.current,
+                Math.min((charsReceived / 4000) * 65, 65)
+              );
             }
-            // Real server stage events: advance pill only — drip ceiling widens automatically,
-            // bar flows forward without any jump
-            if (parsed.stage === "brand_voice") setArticlePhase(1);
-            if (parsed.stage === "citation")    setArticlePhase(2);
-            if (parsed.stage === "scoring")     setArticlePhase(3);
+            // Stage events: open a new target ceiling; pill advances simultaneously
+            if (parsed.stage === "brand_voice") { setArticlePhase(1); articleBarTargetRef.current = Math.max(articleBarTargetRef.current, 72); }
+            if (parsed.stage === "citation")    { setArticlePhase(2); articleBarTargetRef.current = Math.max(articleBarTargetRef.current, 83); }
+            if (parsed.stage === "scoring")     { setArticlePhase(3); articleBarTargetRef.current = Math.max(articleBarTargetRef.current, 93); }
             if (parsed.article) {
+              articleBarTargetRef.current = 100;
               setArticleProgress(100);
               setArticleData(parsed.article);
               if (parsed.geo_score) setGeoScore(parsed.geo_score);
@@ -6209,8 +6211,8 @@ function ComboLoader({ stages, phases, progress, phaseOverride }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePhase]);
 
-  const pct = Math.min(100, progress);
-  const pctDisplay = pct >= 99.95 ? "100" : pct.toFixed(1);
+  const pct = Math.min(100, Math.max(0, progress));
+  const pctDisplay = Math.round(pct);
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(247,245,242,.82)", backdropFilter: "blur(4px)" }}>
@@ -6247,15 +6249,35 @@ function ComboLoader({ stages, phases, progress, phaseOverride }: {
         </div>
       </div>
 
-      {/* Progress bar — driven by real data from parent */}
+      {/* Progress bar — GPU-accelerated scaleX, no layout reflow */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14 }}>
-        <div style={{ flex: 1, height: 3, background: "rgba(22,61,38,.1)", borderRadius: 99, overflow: "hidden" }}>
-          <div style={{ height: "100%", width: `${pct}%`, background: "linear-gradient(90deg,#185F00,#50C878)", borderRadius: 99, transition: "width .3s ease" }} />
+        <div style={{ flex: 1, height: 4, background: "rgba(22,61,38,.08)", borderRadius: 99, overflow: "hidden", position: "relative" }}>
+          {/* Fill: scaleX driven by rAF at 60fps — no CSS transition needed */}
+          <div style={{
+            position: "absolute", inset: 0,
+            background: "linear-gradient(90deg,#185F00 0%,#2d8a3e 50%,#50C878 100%)",
+            transformOrigin: "left center",
+            transform: `scaleX(${pct / 100})`,
+            willChange: "transform",
+          }} />
+          {/* Shimmer sweep — always moving, makes bar feel alive */}
+          <div style={{
+            position: "absolute", inset: 0,
+            background: "linear-gradient(90deg,transparent 0%,rgba(255,255,255,.28) 50%,transparent 100%)",
+            animation: "shimmer-sweep 1.8s linear infinite",
+            pointerEvents: "none",
+          }} />
         </div>
-        <span style={{ fontSize: 12, fontWeight: 700, color: "#185F00", fontVariantNumeric: "tabular-nums", minWidth: 40, textAlign: "right" as const }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#185F00", fontVariantNumeric: "tabular-nums", minWidth: 36, textAlign: "right" as const }}>
           {pctDisplay}%
         </span>
       </div>
+      <style>{`
+        @keyframes shimmer-sweep {
+          from { transform: translateX(-100%); }
+          to   { transform: translateX(400%); }
+        }
+      `}</style>
     </div>
     </div>
   );
