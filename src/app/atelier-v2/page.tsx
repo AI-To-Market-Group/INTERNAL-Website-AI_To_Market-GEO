@@ -571,8 +571,9 @@ function BrandSelect<T extends string | number>({ value, onChange, options }: {
   );
 }
 
-function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, defaultFlow }: { onSettings: () => void; onQueue: () => void; onSessionCreated: (opportunityId: string, brief: BriefFields) => void; seedKeywords: string[]; defaultFlow?: FlowMode; }) {
+function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, defaultFlow, onFlowChange }: { onSettings: () => void; onQueue: () => void; onSessionCreated: (opportunityId: string, brief: BriefFields) => void; seedKeywords: string[]; defaultFlow?: FlowMode; onFlowChange?: (f: FlowMode) => void; }) {
   const [flow, setFlow] = useState<FlowMode>(defaultFlow ?? "single");
+  const handleFlowChange = (f: FlowMode) => { setFlow(f); onFlowChange?.(f); };
   const [step, setStep] = useState(1);
   const [promptText, setPromptText] = useState("what is generative engine optimization");
   const [adjacentOn, setAdjacentOn] = useState([0, 2]);
@@ -720,7 +721,7 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
       {/* Flow tabs */}
       <div style={{ display: "flex", gap: 6, padding: 5, marginBottom: 32, border: "1px solid rgba(22,61,38,.16)", borderRadius: 10, width: "fit-content", background: C.white }}>
         {(["single", "chat", "keywords"] as FlowMode[]).map(f => (
-          <button key={f} onClick={() => setFlow(f)} style={btnStyle(flow === f)}>
+          <button key={f} onClick={() => handleFlowChange(f)} style={btnStyle(flow === f)}>
             {f === "single" ? "One shot brief" : f === "chat" ? "Conversational" : "Keyword workspace"}
           </button>
         ))}
@@ -6375,29 +6376,34 @@ export default function AtelierV2Page() {
     return () => clearInterval(t);
   }, []);
 
-  // ── URL persistence: restore screen + active card on refresh ─────────────────
+  // ── URL persistence: restore screen + active card + generate tab on refresh ──
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const savedCard = params.get("card");
     const savedScreen = params.get("screen") as Screen | null;
+    const savedFlow = params.get("flow") as FlowMode | null;
     const validScreens: Screen[] = ["dashboard", "generate", "editor", "queue", "settings", "keywords", "publish", "analytics", "usage", "trash", "team"];
+    const validFlows: FlowMode[] = ["single", "chat", "keywords"];
     if (savedCard) {
-      // Card takes priority — always opens editor
       setActiveCardId(savedCard);
       setScreen("editor");
     } else if (savedScreen && validScreens.includes(savedScreen)) {
       setScreen(savedScreen);
     }
+    if (savedFlow && validFlows.includes(savedFlow)) {
+      setGenerateDefaultFlow(savedFlow);
+    }
   }, []);
 
-  // Keep URL in sync with current screen + card
+  // Keep URL in sync with current screen + card + generate tab
   useEffect(() => {
     const params = new URLSearchParams();
     if (screen !== "dashboard") params.set("screen", screen);
     if (activeCardId) params.set("card", activeCardId);
+    if (screen === "generate" && generateDefaultFlow !== "single") params.set("flow", generateDefaultFlow);
     const query = params.toString();
     window.history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : ""));
-  }, [screen, activeCardId]);
+  }, [screen, activeCardId, generateDefaultFlow]);
 
   // ── Current user role ─────────────────────────────────────────────────────────
   const [userRole, setUserRole] = useState<"admin" | "editor" | null>(null);
@@ -6669,7 +6675,7 @@ export default function AtelierV2Page() {
 
         <div style={{ flex: 1, padding: "32px 40px 64px" }}>
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}
-          {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} />}
+          {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} onFlowChange={setGenerateDefaultFlow} />}
           {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} batchQueueEntries={batchQueueEntries} onRemoveFromBatchQueue={handleRemoveFromBatchQueue} onActivateCard={handleActivateCard} />}
           {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} newCardId={newCardId} batchQueuedIds={batchQueueEntries.map(e => e.id)} onSendToBatchQueue={handleSendToBatchQueue} />}
           {/* {screen === "score" && <ScoreScreen onEditor={go("editor")} />} — score lives inside the article editor */}
