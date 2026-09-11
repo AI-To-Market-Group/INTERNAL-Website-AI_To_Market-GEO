@@ -1684,7 +1684,7 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
         .finally(() => setImgLoadingOrders(prev => { const n = new Set(prev); n.delete(order); return n; }));
     };
 
-    runFetch(0, article.title, "hero", `Hero illustration for article: ${article.title}`);
+    runFetch(0, article.title, "concept", `Hero overview illustration for: ${article.title}`);
     bodySections.forEach(s => {
       const summary = s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400);
       runFetch(s.order, s.heading, s.type, summary);
@@ -1802,6 +1802,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
         const heroImgs = sectionImages[0] ?? [];
         const heroSvg = heroImgs[activeImgIdx[0] ?? 0] ?? null;
         const heroLoading = imgLoadingOrders.has(0);
+        const heroFailed = !heroLoading && imgFailedOrders.has(0) && !heroSvg;
         const heroHovered = hoveredImg === 0;
         return (
           <div
@@ -1832,6 +1833,11 @@ const hlStyle = (heading: string): React.CSSProperties =>
                         </div>
                       </div>
                       <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,.5)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</span>
+                    </div>
+                  ) : heroFailed ? (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+                      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(255,255,255,.45)" strokeWidth="1.5" strokeLinecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,.4)", letterSpacing: ".1em" }}>CLICK TO RETRY</span>
                     </div>
                   ) : (
                     <svg viewBox="0 0 48 48" width="44" height="44" fill="none" stroke="rgba(255,255,255,.32)" strokeWidth="1.5" strokeLinecap="round">
@@ -2388,6 +2394,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const articleBarRafRef = useRef<number | null>(null);
   const articleBarTargetRef = useRef(0); // mutated by real events; rAF eases toward it
   const articlePhaseRef = useRef(0);    // mirrors articlePhase so rAF can read it without stale closure
+  const [articleSectionIdx, setArticleSectionIdx] = useState(0); // which section is currently being drafted
   const [articleError, setArticleError] = useState<string | null>(null);
   const [geoScore, setGeoScore] = useState<{ score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number } | null>(null);
   const [qualityFlags, setQualityFlags] = useState<{ section?: string; type: string; message: string }[]>([]);
@@ -3262,6 +3269,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     setArticleProgress(0);
     setArticlePhase(0);
     articlePhaseRef.current = 0;
+    setArticleSectionIdx(0);
     setEditorStep("article");
     try {
       const finalOutline = outline.map((s, i) => ({
@@ -3282,6 +3290,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       const decoder = new TextDecoder();
       let buf = "";
       let charsReceived = 0;
+      let clientAccumulated = "";
+      let lastSectionCount = 0;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -3301,13 +3311,20 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               geo_score?: { score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number };
               brand_voice_status?: { status: string; residuals?: { paragraphIndex: number; violations: { type: string; match: string }[] }[] };
             };
-            // Chunks: push target forward — never backward, never call setState
+            // Chunks: push target forward and detect section starts from streamed JSON
             if (parsed.chunk) {
               charsReceived += parsed.chunk.length;
+              clientAccumulated += parsed.chunk;
               articleBarTargetRef.current = Math.max(
                 articleBarTargetRef.current,
                 Math.min((charsReceived / 4000) * 65, 65)
               );
+              // Count "order": occurrences — each new section object starts with this key
+              const sectionCount = (clientAccumulated.match(/"order"\s*:/g) ?? []).length;
+              if (sectionCount > lastSectionCount) {
+                lastSectionCount = sectionCount;
+                setArticleSectionIdx(Math.max(0, sectionCount - 1));
+              }
             }
             // Stage events: open a new target ceiling; pill advances simultaneously
             if (parsed.stage === "brand_voice") { setArticlePhase(1); articlePhaseRef.current = 1; articleBarTargetRef.current = Math.max(articleBarTargetRef.current, 72); }
@@ -3940,7 +3957,12 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         <ComboLoader
           stages={["Drafting", "Reviewing", "Citing", "Scoring"]}
           phases={[
-            { label: "Writing article", text: "Generating introduction and body sections...\nEmbedding named sources and GEO-ready structure...\nExpanding outline bullets into full paragraphs..." },
+            {
+              label: outline[articleSectionIdx]
+                ? `Writing: ${outline[articleSectionIdx].title}${outline.length > 1 ? ` (${articleSectionIdx + 1}/${outline.length})` : ""}`
+                : "Writing article",
+              text: "Generating introduction and body sections...\nEmbedding named sources and GEO-ready structure...\nExpanding outline bullets into full paragraphs...",
+            },
             { label: "Reviewing brand voice", text: "Scanning for AI-tell phrases: 'leveraging', 'cutting-edge', 'revolutionize'...\nFlagged terms found — rewriting in direct, specific language...\nReplacing vague qualifiers with concrete claims and named examples...\nVerifying tone consistency across all sections...\nFinalising brand voice corrections..." },
             { label: "Adding citations", text: "Searching live web for verifiable B2B statistics...\nQuerying Gartner, McKinsey, Forrester and similar publishers...\nFound relevant report — validating URL and publication date...\nConfirmed: real, indexed source from 2023 or later...\nRewriting paragraph to embed citation naturally...\nHyperlink attached — readers can click through to verify..." },
             { label: "Scoring GEO quality", text: "✓  Named sources — verified\n✓  Statistics with attribution — checked\n✓  AI-tell density — assessed\n✓  FAQ fan-out coverage — structured\n⟳  Computing final GEO score..." },
