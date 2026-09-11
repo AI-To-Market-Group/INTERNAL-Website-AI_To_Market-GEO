@@ -6324,14 +6324,27 @@ function ComboLoader({ stages, phases, progress, phaseOverride }: {
   );
 }
 
+function readInitialUrlState() {
+  if (typeof window === "undefined") return { screen: "dashboard" as Screen, cardId: null as string | null, flow: "single" as FlowMode };
+  const params = new URLSearchParams(window.location.search);
+  const cardId = params.get("card");
+  const rawScreen = params.get("screen") as Screen | null;
+  const rawFlow = params.get("flow") as FlowMode | null;
+  const validScreens: Screen[] = ["dashboard", "generate", "editor", "queue", "settings", "keywords", "publish", "analytics", "usage", "trash", "team"];
+  const validFlows: FlowMode[] = ["single", "chat", "keywords"];
+  const screen: Screen = cardId ? "editor" : (rawScreen && validScreens.includes(rawScreen) ? rawScreen : "dashboard");
+  const flow: FlowMode = (rawFlow && validFlows.includes(rawFlow)) ? rawFlow : "single";
+  return { screen, cardId, flow };
+}
+
 export default function AtelierV2Page() {
-  const [screen, setScreen] = useState<Screen>("dashboard");
+  const [screen, setScreen] = useState<Screen>(() => readInitialUrlState().screen);
   const [collapsed, setCollapsed] = useState(false);
   const [dataState] = useState<DataState>("normal");
   const [currentOpportunityId, setCurrentOpportunityId] = useState<string | null>(null);
   const [draftCards, setDraftCards] = useState<DraftCard[]>([]);
   const [trashedCards, setTrashedCards] = useState<DraftCard[]>([]);
-  const [activeCardId, setActiveCardId] = useState<string | null>(null);
+  const [activeCardId, setActiveCardId] = useState<string | null>(() => readInitialUrlState().cardId);
   const [newCardId, setNewCardId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -6339,7 +6352,7 @@ export default function AtelierV2Page() {
     const t = setTimeout(() => setNewCardId(null), 4000);
     return () => clearTimeout(t);
   }, [newCardId]);
-  const [generateDefaultFlow, setGenerateDefaultFlow] = useState<FlowMode>("single");
+  const [generateDefaultFlow, setGenerateDefaultFlow] = useState<FlowMode>(() => readInitialUrlState().flow);
   const [presenceData, setPresenceData] = useState<PresenceUser[]>([]);
   const { data: settings } = useSettings();
 
@@ -6374,25 +6387,6 @@ export default function AtelierV2Page() {
     poll();
     const t = setInterval(poll, 8_000);
     return () => clearInterval(t);
-  }, []);
-
-  // ── URL persistence: restore screen + active card + generate tab on refresh ──
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const savedCard = params.get("card");
-    const savedScreen = params.get("screen") as Screen | null;
-    const savedFlow = params.get("flow") as FlowMode | null;
-    const validScreens: Screen[] = ["dashboard", "generate", "editor", "queue", "settings", "keywords", "publish", "analytics", "usage", "trash", "team"];
-    const validFlows: FlowMode[] = ["single", "chat", "keywords"];
-    if (savedCard) {
-      setActiveCardId(savedCard);
-      setScreen("editor");
-    } else if (savedScreen && validScreens.includes(savedScreen)) {
-      setScreen(savedScreen);
-    }
-    if (savedFlow && validFlows.includes(savedFlow)) {
-      setGenerateDefaultFlow(savedFlow);
-    }
   }, []);
 
   // Keep URL in sync with current screen + card + generate tab
