@@ -243,12 +243,18 @@ export async function POST(req: NextRequest, { params }: Params2) {
       if (!citation) return err("Could not find a verifiable real-world source for this claim", 502);
 
       // Step 2: use gpt-4o-mini to rewrite the paragraph with the real citation in scorer format
-      const rewriteSystem = `You are a GEO content editor. You have found a real, verified source for a claim in this paragraph. Rewrite the paragraph to naturally embed the citation using EXACTLY one of these formats (the scoring system recognises only these patterns):
-  • "According to ${citation.source} (${citation.year}), [claim]."
-  • "per ${citation.source} (${citation.year}), [claim]."
-  • "[sentence] — ${citation.source} ${citation.year}"
-The rewritten paragraph must keep all other sentences intact. Only the sentence containing the claim gets the attribution added.
-Respond with JSON only: { "newText": "<full rewritten paragraph>" }`;
+      // The source name is hyperlinked so readers can verify — the scorer strips HTML so the
+      // plain-text attribution still registers for GEO scoring.
+      const linkedSource = citation.url
+        ? `<a href="${citation.url}" target="_blank" rel="noopener noreferrer">${citation.source} (${citation.year})</a>`
+        : `${citation.source} (${citation.year})`;
+
+      const rewriteSystem = `You are a GEO content editor. You have found a real, verified source for a claim in this paragraph. Rewrite the paragraph to naturally embed the citation using EXACTLY one of these formats:
+  • "According to ${linkedSource}, [claim]."
+  • "per ${linkedSource}, [claim]."
+  • "[sentence] — ${linkedSource}"
+The attribution text must appear verbatim — do not change the HTML or the source name. Keep all other sentences in the paragraph unchanged.
+Respond with JSON only: { "newText": "<full rewritten paragraph with the HTML attribution embedded>" }`;
 
       const rewriteUser = `PARAGRAPH TO REWRITE:\n${bestPara.text}\n\nREAL SOURCE FOUND:\nPublisher: ${citation.source}\nYear: ${citation.year}\nFinding: ${citation.finding}\nURL: ${citation.url}`;
 
