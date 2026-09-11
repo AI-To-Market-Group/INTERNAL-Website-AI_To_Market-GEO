@@ -2722,9 +2722,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       setOutlineProgress(0);
       setOutlineLoaderVisible(true);
       function tick() {
-        // Organic trickle — keeps bar moving, caps below 97 so fetch completion still feels meaningful
+        // Organic trickle — slows near the end; 99.2 cap means bar never freezes even during long citation searches
         const t = outlineTargetRef.current;
-        if (t < 97) outlineTargetRef.current = Math.min(t + 0.018, 97);
+        const rate = t < 70 ? 0.018 : t < 90 ? 0.008 : 0.003;
+        if (t < 99.2) outlineTargetRef.current = Math.min(t + rate, 99.2);
         setOutlineProgress(prev => {
           const target = outlineTargetRef.current;
           const diff = target - prev;
@@ -2766,11 +2767,12 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     articleBarTargetRef.current = 6; // instant early nudge so bar visibly starts
     setArticleProgress(0);
     function tick() {
-      // Organic trickle: slowly push target forward so bar never looks frozen
-      // Caps are set just below the next stage milestone so real events still feel meaningful
+      // Organic trickle: phase caps keep early stages meaningful; after scoring stage (>90%)
+      // slow trickle to 99.2 so bar never freezes during long citation web-search waits
       const t = articleBarTargetRef.current;
-      const organicCap = t < 68 ? 68 : t < 80 ? 80 : t < 90 ? 90 : t < 97 ? 97 : t;
-      if (t < organicCap) articleBarTargetRef.current = Math.min(t + 0.018, organicCap);
+      const organicCap = t < 68 ? 68 : t < 80 ? 80 : t < 90 ? 90 : 99.2;
+      const rate = t < 90 ? 0.018 : 0.003;
+      if (t < organicCap) articleBarTargetRef.current = Math.min(t + rate, organicCap);
 
       setArticleProgress(prev => {
         const target = articleBarTargetRef.current;
@@ -6247,6 +6249,7 @@ function ComboLoader({ stages, phases, progress, phaseOverride }: {
 
   const pct = Math.min(100, Math.max(0, progress));
   const pctDisplay = Math.round(pct);
+  const isDoneTyping = displayed.length >= (phases[activePhase]?.text.length ?? 0);
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(247,245,242,.82)", backdropFilter: "blur(4px)" }}>
@@ -6279,7 +6282,7 @@ function ComboLoader({ stages, phases, progress, phaseOverride }: {
         </div>
         <div style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace", fontSize: 12.5, lineHeight: 1.75, color: "#163D26", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
           {displayed}
-          <span style={{ display: "inline-block", width: 2, height: 14, background: "#185F00", verticalAlign: "middle", marginLeft: 1, animation: "blink .65s step-end infinite" }} />
+          {!isDoneTyping && <span style={{ display: "inline-block", width: 2, height: 14, background: "#185F00", verticalAlign: "middle", marginLeft: 1, animation: "blink .65s step-end infinite" }} />}
         </div>
       </div>
 
