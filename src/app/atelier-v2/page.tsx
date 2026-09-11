@@ -2730,7 +2730,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
 
   // ── Article progress drip: update ceiling when server stage events advance phase ──
   useEffect(() => {
-    const ceilings = [64, 77, 87, 98];
+    const ceilings = [73, 84, 93, 99];
     articleDripCeilingRef.current = ceilings[articlePhase] ?? 98;
   }, [articlePhase]);
 
@@ -2747,7 +2747,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       setArticleProgress(p => {
         const ceil = articleDripCeilingRef.current;
         if (p >= ceil) return p;
-        return p + (ceil - p) * 0.0018; // ~0.1-1%/s depending on distance
+        return p + (ceil - p) * 0.006; // ~0.5-3%/s depending on distance
       });
       articleDripRafRef.current = requestAnimationFrame(tick);
     }
@@ -6208,7 +6208,8 @@ function ComboLoader({ stages, phases, progress, phaseOverride }: {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePhase]);
 
-  const pct = Math.min(100, Math.round(progress));
+  const pct = Math.min(100, progress);
+  const pctDisplay = pct >= 99.95 ? "100" : pct.toFixed(1);
 
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(247,245,242,.82)", backdropFilter: "blur(4px)" }}>
@@ -6250,8 +6251,8 @@ function ComboLoader({ stages, phases, progress, phaseOverride }: {
         <div style={{ flex: 1, height: 3, background: "rgba(22,61,38,.1)", borderRadius: 99, overflow: "hidden" }}>
           <div style={{ height: "100%", width: `${pct}%`, background: "linear-gradient(90deg,#185F00,#50C878)", borderRadius: 99, transition: "width .3s ease" }} />
         </div>
-        <span style={{ fontSize: 12, fontWeight: 700, color: "#185F00", fontVariantNumeric: "tabular-nums", minWidth: 34, textAlign: "right" as const }}>
-          {pct}%
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#185F00", fontVariantNumeric: "tabular-nums", minWidth: 40, textAlign: "right" as const }}>
+          {pctDisplay}%
         </span>
       </div>
     </div>
