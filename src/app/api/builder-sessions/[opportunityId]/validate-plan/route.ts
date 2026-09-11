@@ -7,7 +7,7 @@ import { err } from "@/lib/api-response";
 import { reviewArticleQuality } from "@/lib/article-quality";
 import { getGenerationLengthPrompt } from "@/lib/article-length-controller";
 import { shortenArticleToTarget, countArticleWords } from "@/lib/article-shorten-agent";
-import { getBrandVoicePrompt } from "@/lib/brand-voice";
+import { getBrandVoicePrompt, getWordCountTargets } from "@/lib/brand-voice";
 import { detectViolations, correctViolations } from "@/lib/brand-voice-checker";
 import { computeGeoScore } from "@/lib/geo-score";
 import { mapGenerateArticleResponseToDraft } from "@/lib/article-builder-utils";
@@ -274,11 +274,12 @@ export async function POST(req: NextRequest, { params }: Params) {
   const articleTitle = session?.topicTitle ?? "Article";
   const ctx = session?.opportunityContext;
   const targetKeywords = ctx?.tags ?? [];
+  const wordCountTargets = await getWordCountTargets();
 
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey || outline.length === 0) {
     const mock = mockArticleResponse(articleTitle, outline.length ? outline : [{ id: "1", headingLevel: "H2", title: "Introduction", bullets: [], type: "introduction" }]);
-    const qualityFlags = reviewArticleQuality(mock, targetKeywords);
+    const qualityFlags = reviewArticleQuality(mock, targetKeywords, wordCountTargets);
     // Persist the mock too — without this, refresh would lose it
     await updateSession(user.id, opportunityId, {
       article: mapGenerateArticleResponseToDraft(mock),
@@ -436,7 +437,7 @@ ${getGenerationLengthPrompt(outline.length)}`;
       brand_voice_status = { status: "error" };
     }
 
-    const qualityFlags = reviewArticleQuality(response, targetKeywords);
+    const qualityFlags = reviewArticleQuality(response, targetKeywords, wordCountTargets);
 
     // ── Normalise FAQ paragraph text to canonical "Q: ...\nA: ..." format ──
     // The mini model often emits "Question?: Answer" or "Question?Answer" instead

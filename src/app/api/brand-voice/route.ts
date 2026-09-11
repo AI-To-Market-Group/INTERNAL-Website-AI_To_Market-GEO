@@ -32,6 +32,7 @@ export async function PUT(req: NextRequest) {
     preferred_style?: string[];
     forbidden_phrases?: string[];
     guardrails?: { label: string; active: boolean }[];
+    word_count_targets?: Record<string, number>;
   };
 
   // Fetch current row id

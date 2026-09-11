@@ -23,6 +23,7 @@ type DbRow = {
   opportunity_context: unknown;
   current_step: number;
   sent_to_wordpress_at: string | null;
+  trashed_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -52,10 +53,46 @@ export async function dbGetAllSessions(
   const { data, error } = await supabaseAdmin
     .from("builder_sessions")
     .select("*")
+    .is("trashed_at", null)
     .order("updated_at", { ascending: false });
 
   if (error) throw error;
   return (data as DbRow[]).map(rowToSession);
+}
+
+export async function dbGetTrashedSessions(
+  _userId: string
+): Promise<BuilderSessionInfo[]> {
+  const { data, error } = await supabaseAdmin
+    .from("builder_sessions")
+    .select("*")
+    .not("trashed_at", "is", null)
+    .order("trashed_at", { ascending: false });
+
+  if (error) throw error;
+  return (data as DbRow[]).map(rowToSession);
+}
+
+export async function dbTrashSession(
+  _userId: string,
+  opportunityId: string
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("builder_sessions")
+    .update({ trashed_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+    .eq("opportunity_id", opportunityId);
+  if (error) throw error;
+}
+
+export async function dbRestoreSession(
+  _userId: string,
+  opportunityId: string
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("builder_sessions")
+    .update({ trashed_at: null, updated_at: new Date().toISOString() })
+    .eq("opportunity_id", opportunityId);
+  if (error) throw error;
 }
 
 export async function dbGetSession(
