@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { ok, err } from "@/lib/api-response";
 import { requireUser } from "@/lib/api-auth";
 import { chatJson } from "@/lib/openai-article";
+import { searchForCitation, rewriteWithCitation } from "@/lib/citation-finder";
 
 type Params = { params: Promise<{ opportunityId: string }> };
 
@@ -100,77 +101,6 @@ Return them as new paragraphs to append to the FAQ section.
 Respond with JSON only: { "sectionHeading": "<exact FAQ section heading>", "appendParagraphs": ["Q: q1\\nA: a1", "Q: q2\\nA: a2"] }`,
 };
 
-// ── Web-search citation finder (gpt-4o-search-preview) ──────────────────────
-// Searches the live web for a real, verifiable source that supports the claim.
-// Returns structured citation info, or null if the search finds nothing usable.
-
-interface FoundCitation {
-  source: string;   // e.g. "McKinsey & Company"
-  year: string;     // e.g. "2024"
-  url: string;      // actual URL found
-  finding: string;  // the specific stat or finding in one sentence
-}
-
-async function searchForCitation(
-  claim: string,
-  apiKey: string
-): Promise<FoundCitation | null> {
-  try {
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-      body: JSON.stringify({
-        model: "gpt-4o-search-preview",
-        web_search_options: {},
-        messages: [
-          {
-            role: "user",
-            content: `Search the web and find ONE real, verifiable statistic or finding from a credible B2B source that is directly relevant to this claim:
-
-CLAIM: "${claim}"
-
-Requirements:
-- Must be from a real, published report or article (Gartner, Forrester, McKinsey, HubSpot, Salesforce, LinkedIn, IDC, Deloitte, PwC, Harvard Business Review, MIT Sloan, Bain, BCG, Accenture, or similar credible publisher)
-- Must actually exist — do not invent statistics
-- Must be from 2022 or later
-- The finding must genuinely relate to the claim topic
-
-Respond with ONLY this JSON object, nothing else:
-{
-  "source": "Exact publisher name",
-  "year": "YYYY",
-  "url": "https://actual-url-of-the-report-or-article",
-  "finding": "The specific statistic or finding in one sentence, exactly as found"
-}
-
-If you cannot find a real, verifiable source, respond with: {"notFound": true}`,
-          },
-        ],
-      }),
-    });
-
-    if (!res.ok) return null;
-    const data = await res.json() as { choices?: { message?: { content?: string } }[] };
-    const content = data.choices?.[0]?.message?.content?.trim() ?? "";
-
-    // Extract JSON from the response (model may wrap it in markdown)
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return null;
-
-    const parsed = JSON.parse(jsonMatch[0]) as Partial<FoundCitation> & { notFound?: boolean };
-    if (parsed.notFound || !parsed.source || !parsed.finding) return null;
-
-    return {
-      source: parsed.source,
-      year: parsed.year ?? new Date().getFullYear().toString(),
-      url: parsed.url ?? "",
-      finding: parsed.finding,
-    };
-  } catch {
-    return null;
-  }
-}
-
 type Params2 = Params;
 
 export async function POST(req: NextRequest, { params }: Params2) {
@@ -242,32 +172,16 @@ export async function POST(req: NextRequest, { params }: Params2) {
       const citation = await searchForCitation(claim, apiKey);
       if (!citation) return err("Could not find a verifiable real-world source for this claim", 502);
 
-      // Step 2: use gpt-4o-mini to rewrite the paragraph with the real citation in scorer format
-      // The source name is hyperlinked so readers can verify — the scorer strips HTML so the
-      // plain-text attribution still registers for GEO scoring.
-      const linkedSource = citation.url
-        ? `<a href="${citation.url}" target="_blank" rel="noopener noreferrer">${citation.source} (${citation.year})</a>`
-        : `${citation.source} (${citation.year})`;
-
-      const rewriteSystem = `You are a GEO content editor. You have found a real, verified source for a claim in this paragraph. Rewrite the paragraph to naturally embed the citation using EXACTLY one of these formats:
-  • "According to ${linkedSource}, [claim]."
-  • "per ${linkedSource}, [claim]."
-  • "[sentence] — ${linkedSource}"
-The attribution text must appear verbatim — do not change the HTML or the source name. Keep all other sentences in the paragraph unchanged.
-Respond with JSON only: { "newText": "<full rewritten paragraph with the HTML attribution embedded>" }`;
-
-      const rewriteUser = `PARAGRAPH TO REWRITE:\n${bestPara.text}\n\nREAL SOURCE FOUND:\nPublisher: ${citation.source}\nYear: ${citation.year}\nFinding: ${citation.finding}\nURL: ${citation.url}`;
-
-      try {
-        const rewrite = await chatJson<{ newText?: string }>(rewriteSystem, rewriteUser, "gpt-4o-mini", { userId: user.id, feature: "fix-geo-cited-claims" });
-        if (!rewrite.newText) return err("Rewrite returned no content", 502);
-        return ok({
-          multifix: [{ sectionHeading: bodySection.heading, paragraphId: bestPara.id, newText: rewrite.newText }],
-          citationUrl: citation.url,
-        });
-      } catch (e) {
-        return err(e instanceof Error ? e.message : "Rewrite error", 502);
-      }
+      // Step 2: rewrite the paragraph with the real citation (hyperlinked, scorer-compatible)
+      const newText = await rewriteWithCitation(bestPara.text, citation, {
+        userId: user.id,
+        feature: "fix-geo-cited-claims",
+      });
+      if (!newText) return err("Rewrite returned no content", 502);
+      return ok({
+        multifix: [{ sectionHeading: bodySection.heading, paragraphId: bestPara.id, newText }],
+        citationUrl: citation.url,
+      });
     }
 
     const system = GEO_FIX_PROMPTS[checkLabel] ?? GEO_FIX_PROMPTS["Statistics with sources"];

@@ -11,6 +11,7 @@ import { getBrandVoicePrompt, getWordCountTargets } from "@/lib/brand-voice";
 import { detectViolations, correctViolations } from "@/lib/brand-voice-checker";
 import { computeGeoScore } from "@/lib/geo-score";
 import { mapGenerateArticleResponseToDraft } from "@/lib/article-builder-utils";
+import { searchForCitation, rewriteWithCitation } from "@/lib/citation-finder";
 import type {
   OutlineSection,
   GenerateArticleResponse,
@@ -454,6 +455,33 @@ ${getGenerationLengthPrompt(outline.length, targetWords)}${flagModifiers.length 
     } catch (e) {
       console.error("[validate-plan] brand voice correction failed:", e);
       brand_voice_status = { status: "error" };
+    }
+
+    // ── Auto-embed citation so "Cited claims" GEO check passes from the start ──
+    // Non-fatal: if the web search or rewrite fails, the article still ships.
+    try {
+      const bodySection = response.sections.find(
+        (s) => !["introduction", "faq", "conclusion"].includes(s.type)
+      );
+      if (bodySection && bodySection.content.paragraphs.length > 0) {
+        const bestPara = bodySection.content.paragraphs.reduce((a, b) =>
+          a.text.length > b.text.length ? a : b
+        );
+        const claim = bestPara.text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+        const citation = await searchForCitation(claim, apiKey!);
+        if (citation) {
+          const newText = await rewriteWithCitation(bestPara.text, citation, {
+            userId: user.id,
+            feature: "auto-citation",
+          });
+          if (newText) {
+            const idx = bodySection.content.paragraphs.findIndex((p) => p.id === bestPara.id);
+            if (idx >= 0) bodySection.content.paragraphs[idx].text = newText;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[validate-plan] auto-citation failed (non-fatal):", e);
     }
 
     const qualityFlags = reviewArticleQuality(response, targetKeywords, wordCountTargets);
