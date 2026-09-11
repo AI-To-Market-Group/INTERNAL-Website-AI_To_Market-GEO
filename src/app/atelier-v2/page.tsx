@@ -1642,6 +1642,7 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
   const [sectionImages, setSectionImages] = useState<Record<number, string[]>>({});
   const [activeImgIdx, setActiveImgIdx] = useState<Record<number, number>>({});
   const [imgLoadingOrders, setImgLoadingOrders] = useState<Set<number>>(new Set());
+  const [imgFailedOrders, setImgFailedOrders] = useState<Set<number>>(new Set());
   const [hoveredImg, setHoveredImg] = useState<number | null>(null);
   // Image modal state
   type ImgModal = { order: number; heading: string; sType: string; prompt: string };
@@ -1658,39 +1659,33 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
     );
     setSectionImages({});
     setActiveImgIdx({});
+    setImgFailedOrders(new Set());
     const orders = new Set([0, ...bodySections.map(s => s.order)]);
     setImgLoadingOrders(orders);
-    // Hero image (order 0)
-    fetch("/api/illustration-generate-claude", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ heading: article.title, sectionType: "hero", summary: `Hero illustration for article: ${article.title}` }),
-    })
-      .then(r => r.json())
-      .then((data: { svgString?: string | null }) => {
-        if (data.svgString) {
-          setSectionImages(prev => ({ ...prev, [0]: [data.svgString!, ...(prev[0] ?? [])] }));
-          setActiveImgIdx(prev => ({ ...prev, [0]: 0 }));
-        }
-      })
-      .catch(() => {})
-      .finally(() => setImgLoadingOrders(prev => { const n = new Set(prev); n.delete(0); return n; }));
-    bodySections.forEach(s => {
-      const summary = s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400);
+
+    const runFetch = (order: number, heading: string, sectionType: string, summary: string) => {
       fetch("/api/illustration-generate-claude", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ heading: s.heading, sectionType: s.type, summary }),
+        body: JSON.stringify({ heading, sectionType, summary }),
       })
         .then(r => r.json())
         .then((data: { svgString?: string | null }) => {
           if (data.svgString) {
-            setSectionImages(prev => ({ ...prev, [s.order]: [data.svgString!, ...(prev[s.order] ?? [])] }));
-            setActiveImgIdx(prev => ({ ...prev, [s.order]: 0 }));
+            setSectionImages(prev => ({ ...prev, [order]: [data.svgString!, ...(prev[order] ?? [])] }));
+            setActiveImgIdx(prev => ({ ...prev, [order]: 0 }));
+          } else {
+            setImgFailedOrders(prev => { const n = new Set(prev); n.add(order); return n; });
           }
         })
-        .catch(() => {})
-        .finally(() => setImgLoadingOrders(prev => { const n = new Set(prev); n.delete(s.order); return n; }));
+        .catch(() => setImgFailedOrders(prev => { const n = new Set(prev); n.add(order); return n; }))
+        .finally(() => setImgLoadingOrders(prev => { const n = new Set(prev); n.delete(order); return n; }));
+    };
+
+    runFetch(0, article.title, "hero", `Hero illustration for article: ${article.title}`);
+    bodySections.forEach(s => {
+      const summary = s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400);
+      runFetch(s.order, s.heading, s.type, summary);
     });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [article.title]);
@@ -1888,6 +1883,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
                 const idx = activeImgIdx[s.order] ?? 0;
                 const activeSvg = imgs[idx] ?? null;
                 const isLoading = imgLoadingOrders.has(s.order);
+                const isFailed = !isLoading && imgFailedOrders.has(s.order) && !activeSvg;
                 const isHovered = hoveredImg === s.order;
                 const summary = s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400);
                 return (
@@ -1933,6 +1929,11 @@ const hlStyle = (heading: string): React.CSSProperties =>
                           </div>
                         </div>
                         <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.45)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</span>
+                      </div>
+                    ) : isFailed ? (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="rgba(249,57,67,.5)" strokeWidth="1.5" strokeLinecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
+                        <span style={{ fontSize: 9, fontWeight: 700, color: "rgba(249,57,67,.6)", letterSpacing: ".08em" }}>RETRY</span>
                       </div>
                     ) : (
                       <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(22,61,38,.22)" strokeWidth="1.5" strokeLinecap="round">
@@ -3649,8 +3650,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         )}
 
         {/* Outline sections */}
-        {!outlineLoaderVisible && outline.length > 0 && (
-          <>
+        {outline.length > 0 && (
+          <div style={{ filter: outlineLoaderVisible ? "blur(8px)" : "none", transition: "filter .5s ease", pointerEvents: outlineLoaderVisible ? "none" : "auto", userSelect: outlineLoaderVisible ? "none" : "auto" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {outline.map((section, idx) => {
                 const typeStyle = sectionTypeStyle(section.type);
@@ -3915,7 +3916,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                 {outline.length} sections · click any row to expand
               </div>
             </div>
-          </>
+          </div>
         )}
       </div>
     );
@@ -3956,7 +3957,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       )}
 
       {/* Newsletter + right sidebar */}
-      {articleData && !articleLoaderVisible && (() => {
+      {articleData && (() => {
         const score = geoScore?.score ?? 0;
         const scoreColor = score >= 80 ? C.mid : score >= 60 ? "#F5A623" : C.red;
         const checks = geoScore?.checks ?? [];
@@ -3966,7 +3967,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         const seoSlugDisplay = seoSlug || seoPageTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80);
 
         return (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 272px", gap: 24, alignItems: "start" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 272px", gap: 24, alignItems: "start", filter: articleLoaderVisible ? "blur(8px)" : "none", transition: "filter .5s ease", pointerEvents: articleLoaderVisible ? "none" : "auto", userSelect: articleLoaderVisible ? "none" : "auto" }}>
             {/* Left: newsletter */}
             <NewsletterArticle
               article={articleData}
