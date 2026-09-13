@@ -13,7 +13,12 @@ function articleToBlocks(article: GenerateArticleResponse): ArticleDraftBlock[] 
       id: `s${section.order}`,
       type: "heading",
       content: section.heading,
-      meta: { sectionOrder: section.order, sectionType: section.type },
+      meta: {
+        sectionOrder: section.order,
+        sectionType: section.type,
+        eyebrow: section.eyebrow,
+        bullets: (section.content.bullets ?? []).map(b => typeof b === "string" ? b : String(b ?? "")).filter(Boolean),
+      },
     });
     for (const para of section.content.paragraphs) {
       blocks.push({
@@ -47,6 +52,6 @@ export async function POST(req: NextRequest, { params }: Params) {
     updatedAt: new Date().toISOString(),
   };
 
-  await updateSession(user.id, opportunityId, { article: draft });
+  await updateSession(user.id, opportunityId, { article: draft, currentStep: 2 });
   return ok({ savedAt: draft.updatedAt });
 }

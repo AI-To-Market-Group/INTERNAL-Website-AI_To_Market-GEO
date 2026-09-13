@@ -319,7 +319,7 @@ export interface GenerateArticleSectionOutput {
 
 export interface QualityFlag {
   section?: string;
-  type: "thin_section" | "missing_keyword" | "attribution_overuse";
+  type: "thin_section" | "missing_keyword" | "attribution_overuse" | "malformed_content";
   message: string;
 }
 
@@ -471,6 +471,8 @@ export interface BuilderSessionInfo {
   currentStep?: 1 | 2 | 3;
   /** ISO datetime when draft was sent to WordPress */
   sentToWordPressAt?: string | null;
+  /** ISO datetime when card was added to the batch queue; absent/null = not queued */
+  batchQueuedAt?: string | null;
   /** Opportunity metadata stored at session creation to inform generation */
   opportunityContext?: {
     theme?: string;
@@ -479,6 +481,8 @@ export interface BuilderSessionInfo {
     justification_signals?: string[];
     tags?: string[];
     creatorEmail?: string;
+    /** ISO datetime when card was added to the batch queue; null = not queued */
+    batchQueuedAt?: string | null;
   };
 }
 

@@ -6,6 +6,60 @@ import type { WordPressMetadata } from "@/types";
 
 type Params = { params: Promise<{ opportunityId: string }> };
 
+/** Upload the hero image to Sanity's asset API and return the asset _id, or null on failure. */
+async function uploadHeroToSanity(
+  heroImage: string,
+  projectId: string,
+  dataset: string,
+  token: string,
+  apiVersion: string
+): Promise<string | null> {
+  try {
+    let body: Buffer;
+    let contentType: string;
+
+    if (heroImage.startsWith("data:")) {
+      const commaIdx = heroImage.indexOf(",");
+      const header = heroImage.slice(0, commaIdx);
+      const data = heroImage.slice(commaIdx + 1);
+      const mimeMatch = header.match(/data:([^;,]+)/);
+      contentType = mimeMatch?.[1] ?? "image/svg+xml";
+
+      if (header.includes(";base64")) {
+        body = Buffer.from(data, "base64");
+      } else {
+        // URL-encoded (e.g. data:image/svg+xml;charset=utf-8,...)
+        body = Buffer.from(decodeURIComponent(data), "utf-8");
+      }
+    } else if (heroImage.startsWith("http")) {
+      const res = await fetch(heroImage);
+      if (!res.ok) return null;
+      contentType = res.headers.get("content-type")?.split(";")[0] ?? "image/jpeg";
+      body = Buffer.from(await res.arrayBuffer());
+    } else {
+      // Raw SVG string
+      contentType = "image/svg+xml";
+      body = Buffer.from(heroImage, "utf-8");
+    }
+
+    const ext = contentType.includes("svg") ? "svg" : contentType.includes("png") ? "png" : "jpg";
+    const uploadRes = await fetch(
+      `https://${projectId}.api.sanity.io/v${apiVersion}/assets/images/${dataset}?filename=hero.${ext}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": contentType, Authorization: `Bearer ${token}` },
+        body,
+      }
+    );
+
+    if (!uploadRes.ok) return null;
+    const uploadData = await uploadRes.json() as { document?: { _id?: string } };
+    return uploadData.document?._id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(req: NextRequest, { params }: Params) {
   const { user, error } = await requireUser();
   if (error) return error;
@@ -27,6 +81,9 @@ export async function POST(req: NextRequest, { params }: Params) {
     seoTags?: string[];
     seoExcerpt?: string;
     seoFocusKeyword?: string;
+    seoCategory?: string;
+    heroImage?: string;
+    sectionImages?: (string | null)[];
   } = {};
   try { body = (await req.json()) as typeof body; } catch { /* no body is fine */ }
 
@@ -42,11 +99,40 @@ export async function POST(req: NextRequest, { params }: Params) {
     .replace(/[^a-z0-9-]/g, "")
     .slice(0, 80);
 
+  // Upload images to Sanity assets (non-blocking — failures won't stop publish)
+  let thumbnailAssetId: string | null = null;
+  let sectionAssetIds: (string | null)[] | undefined;
+  const projectId = process.env.SANITY_PROJECT_ID;
+  const dataset = process.env.SANITY_DATASET ?? "production";
+  const token = process.env.SANITY_API_TOKEN;
+  const apiVersion = process.env.SANITY_API_VERSION ?? "2024-01-01";
+
+  if (projectId && token) {
+    const uploadTasks: Promise<string | null>[] = [];
+
+    if (body.heroImage) {
+      uploadTasks.push(uploadHeroToSanity(body.heroImage, projectId, dataset, token, apiVersion));
+    } else {
+      uploadTasks.push(Promise.resolve(null));
+    }
+
+    const sectionImgs = body.sectionImages ?? [];
+    for (const img of sectionImgs) {
+      uploadTasks.push(img ? uploadHeroToSanity(img, projectId, dataset, token, apiVersion) : Promise.resolve(null));
+    }
+
+    const results = await Promise.all(uploadTasks);
+    thumbnailAssetId = results[0];
+    if (sectionImgs.length > 0) {
+      sectionAssetIds = results.slice(1);
+    }
+  }
+
   const wpMetadata: WordPressMetadata = {
     title,
     slug,
-    excerpt: body.seoExcerpt ?? "",          // LLM-generated excerpt (≤200 chars)
-    category: "News",
+    excerpt: body.seoExcerpt ?? "",
+    category: body.seoCategory ?? "",
     tags: body.seoTags ?? [],
     seo_title: body.seoTitle ?? title.slice(0, 60),
     seo_description: body.seoMetaDesc ?? "",
@@ -54,7 +140,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   };
 
   try {
-    const { documentId, studioUrl } = await publishToSanity(session, wpMetadata);
+    const { documentId, studioUrl } = await publishToSanity(session, wpMetadata, thumbnailAssetId ?? undefined, sectionAssetIds);
     // Mark session as sent in Supabase so the card grid can show it in "Sent to Sanity"
     try {
       const { updateSession } = await import("@/lib/builder-sessions-store");

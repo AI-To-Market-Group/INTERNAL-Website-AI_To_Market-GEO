@@ -74,7 +74,7 @@ function slugify(text: string): string {
     .slice(0, 80);
 }
 
-function blocksToContentGeo(blocks: ArticleDraftBlock[]) {
+function blocksToContentGeo(blocks: ArticleDraftBlock[], sectionAssetIds?: (string | null)[]) {
   type GeoSection = {
     _type: "geoSection";
     _key: string;
@@ -83,6 +83,7 @@ function blocksToContentGeo(blocks: ArticleDraftBlock[]) {
     heading: string;
     paragraphs: string[];
     bullets: string[];
+    image?: { _type: "image"; asset: { _type: "reference"; _ref: string } };
   };
 
   const sections: GeoSection[] = [];
@@ -91,14 +92,17 @@ function blocksToContentGeo(blocks: ArticleDraftBlock[]) {
   for (const block of blocks) {
     if (block.type === "heading") {
       if (current) sections.push(current);
+      const idx = sections.length; // index this section will have once pushed
+      const assetId = sectionAssetIds?.[idx] ?? null;
       current = {
         _type: "geoSection",
-        _key: `geo-${sections.length}`,
+        _key: `geo-${idx}`,
         sectionType: block.meta?.sectionType ?? "section",
         eyebrow: block.meta?.eyebrow ?? "",
         heading: stripHtmlToPlain(block.content),
         paragraphs: [],
         bullets: block.meta?.bullets ?? [],
+        ...(assetId ? { image: { _type: "image", asset: { _type: "reference", _ref: assetId } } } : {}),
       };
     } else if (block.type === "paragraph" && current) {
       const isFaq = block.meta?.sectionType === "faq"
@@ -239,7 +243,9 @@ export async function publishLiveToSanity(sessionId: string): Promise<SanityPubl
 
 export async function publishToSanity(
   session: BuilderSessionInfo,
-  wpMetadata: WordPressMetadata | null | undefined
+  wpMetadata: WordPressMetadata | null | undefined,
+  thumbnailAssetId?: string,
+  sectionAssetIds?: (string | null)[]
 ): Promise<SanityPublishResult> {
   const projectId = process.env.SANITY_PROJECT_ID;
   const dataset = process.env.SANITY_DATASET ?? "production";
@@ -260,17 +266,23 @@ export async function publishToSanity(
 
   const documentId = `drafts.geo-${session.sessionId}`;
 
-  const doc = {
+  // GEO articles always use the "geo" content type (drives the contentGeo tab).
+  // The user-facing topic label lives in customCategory and drives blog filter buttons.
+  const customCategory = wpMetadata?.category?.trim() || undefined;
+
+  const doc: Record<string, unknown> = {
     _type: "blogPost",
     _id: documentId,
     title,
     slug: { _type: "slug", current: slug },
     category: "geo",
+    ...(customCategory ? { customCategory } : {}),
     excerpt,
     author: "AI To Market",
     publishedAt,
     readTime: estimateReadTime(draft.blocks),
-    contentGeo: blocksToContentGeo(draft.blocks),
+    contentGeo: blocksToContentGeo(draft.blocks, sectionAssetIds),
+    ...(thumbnailAssetId ? { thumbnail: { _type: "image", asset: { _type: "reference", _ref: thumbnailAssetId } } } : {}),
   };
 
   const res = await fetch(

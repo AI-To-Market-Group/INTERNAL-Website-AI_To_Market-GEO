@@ -74,7 +74,19 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
         id: (p as GenerateArticleParagraph).id ?? i * 10 + j + 1,
         text: (p as GenerateArticleParagraph).text ?? "",
       })),
-      bullets: s.content?.bullets ?? [],
+      // Defensive: the schema example only shows an empty "bullets": [] with no
+      // populated-item example, so the model occasionally mirrors the nearby
+      // {id, text} paragraph shape instead of plain strings. Coerce anything
+      // that isn't already a string so the client never renders "[object Object]".
+      bullets: (s.content?.bullets ?? []).map((b) => {
+        if (typeof b === "string") return b;
+        if (b && typeof b === "object") {
+          const obj = b as Record<string, unknown>;
+          const text = obj.text ?? obj.content ?? obj.value ?? obj.finding;
+          if (typeof text === "string") return text;
+        }
+        return String(b ?? "").trim();
+      }).filter((b) => b && b !== "[object Object]"),
     },
   }));
 
@@ -181,23 +193,30 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
   // 4. True empty-section backfill: if a section is STILL empty (no paragraphs,
   //    no bullets), pull prose from the outline bullets so the section heading
   //    isn't followed by a void.
+  //    Note: every outline line is prefixed "What to cover:"/"Angle:"/"Avoid:" —
+  //    only "Avoid:" (pitfalls to skip) should be dropped wholesale; the other
+  //    two carry real scaffolding content and must have just their label stripped,
+  //    not the whole line discarded (that previously zeroed out every fallback).
   for (const sec of sections) {
+    const isConclusion = /^conclusion$/i.test(sec.type);
     if (sec.content.paragraphs.length > 0) continue;
+    if (isConclusion && sec.content.bullets.length > 0) continue; // already backfilled by step 3/3b
     const outlineSec = outline.find((o) => o.title === sec.heading) ?? outline[sec.order - 1];
-    const bulletProse = outlineSec?.content
+    const usableLines = outlineSec?.content
       ? outlineSec.content
           .split("\n")
           .map((l) => l.replace(/^[\s•\-*]+/, "").trim())
           .filter(Boolean)
-          .filter((l) => !/^(what to cover|angle|avoid)\s*:/i.test(l))
-          .join(" ")
-          .replace(/\s+/g, " ")
-          .trim()
-      : "";
-    if (bulletProse) {
-      sec.content.paragraphs = [{ id: sec.order * 10 + 1, text: bulletProse }];
+          .filter((l) => !/^avoid\s*:/i.test(l))
+          .map((l) => l.replace(/^(?:what to cover|angle)\s*:\s*/i, "").trim())
+          .filter(Boolean)
+      : [];
+    if (usableLines.length === 0) continue; // still nothing — leave empty rather than write embarrassing placeholder
+    if (isConclusion) {
+      sec.content.bullets = usableLines;
+    } else {
+      sec.content.paragraphs = [{ id: sec.order * 10 + 1, text: usableLines.join(" ") }];
     }
-    // If still nothing, leave empty rather than write embarrassing placeholder
   }
 
   // 4. Place orphan Q/A into the faq section (or create one)
@@ -348,6 +367,8 @@ Return valid JSON in this exact shape:
   ]
 }
 
+"bullets" is ALWAYS an array of plain strings — one sentence per string, e.g. "bullets": ["First takeaway, a complete sentence.", "Second takeaway, a complete sentence."]. NEVER an array of objects — no {"id":..., "text":...} shape there (that shape is only for "paragraphs"). Leave "bullets" as [] unless the section type below says to use it.
+
 CRITICAL — THE OUTLINE IS SCAFFOLDING, NOT CONTENT
 The outline bullets describe WHAT to cover. Your job is to write the actual article. NEVER quote outline bullets back as the final content with minor rephrasing — that produces lazy, useless articles. Every outline bullet must become substantial new content with details GPT adds: a specific tool or platform name, a real-world workflow example, a mechanism explanation, a tradeoff acknowledgment, or a "watch out for" tip. If the outline says "use agentic automation", you write WHY it works, WHEN it breaks down, and what specific tool or workflow pattern (n8n, Make, Claude, GPT-4o) fits each use case.
 
@@ -462,27 +483,44 @@ ${getGenerationLengthPrompt(outline.length, targetWords)}${flagModifiers.length 
     sendEvent({ stage: "citation" });
 
     // ── Auto-embed citation so "Cited claims" GEO check passes from the start ──
-    // Non-fatal: if the web search or rewrite fails, the article still ships.
+    // Non-fatal: if the web search or rewrite fails for every candidate, the
+    // article still ships without a hyperlinked citation. Tries the 2 longest
+    // body paragraphs (across all non-intro/faq/conclusion sections) rather
+    // than only the single longest one — the search-preview model frequently
+    // can't verify a source for a given claim, and a single silent attempt
+    // meant most articles shipped with zero clickable citations.
     try {
-      const bodySection = response.sections.find(
+      const bodySections = response.sections.filter(
         (s) => !["introduction", "faq", "conclusion"].includes(s.type)
       );
-      if (bodySection && bodySection.content.paragraphs.length > 0) {
-        const bestPara = bodySection.content.paragraphs.reduce((a, b) =>
-          a.text.length > b.text.length ? a : b
-        );
-        const claim = bestPara.text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+      const candidates = bodySections
+        .flatMap((s) => s.content.paragraphs.map((p) => ({ section: s, para: p })))
+        .sort((a, b) => b.para.text.length - a.para.text.length)
+        .slice(0, 2);
+
+      console.log(`[auto-citation] trying ${candidates.length} candidate paragraph(s)`);
+      for (const { section, para } of candidates) {
+        const claim = para.text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
         const citation = await searchForCitation(claim, apiKey!);
-        if (citation) {
-          const newText = await rewriteWithCitation(bestPara.text, citation, {
-            userId: user.id,
-            feature: "auto-citation",
-          });
-          if (newText) {
-            const idx = bodySection.content.paragraphs.findIndex((p) => p.id === bestPara.id);
-            if (idx >= 0) bodySection.content.paragraphs[idx].text = newText;
-          }
+        if (!citation) {
+          console.warn("[auto-citation] no verifiable source found for candidate");
+          continue;
         }
+        console.log(`[auto-citation] found: ${citation.source} (${citation.year}) → ${citation.url}`);
+        const newText = await rewriteWithCitation(para.text, citation, {
+          userId: user.id,
+          feature: "auto-citation",
+        });
+        if (!newText) {
+          console.warn("[auto-citation] rewrite returned nothing");
+          continue;
+        }
+        const idx = section.content.paragraphs.findIndex((p) => p.id === para.id);
+        if (idx >= 0) {
+          section.content.paragraphs[idx].text = newText;
+          console.log(`[auto-citation] embedded, hyperlinked=${/<a\s+href=/i.test(newText)}`);
+        }
+        break; // succeeded — no need to try the second candidate
       }
     } catch (e) {
       console.warn("[validate-plan] auto-citation failed (non-fatal):", e);

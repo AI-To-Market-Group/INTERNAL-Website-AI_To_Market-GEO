@@ -10,7 +10,7 @@ type Params = { params: Promise<{ opportunityId: string }> };
 function blocksToV2Article(blocks: ArticleDraftBlock[], title: string): GenerateArticleResponse {
   // Group blocks by sectionOrder from meta, preserving type from meta
   const sectionMap = new Map<number, {
-    order: number; type: string; heading: string;
+    order: number; type: string; heading: string; eyebrow?: string; bullets: string[];
     paragraphs: { id: number; text: string }[];
   }>();
 
@@ -24,6 +24,8 @@ function blocksToV2Article(blocks: ArticleDraftBlock[], title: string): Generate
           order: currentOrder,
           type: (block.meta?.sectionType as string | undefined) ?? "section",
           heading: block.content ?? "",
+          eyebrow: block.meta?.eyebrow,
+          bullets: block.meta?.bullets ?? [],
           paragraphs: [],
         });
       }
@@ -42,7 +44,8 @@ function blocksToV2Article(blocks: ArticleDraftBlock[], title: string): Generate
       order: s.order,
       type: s.type,
       heading: s.heading,
-      content: { paragraphs: s.paragraphs, bullets: [] as string[] },
+      eyebrow: s.eyebrow,
+      content: { paragraphs: s.paragraphs, bullets: s.bullets },
     }));
 
   return { title, sections };

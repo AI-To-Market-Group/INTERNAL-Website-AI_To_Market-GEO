@@ -38,7 +38,7 @@ function deterministicFields(title: string): Pick<
     ? rawSeoTitle
     : `${focusKeyword}: ${rawSeoTitle}`.slice(0, 60);
 
-  return { title, slug, focus_keyword: focusKeyword, seo_title: seoTitle, category: "News" };
+  return { title, slug, focus_keyword: focusKeyword, seo_title: seoTitle, category: "" };
 }
 
 function blocksToText(blocks: ArticleDraftBlock[]): string {
@@ -48,11 +48,65 @@ function blocksToText(blocks: ArticleDraftBlock[]): string {
     .join("\n");
 }
 
+interface ImageMetaItem { order: number; alt_text: string; caption: string; file_name: string; }
+
+async function generateImageMetadata(
+  apiKey: string,
+  articleTitle: string,
+  sections: { order: number; heading: string; type: string }[]
+): Promise<ImageMetaItem[]> {
+  if (!sections.length) return [];
+  const sectionList = sections
+    .map(s => `- order ${s.order} (${s.order === 0 ? "HERO" : s.type.toUpperCase()}): "${s.heading}"`)
+    .join("\n");
+
+  const system = `You are an image SEO specialist for AI To Market, a B2B AI content company.
+For each section listed, write image SEO metadata for the section's accompanying illustration.
+
+Return JSON only:
+{
+  "images": [
+    {
+      "order": <number>,
+      "alt_text": "<descriptive alt text, ≤125 chars, natural keyword use, no 'image of'>",
+      "caption": "<1-2 sentence caption the reader sees below the image, ~120-150 chars, adds insight>",
+      "file_name": "<seo-friendly filename slug, lowercase hyphens, no extension, ≤50 chars>"
+    }
+  ]
+}`;
+
+  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: "gpt-4o-mini",
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: system },
+        { role: "user", content: `Article title: "${articleTitle}"\n\nSections:\n${sectionList}` },
+      ],
+      max_tokens: 600,
+      temperature: 0.3,
+    }),
+  });
+
+  if (!res.ok) throw new Error(`OpenAI image meta error ${res.status}`);
+  const data = await res.json() as { choices: Array<{ message: { content: string } }> };
+  const parsed = JSON.parse(data.choices[0].message.content) as { images?: unknown[] };
+  if (!Array.isArray(parsed.images)) return [];
+  return (parsed.images as Record<string, unknown>[]).map(item => ({
+    order: typeof item.order === "number" ? item.order : 0,
+    alt_text: typeof item.alt_text === "string" ? item.alt_text.slice(0, 125) : "",
+    caption: typeof item.caption === "string" ? item.caption.slice(0, 200) : "",
+    file_name: typeof item.file_name === "string" ? item.file_name.slice(0, 50).toLowerCase().replace(/[^a-z0-9-]/g, "-") : "image",
+  }));
+}
+
 async function generateContentFields(
   apiKey: string,
   title: string,
   articleText: string
-): Promise<{ tags: string[]; excerpt: string; seo_description: string }> {
+): Promise<{ tags: string[]; excerpt: string; seo_description: string; category: string }> {
   // Send title + first ~800 words — enough context, minimal tokens
   const wordLimit = 800;
   const words = articleText.split(/\s+/);
@@ -60,13 +114,14 @@ async function generateContentFields(
 
   const system = `You are an SEO metadata writer for AI To Market, a B2B AI content and strategy company.
 
-Generate metadata for a blog article. Return JSON only with these three fields:
+Generate metadata for a blog article. Return JSON only with these four fields:
 
 - "tags": array of 5–7 lowercase topic tags relevant to the article (B2B, AI, marketing, strategy — no generic words like "article" or "blog"). Use hyphenated multi-word tags where appropriate, e.g. "ai-content", "geo-optimisation", "b2b-marketing".
 - "excerpt": 1–2 sentence summary of the article (max 200 chars). Write as a value statement, not "This article covers…".
 - "seo_description": compelling meta description for search results (max 160 chars). Include a benefit or insight hook. No trailing full stop needed.
+- "category": a short, natural content category label for this article (2–4 words max, title case). Examples: "Industry News", "Case Study", "Deep Dive", "AI Strategy", "Product Update", "Thought Leadership", "How-To Guide". Pick the label that best fits the article's purpose and tone — do not force it into a predefined list.
 
-Return ONLY valid JSON: { "tags": [...], "excerpt": "...", "seo_description": "..." }`;
+Return ONLY valid JSON: { "tags": [...], "excerpt": "...", "seo_description": "...", "category": "..." }`;
 
   const res = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
@@ -90,6 +145,7 @@ Return ONLY valid JSON: { "tags": [...], "excerpt": "...", "seo_description": ".
     tags?: unknown;
     excerpt?: unknown;
     seo_description?: unknown;
+    category?: unknown;
   };
 
   const tags = Array.isArray(parsed.tags)
@@ -99,8 +155,9 @@ Return ONLY valid JSON: { "tags": [...], "excerpt": "...", "seo_description": ".
   const seo_description = typeof parsed.seo_description === "string"
     ? parsed.seo_description.slice(0, 160)
     : "";
+  const category = typeof parsed.category === "string" ? parsed.category.trim().slice(0, 40) : "";
 
-  return { tags, excerpt, seo_description };
+  return { tags, excerpt, seo_description, category };
 }
 
 function articleResponseToText(article: GenerateArticleResponse): string {
@@ -116,8 +173,11 @@ export async function POST(req: NextRequest, { params }: Params) {
 
   const { opportunityId } = await params;
 
-  // v2 fast path: client sends { article: GenerateArticleResponse } directly
-  const body = await req.json().catch(() => ({})) as { article?: GenerateArticleResponse };
+  // v2 fast path: client sends { article: GenerateArticleResponse, sections?: [...] } directly
+  const body = await req.json().catch(() => ({})) as {
+    article?: GenerateArticleResponse;
+    sections?: { order: number; heading: string; type: string }[];
+  };
   if (body.article?.sections?.length) {
     const article = body.article;
     const title = article.title ?? "Article";
@@ -126,17 +186,26 @@ export async function POST(req: NextRequest, { params }: Params) {
     let tags: string[] = [];
     let excerpt = "";
     let seo_description = "";
+    let category = base.category;
+    let image_metadata: ImageMetaItem[] = [];
     const warnings: SeoWarning[] = [];
 
     if (apiKey) {
-      try {
-        ({ tags, excerpt, seo_description } = await generateContentFields(apiKey, title, articleResponseToText(article)));
-      } catch {
+      const [contentFields, imgMeta] = await Promise.allSettled([
+        generateContentFields(apiKey, title, articleResponseToText(article)),
+        body.sections?.length
+          ? generateImageMetadata(apiKey, title, body.sections)
+          : Promise.resolve([] as ImageMetaItem[]),
+      ]);
+      if (contentFields.status === "fulfilled") {
+        ({ tags, excerpt, seo_description, category } = contentFields.value);
+      } else {
         tags = [title.replace(/[^a-zA-Z0-9\s]/g, "").trim().split(/\s+/)[0]?.toLowerCase() ?? "ai"];
         excerpt = `Key insights on ${title} for B2B marketing and AI content strategy.`;
         seo_description = `Learn about ${title}. Practical B2B AI content strategy and recommendations.`.slice(0, 160);
         warnings.push({ field: "excerpt", message: "Metadata generated from title only — LLM unavailable." });
       }
+      if (imgMeta.status === "fulfilled") image_metadata = imgMeta.value;
     } else {
       tags = [title.replace(/[^a-zA-Z0-9\s]/g, "").trim().split(/\s+/)[0]?.toLowerCase() ?? "ai"];
       excerpt = `Key insights on ${title} for B2B marketing and AI content strategy.`;
@@ -146,10 +215,9 @@ export async function POST(req: NextRequest, { params }: Params) {
     if (base.seo_title.length > 60)
       warnings.push({ field: "seo_title", message: `SEO title is ${base.seo_title.length} chars (max 60).` });
 
-    const metadata: InferArticleMetadataResponse = { ...base, tags, excerpt, seo_description, seo_warnings: warnings };
-    // Also persist to session if it exists (best-effort)
+    const metadata: InferArticleMetadataResponse = { ...base, category, tags, excerpt, seo_description, seo_warnings: warnings };
     await updateSession(user.id, opportunityId, { metadataWordPress: metadata }).catch(() => {});
-    return Response.json(metadata);
+    return Response.json({ ...metadata, image_metadata });
   }
 
   // v1 / legacy path: read draft from Supabase session
