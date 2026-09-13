@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useLayoutEffect } from "react";
+import React, { useState, useEffect, useRef, useLayoutEffect } from "react";
 import dynamic from "next/dynamic";
 import { toast } from "sonner";
 import { KeywordWorkspace } from "./components/KeywordWorkspace";
@@ -133,6 +133,26 @@ function bulletText(b: unknown): string {
     if (typeof text === "string") return text;
   }
   return "";
+}
+
+/** Pull the single best sentence (60-160 chars) from a section's plain text, for a mid-article pull-quote. */
+function extractPullQuote(section: GeneratedSection | undefined): string | null {
+  if (!section) return null;
+  const text = section.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, " ")).join(" ");
+  const sentences = (text.match(/[^.!?]+[.!?]/g) ?? []).map(s => s.trim());
+  const candidates = sentences.filter(s => s.length >= 60 && s.length <= 160);
+  if (!candidates.length) return null;
+  return candidates.sort((a, b) => b.length - a.length)[0];
+}
+
+function PullQuote({ text }: { text: string }) {
+  return (
+    <blockquote style={{ margin: "36px 0 0", padding: "2px 0 2px 26px", borderLeft: `3px solid ${C.salmon}` }}>
+      <p style={{ margin: 0, fontSize: 22, fontWeight: 600, fontStyle: "italic", lineHeight: 1.5, letterSpacing: "-.3px", color: C.dark }}>
+        &ldquo;{text}&rdquo;
+      </p>
+    </blockquote>
+  );
 }
 
 function scoreColor(v: number) {
@@ -2064,10 +2084,14 @@ const hlStyle = (heading: string): React.CSSProperties =>
         })()}
 
         {/* Body sections — floated image so text wraps underneath if content is longer */}
-        {body.map((s, bi) => {
+        {(() => {
+          const midBodySec = body.length ? body[Math.floor(body.length / 2)] : undefined;
+          const pullQuoteText = extractPullQuote(midBodySec);
+          return body.map((s, bi) => {
           const imgLeft = bi % 2 === 0;
           return (
-            <div key={s.order} id={sectionSlug(s.heading)} style={{ scrollMarginTop: 32, overflow: "hidden", ...hlStyle(s.heading) }}>
+            <React.Fragment key={s.order}>
+            <div id={sectionSlug(s.heading)} style={{ scrollMarginTop: 32, overflow: "hidden", ...hlStyle(s.heading) }}>
               {divider}
               {/* Floated illustration — clickable, shows active image from history */}
               {(() => {
@@ -2166,8 +2190,11 @@ const hlStyle = (heading: string): React.CSSProperties =>
               )}
               <div style={{ clear: "both" }} />
             </div>
+            {pullQuoteText && s === midBodySec && <PullQuote text={pullQuoteText} />}
+            </React.Fragment>
           );
-        })}
+          });
+        })()}
 
         {/* Stats / BY THE NUMBERS */}
         {statsSection && (() => {
@@ -2608,12 +2635,34 @@ const hlStyle = (heading: string): React.CSSProperties =>
           </button>
         </div>
 
-        {/* Article content */}
+        {/* Article content — boxed card: masthead, hero, body and footer share one bordered container */}
         <div className="v2-article" style={{ maxWidth: 820, margin: "0 auto", padding: "0 0 80px" }}>
           {/* Masthead */}
-          <div style={{ background: C.dark, padding: "28px 44px" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".22em", color: C.salmon, marginBottom: 10 }}>AI To Market · Blog</div>
-            <h1 style={{ margin: "0 0 10px", fontSize: 24, fontWeight: 700, lineHeight: 1.2, color: C.white, letterSpacing: "-.3px" }}>{article.title}</h1>
+          <div style={{ background: C.dark, padding: "44px 44px 36px", borderRadius: "12px 12px 0 0" }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,.55)", marginBottom: 20 }}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10 12L6 8l4-4" /></svg>
+              Back to Blog
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: C.salmon, marginBottom: 14 }}>AI To Market · Blog</div>
+            <h1 style={{ margin: "0 0 24px", fontSize: 28, fontWeight: 800, lineHeight: 1.15, color: C.white, letterSpacing: "-.4px" }}>{article.title}</h1>
+            {(() => {
+              const wordCount = [
+                ...(intro?.content.paragraphs ?? []),
+                ...body.flatMap(s => s.content.paragraphs),
+                ...(statsSection?.content.paragraphs ?? []),
+                ...(faqSection?.content.paragraphs ?? []),
+                ...(conclusion?.content.paragraphs ?? []),
+              ].reduce((n, p) => n + p.text.replace(/<[^>]+>/g, " ").split(/\s+/).filter(Boolean).length, 0);
+              const readTime = `${Math.max(1, Math.ceil(wordCount / 200))} min read`;
+              const formattedDate = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+              return (
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 18, fontSize: 12, color: "rgba(255,255,255,.55)" }}>
+                  <span>{formattedDate}</span>
+                  <span>{readTime}</span>
+                  <span>AI To Market</span>
+                </div>
+              );
+            })()}
           </div>
 
           {/* Hero image */}
@@ -2646,11 +2695,15 @@ const hlStyle = (heading: string): React.CSSProperties =>
             )}
 
             {/* Body sections */}
-            {body.map((s, bi) => {
+            {(() => {
+              const midBodySec = body.length ? body[Math.floor(body.length / 2)] : undefined;
+              const pullQuoteText = extractPullQuote(midBodySec);
+              return body.map((s, bi) => {
               const imgLeft = bi % 2 === 0;
               const activeSvg = (sectionImages[s.order] ?? [])[activeImgIdx[s.order] ?? 0] ?? null;
               return (
-                <div key={s.order} style={{ overflow: "hidden" }}>
+                <React.Fragment key={s.order}>
+                <div style={{ overflow: "hidden" }}>
                   <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "44px 0" }} />
                   {activeSvg && (
                     <div style={{
@@ -2683,8 +2736,11 @@ const hlStyle = (heading: string): React.CSSProperties =>
                   )}
                   <div style={{ clear: "both" }} />
                 </div>
+                {pullQuoteText && s === midBodySec && <PullQuote text={pullQuoteText} />}
+                </React.Fragment>
               );
-            })}
+              });
+            })()}
 
             {/* Stats — BY THE NUMBERS */}
             {statsSection && (() => {
@@ -2703,11 +2759,19 @@ const hlStyle = (heading: string): React.CSSProperties =>
                         const clean = p.text.replace(/<[^>]+>/g, "");
                         const m = clean.match(STAT_RE)!;
                         const stat = m[1].trim();
-                        const caption = clean.replace(stat, "").replace(/\s{2,}/g, " ").trim();
+                        const full = clean.replace(stat, "").replace(/\s{2,}/g, " ").trim() || clean;
+                        // Keep only complete sentences that fit within 180 chars
+                        const sentences = full.match(/[^.!?]+[.!?]+/g) ?? [full];
+                        let caption = "";
+                        for (const s of sentences) {
+                          if ((caption + s).length > 180) break;
+                          caption += s;
+                        }
+                        caption = caption.trim() || full.slice(0, 160).replace(/\s+\S*$/, "…");
                         return (
                           <div key={i} style={{ padding: "20px 16px", background: C.dark, borderRadius: 10, textAlign: "center" }}>
                             <div style={{ fontSize: 30, fontWeight: 700, color: C.salmon, lineHeight: 1, letterSpacing: -1 }}>{stat}</div>
-                            <div style={{ marginTop: 10, fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.6)", lineHeight: 1.45, display: "-webkit-box", WebkitLineClamp: 4, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{caption || clean}</div>
+                            <div style={{ marginTop: 10, fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.6)", lineHeight: 1.45 }}>{caption}</div>
                           </div>
                         );
                       })}
@@ -2796,7 +2860,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
             })()}
           </div>
 
-          {/* Footer — identical to article footer */}
+          {/* Footer — connected to body via border radius, identical to article footer */}
           <div style={{ background: C.dark, padding: "28px 44px", borderRadius: "0 0 12px 12px" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
               <div style={{ fontSize: 14, fontWeight: 700, color: C.white }}>AI To Market</div>
@@ -3182,6 +3246,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       setOutlineError(null);
       setOutlineLoading(false);
       if (cached.editorStep === "article" && cached.articleData) {
+        skipAutoImagesRef.current = true;
+        setArticleGenerationId(id => id + 1);
         setArticleData(cached.articleData);
         setGeoScore(cached.geoScore ?? null);
         setQualityFlags(cached.qualityFlags ?? []);
@@ -3218,6 +3284,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
             error?: string;
           };
           if (r.ok && data.article) {
+            skipAutoImagesRef.current = true;
+            setArticleGenerationId(id => id + 1);
             setArticleData(data.article);
             setGeoScore(data.geoScore ?? null);
             setQualityFlags(data.qualityFlags ?? []);
