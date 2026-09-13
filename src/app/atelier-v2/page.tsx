@@ -2091,7 +2091,10 @@ const hlStyle = (heading: string): React.CSSProperties =>
           const imgLeft = bi % 2 === 0;
           return (
             <React.Fragment key={s.order}>
-            <div id={sectionSlug(s.heading)} style={{ scrollMarginTop: 32, overflow: "hidden", ...hlStyle(s.heading) }}>
+            {/* A clear:both sentinel (not overflow:hidden) clears the floated image below it —
+                overflow:hidden here would additionally clip the image's own box-shadow at this
+                section's boundary, producing a hard-edged line instead of a soft card-lift. */}
+            <div id={sectionSlug(s.heading)} style={{ scrollMarginTop: 32, ...hlStyle(s.heading) }}>
               {divider}
               {/* Floated illustration — clickable, shows active image from history */}
               {(() => {
@@ -2103,21 +2106,30 @@ const hlStyle = (heading: string): React.CSSProperties =>
                 const isHovered = hoveredImg === s.order;
                 const summary = s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400);
                 return (
+                  // Shadow lives on this outer wrapper (no overflow:hidden here) — putting both
+                  // overflow:hidden and box-shadow on the same box makes browsers clip the shadow
+                  // unevenly against the rounded corners. The inner box below owns the clipping.
+                  <div style={{
+                    float: imgLeft ? "left" : "right",
+                    marginRight: imgLeft ? 28 : 0,
+                    marginLeft: imgLeft ? 0 : 28,
+                    marginBottom: 16,
+                    width: 300, height: 240,
+                    borderRadius: 9,
+                    boxShadow: "0 12px 28px -8px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.06)",
+                    flexShrink: 0,
+                  }}>
                   <div
                     onClick={() => { setImgModal({ order: s.order, heading: s.heading, sType: s.type, prompt: summary }); setImgPrompt(summary); }}
                     onMouseEnter={() => setHoveredImg(s.order)}
                     onMouseLeave={() => setHoveredImg(null)}
                     style={{
-                      float: imgLeft ? "left" : "right",
-                      marginRight: imgLeft ? 28 : 0,
-                      marginLeft: imgLeft ? 0 : 28,
-                      marginBottom: 16,
-                      width: 300, height: 240,
+                      width: "100%", height: "100%",
                       borderRadius: 9,
                       background: "rgba(22,61,38,.04)",
                       border: `1px solid ${isHovered ? "rgba(22,61,38,.35)" : "rgba(22,61,38,.1)"}`,
                       display: "flex", alignItems: "center", justifyContent: "center",
-                      flexShrink: 0, overflow: "hidden",
+                      overflow: "hidden",
                       position: "relative", cursor: "pointer",
                       transition: "border-color .15s",
                     }}
@@ -2171,6 +2183,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
                         {idx + 1}/{imgs.length}
                       </div>
                     )}
+                  </div>
                   </div>
                 );
               })()}
@@ -2703,9 +2716,10 @@ const hlStyle = (heading: string): React.CSSProperties =>
               const activeSvg = (sectionImages[s.order] ?? [])[activeImgIdx[s.order] ?? 0] ?? null;
               return (
                 <React.Fragment key={s.order}>
-                <div style={{ overflow: "hidden" }}>
+                <div>
                   <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "44px 0" }} />
                   {activeSvg && (
+                    // Shadow on the outer wrapper (no overflow:hidden) — the inner box owns the clip.
                     <div style={{
                       float: imgLeft ? "left" : "right",
                       marginRight: imgLeft ? 32 : 0,
@@ -2713,15 +2727,22 @@ const hlStyle = (heading: string): React.CSSProperties =>
                       marginBottom: 18,
                       width: 320, height: 240,
                       borderRadius: 9,
-                      background: "rgba(22,61,38,.04)",
-                      border: "1px solid rgba(22,61,38,.1)",
-                      overflow: "hidden", flexShrink: 0, lineHeight: 0,
-                      display: "flex", alignItems: "center", justifyContent: "center",
+                      boxShadow: "0 12px 28px -8px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.06)",
+                      flexShrink: 0,
                     }}>
-                      {activeSvg.startsWith("data:") || activeSvg.startsWith("http")
-                        ? <img src={activeSvg} alt={s.heading} style={{ width: 320, height: 240, objectFit: imgFitMode[s.order] ?? "contain", objectPosition: imgPositions[s.order] ?? "50% 50%", display: "block" }} />
-                        : <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="320"').replace(/height="240"/, 'height="240"') }} style={{ lineHeight: 0, display: "block", width: 320, height: 240 }} />
-                      }
+                      <div style={{
+                        width: "100%", height: "100%",
+                        borderRadius: 9,
+                        background: "rgba(22,61,38,.04)",
+                        border: "1px solid rgba(22,61,38,.1)",
+                        overflow: "hidden", lineHeight: 0,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>
+                        {activeSvg.startsWith("data:") || activeSvg.startsWith("http")
+                          ? <img src={activeSvg} alt={s.heading} style={{ width: 320, height: 240, objectFit: imgFitMode[s.order] ?? "contain", objectPosition: imgPositions[s.order] ?? "50% 50%", display: "block" }} />
+                          : <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="320"').replace(/height="240"/, 'height="240"') }} style={{ lineHeight: 0, display: "block", width: 320, height: 240 }} />
+                        }
+                      </div>
                     </div>
                   )}
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 10 }}>{s.eyebrow || s.type.replace(/_/g, " ").toUpperCase()}</div>
