@@ -114,6 +114,11 @@ interface V2CardCache {
   activeTitleIdx?: number;
   /** Section orders whose illustration the user explicitly removed — kept out of the article, the Image SEO panel, and the publish payload. */
   removedImageOrders?: number[];
+  /** Generated illustrations per section order (newest first), and which one is
+   *  showing. Persisted so images survive a reload and so the batch queue can
+   *  produce them while the editor isn't even mounted. */
+  sectionImages?: Record<number, string[]>;
+  activeImgIdx?: Record<number, number>;
   /** User-edited pull-quote text. Absent = use the auto-extracted one. */
   pullQuoteOverride?: string;
   /** True once the user removes the pull-quote entirely. */
@@ -1218,6 +1223,7 @@ function QueueScreen({
       const decoder = new TextDecoder();
       let buf = "";
       let articleReceived = false;
+      let builtArticle: GeneratedArticle | null = null;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -1237,6 +1243,7 @@ function QueueScreen({
             };
             if (parsed.article && !articleReceived) {
               articleReceived = true;
+              builtArticle = parsed.article;
               setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 80, stage: "Scoring" }); return m; });
               writeCardCache(id, {
                 editorStep: "article",
@@ -1289,6 +1296,53 @@ function QueueScreen({
           } catch { /* partial chunk */ }
         }
       }
+      // ── Illustrations ──
+      // The editor isn't mounted during a batch build, so its auto-image effect
+      // never runs — batch-built articles used to arrive with every image slot
+      // empty. Generate them here and write them into the same card cache the
+      // editor restores from, staggered to avoid rate-limiting (the same 2.5s
+      // spacing the editor uses).
+      if (builtArticle) {
+        setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 90, stage: "Illustrating" }); return m; });
+        const bodySections = builtArticle.sections.filter(s =>
+          !/^(introduction|stats|conclusion|faq)$/i.test(s.type) &&
+          !/frequently.asked/i.test(s.type) &&
+          !/frequently asked/i.test(s.heading)
+        );
+        const heroAnchor = bodySections[0];
+        const plain = (s: GeneratedSection) =>
+          s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400);
+        const requests = [
+          {
+            order: 0,
+            heading: builtArticle.title,
+            type: heroAnchor?.type ?? "overview",
+            summary: heroAnchor ? plain(heroAnchor) : builtArticle.title,
+          },
+          ...bodySections.map(s => ({ order: s.order, heading: s.heading, type: s.type, summary: plain(s) })),
+        ];
+
+        const images: Record<number, string[]> = {};
+        const idx: Record<number, number> = {};
+        for (const [i, r] of requests.entries()) {
+          if (i > 0) await new Promise(res => setTimeout(res, 2500));
+          try {
+            const imgRes = await fetch("/api/illustration-generate-claude", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ heading: r.heading, sectionType: r.type, summary: r.summary }),
+            });
+            const imgData = await imgRes.json().catch(() => ({})) as { svgString?: string | null };
+            if (imgData.svgString) { images[r.order] = [imgData.svgString]; idx[r.order] = 0; }
+          } catch { /* a missing illustration must never fail the build */ }
+        }
+
+        if (Object.keys(images).length > 0) {
+          const existing = readCardCache(id);
+          if (existing) writeCardCache(id, { ...existing, sectionImages: images, activeImgIdx: idx });
+        }
+      }
+
       setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 100, stage: "Done" }); return m; });
       const historyEntry: BatchHistoryEntry = { id, title, builtAt: new Date().toISOString() };
       appendBatchHistory(historyEntry);
@@ -1321,7 +1375,7 @@ function QueueScreen({
   function stageStyle(stage: string) {
     if (stage === "Failed") return { bg: "rgba(249,57,67,.06)", color: C.red, border: "rgba(249,57,67,.28)" };
     if (stage === "Done")   return { bg: "rgba(22,61,38,.07)", color: C.mid, border: "rgba(22,61,38,.35)" };
-    if (stage === "Drafting" || stage === "Scoring") return { bg: "rgba(22,61,38,.04)", color: "rgba(22,61,38,.7)", border: "rgba(22,61,38,.18)" };
+    if (stage === "Drafting" || stage === "Scoring" || stage === "Illustrating") return { bg: "rgba(22,61,38,.04)", color: "rgba(22,61,38,.7)", border: "rgba(22,61,38,.18)" };
     return { bg: "rgba(22,61,38,.03)", color: "rgba(22,61,38,.45)", border: "rgba(22,61,38,.14)" };
   }
 
@@ -1398,7 +1452,7 @@ function QueueScreen({
           const isSelected = selectedSet.has(entry.id);
           const isDone = stage === "Done";
           const isFailed = stage === "Failed";
-          const isBuilding = stage === "Drafting" || stage === "Scoring";
+          const isBuilding = stage === "Drafting" || stage === "Scoring" || stage === "Illustrating";
           const fill = isFailed ? C.red : isDone ? C.mid : C.dark;
           const s = stageStyle(stage);
           return (
@@ -1898,7 +1952,7 @@ function EditablePara({ text, style, paraKey, sectionOrder, paraId, onEditParagr
   return <p key={paraKey} {...shared} ref={elRef as React.RefObject<HTMLParagraphElement>} />;
 }
 
-function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet, sidebarCollapsed, previewMode, onExitPreview, skipAutoImagesRef, articleGenerationId, onImagesChange, removedImageOrders, onRemoveImage, onRestoreImage, pullQuoteOverride, pullQuoteRemoved, onPullQuoteEdit, onPullQuoteRemove, titleVariants, activeTitleIdx, onTitleIdxChange, onTitleEdit }: {
+function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet, sidebarCollapsed, previewMode, onExitPreview, skipAutoImagesRef, articleGenerationId, onImagesChange, initialImages, initialImgIdx, onImagesStateChange, removedImageOrders, onRemoveImage, onRestoreImage, pullQuoteOverride, pullQuoteRemoved, onPullQuoteEdit, onPullQuoteRemove, titleVariants, activeTitleIdx, onTitleIdxChange, onTitleEdit }: {
   article: GeneratedArticle;
   outline: V2OutlineSection[];
   onScore: () => void;
@@ -1916,6 +1970,11 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
    *  the auto-image effect doesn't key off article.title (which changes on rename). */
   articleGenerationId?: number;
   onImagesChange?: (thumbnails: Record<number, string | null>) => void;
+  /** Images restored from cache (or produced by a batch build) to start from. */
+  initialImages?: Record<number, string[]>;
+  initialImgIdx?: Record<number, number>;
+  /** Reports the full image state up so it can be cached. */
+  onImagesStateChange?: (images: Record<number, string[]>, idx: Record<number, number>) => void;
   removedImageOrders?: Set<number>;
   onRemoveImage?: (order: number) => void;
   onRestoreImage?: (order: number) => void;
@@ -1937,8 +1996,8 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
   const [previewFaqOpenIdx, setPreviewFaqOpenIdx] = useState<number | null>(null);
   const articleBodyRef = useRef<HTMLDivElement>(null);
   // Image state — arrays per section order (newest first), active index per section
-  const [sectionImages, setSectionImages] = useState<Record<number, string[]>>({});
-  const [activeImgIdx, setActiveImgIdx] = useState<Record<number, number>>({});
+  const [sectionImages, setSectionImages] = useState<Record<number, string[]>>(initialImages ?? {});
+  const [activeImgIdx, setActiveImgIdx] = useState<Record<number, number>>(initialImgIdx ?? {});
   const [imgLoadingOrders, setImgLoadingOrders] = useState<Set<number>>(new Set());
   const [imgFailedOrders, setImgFailedOrders] = useState<Set<number>>(new Set());
   const [hoveredImg, setHoveredImg] = useState<number | null>(null);
@@ -1951,8 +2010,12 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
   const [imgModal, setImgModal] = useState<ImgModal | null>(null);
   const [imgPrompt, setImgPrompt] = useState("");
   const [imgGenerating, setImgGenerating] = useState(false);
+  const [imgError, setImgError] = useState<string | null>(null);
   const [imgModel, setImgModel] = useState<"claude" | "openai">("claude");
   const imgUploadRef = useRef<HTMLInputElement | null>(null);
+
+  // Don't carry a previous slot's failure into a newly opened modal
+  useEffect(() => { setImgError(null); }, [imgModal]);
 
   // Notify parent of active thumbnails so the SEO panel can show them
   useEffect(() => {
@@ -1966,6 +2029,13 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
     }
     onImagesChange(thumbnails);
   }, [sectionImages, activeImgIdx, onImagesChange]);
+
+  // Report the full image arrays up so they can be written to the card cache —
+  // without this, generated illustrations were lost on every reload, and the
+  // publish payload would go out with no images at all.
+  useEffect(() => {
+    onImagesStateChange?.(sectionImages, activeImgIdx);
+  }, [sectionImages, activeImgIdx, onImagesStateChange]);
 
   function handleImgUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
@@ -1998,10 +2068,13 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
       !/frequently asked/i.test(s.heading) &&
       !noImageOrders.has(s.order)
     );
-    setSectionImages({});
-    setActiveImgIdx({});
+    // Only fill slots that are actually empty. Clearing everything here used to
+    // discard images restored from the cache (or produced by a batch build) and
+    // regenerate them from scratch, burning credits to replace what we had.
+    const alreadyHave = (order: number) => (sectionImages[order]?.length ?? 0) > 0;
     setImgFailedOrders(new Set());
-    const orders = new Set([0, ...bodySections.map(s => s.order)]);
+    const orders = new Set([0, ...bodySections.map(s => s.order)].filter(o => !alreadyHave(o)));
+    if (orders.size === 0) return;
     setImgLoadingOrders(orders);
 
     const runFetch = (order: number, heading: string, sectionType: string, summary: string) => {
@@ -2040,9 +2113,11 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
         summary: s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400),
       })),
     ];
-    allRequests.forEach(({ order, heading, type, summary }, i) => {
-      setTimeout(() => runFetch(order, heading, type, summary), i * 2500);
-    });
+    allRequests
+      .filter(r => orders.has(r.order)) // skip slots already filled from cache or a batch build
+      .forEach(({ order, heading, type, summary }, i) => {
+        setTimeout(() => runFetch(order, heading, type, summary), i * 2500);
+      });
   // Deliberately keyed off articleGenerationId, NOT article.title — a title edit/rename
   // must not wipe and regenerate every image. Falls back to article.title when the id
   // isn't wired up by a caller, preserving prior behaviour there.
@@ -2052,6 +2127,7 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
   async function generateNewImage() {
     if (!imgModal || imgGenerating) return;
     setImgGenerating(true);
+    setImgError(null);
     try {
       const order = imgModal.order;
       if (imgModel === "openai") {
@@ -2060,11 +2136,18 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title: imgModal.heading, summary: imgPrompt, surface: "light" }),
         });
-        const data = await res.json() as { cdnUrl?: string };
+        const data = await res.json().catch(() => ({})) as { cdnUrl?: string; error?: string };
         if (data.cdnUrl) {
           setSectionImages(prev => ({ ...prev, [order]: [data.cdnUrl!, ...(prev[order] ?? [])] }));
           setActiveImgIdx(prev => ({ ...prev, [order]: 0 }));
           onRestoreImage?.(order); // regenerating undoes an earlier removal
+        } else {
+          // Previously this (and every branch below) failed silently, so a
+          // refused request looked identical to nothing happening at all.
+          setImgError(
+            data.error
+              ?? (res.status === 429 ? "Monthly generation budget reached." : `Image generation failed (HTTP ${res.status}).`)
+          );
         }
       } else {
         const res = await fetch("/api/illustration-generate-claude", {
@@ -2072,14 +2155,23 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ heading: imgModal.heading, sectionType: imgModal.sType, summary: imgPrompt }),
         });
-        const data = await res.json() as { svgString?: string | null };
+        const data = await res.json().catch(() => ({})) as { svgString?: string | null; error?: string };
         if (data.svgString) {
           setSectionImages(prev => ({ ...prev, [order]: [data.svgString!, ...(prev[order] ?? [])] }));
           setActiveImgIdx(prev => ({ ...prev, [order]: 0 }));
           onRestoreImage?.(order); // regenerating undoes an earlier removal
+        } else {
+          setImgError(
+            data.error
+              ?? (res.status === 429
+                ? "Monthly generation budget reached."
+                : `The illustrator returned no usable image after 3 tries (HTTP ${res.status}). Try rewording the prompt.`)
+          );
         }
       }
-    } catch {}
+    } catch (e) {
+      setImgError(e instanceof Error ? e.message : "Network error — could not reach the image service.");
+    }
     setImgGenerating(false);
   }
 
@@ -2883,6 +2975,11 @@ const hlStyle = (heading: string): React.CSSProperties =>
                       {imgGenerating ? "Generating…" : "Generate new image"}
                     </button>
                   </div>
+                  {imgError && (
+                    <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8, background: "rgba(249,57,67,.07)", border: "1px solid rgba(249,57,67,.3)", color: C.red, fontSize: 12, lineHeight: 1.5 }}>
+                      {imgError}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -3296,6 +3393,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [imageSeoMeta, setImageSeoMeta] = useState<Record<number, ImageSeoMeta>>({});
   const [sectionThumbnails, setSectionThumbnails] = useState<Record<number, string | null>>({});
   const [removedImageOrders, setRemovedImageOrders] = useState<Set<number>>(new Set());
+  // Mirror of the article renderer's image state, kept here so it can be cached.
+  const [persistedImages, setPersistedImages] = useState<Record<number, string[]>>({});
+  const [persistedImgIdx, setPersistedImgIdx] = useState<Record<number, number>>({});
   const [pullQuoteOverride, setPullQuoteOverride] = useState<string | null>(null);
   const [pullQuoteRemoved, setPullQuoteRemoved] = useState(false);
   const [titleVariants, setTitleVariants] = useState<string[]>([]);
@@ -3432,11 +3532,13 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       titleVariants,
       activeTitleIdx,
       removedImageOrders: [...removedImageOrders],
+      sectionImages: persistedImages,
+      activeImgIdx: persistedImgIdx,
       pullQuoteOverride: pullQuoteOverride ?? undefined,
       pullQuoteRemoved,
       savedAt: new Date().toISOString(),
     });
-  }, [activeCardId, editorStep, outline, articleTitle, articleData, geoScore, qualityFlags, brandVoiceStatus, seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags, articleFinalised, seoExcerpt, seoFocusKeyword, seoCategory, imageSeoMeta, titleVariants, activeTitleIdx, removedImageOrders, pullQuoteOverride, pullQuoteRemoved]);
+  }, [activeCardId, editorStep, outline, articleTitle, articleData, geoScore, qualityFlags, brandVoiceStatus, seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags, articleFinalised, seoExcerpt, seoFocusKeyword, seoCategory, imageSeoMeta, titleVariants, activeTitleIdx, removedImageOrders, pullQuoteOverride, pullQuoteRemoved, persistedImages, persistedImgIdx]);
 
   // ── Debounced Supabase auto-save: fires 3 s after articleData last changed ─
   useEffect(() => {
@@ -3490,6 +3592,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           titleVariants,
           activeTitleIdx,
           removedImageOrders: [...removedImageOrders],
+          sectionImages: persistedImages,
+          activeImgIdx: persistedImgIdx,
           pullQuoteOverride: pullQuoteOverride ?? undefined,
           pullQuoteRemoved,
           // Missing here previously — this write REPLACES the whole cache entry
@@ -3528,6 +3632,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       setTitleVariants([]);
       setActiveTitleIdx(0);
       setRemovedImageOrders(new Set());
+      setPersistedImages({});
+      setPersistedImgIdx({});
       setPullQuoteOverride(null);
       setPullQuoteRemoved(false);
       return;
@@ -3590,6 +3696,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           : [cached.articleData.title ?? ""]);
         setActiveTitleIdx(cached.activeTitleIdx ?? 0);
         setRemovedImageOrders(new Set(cached.removedImageOrders ?? []));
+        setPersistedImages(cached.sectionImages ?? {});
+        setPersistedImgIdx(cached.activeImgIdx ?? {});
         setPullQuoteOverride(cached.pullQuoteOverride ?? null);
         setPullQuoteRemoved(cached.pullQuoteRemoved ?? false);
         setArticleLoading(false);
@@ -5240,6 +5348,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               skipAutoImagesRef={skipAutoImagesRef}
               articleGenerationId={articleGenerationId}
               onImagesChange={setSectionThumbnails}
+              initialImages={persistedImages}
+              initialImgIdx={persistedImgIdx}
+              onImagesStateChange={(imgs, idx) => { setPersistedImages(imgs); setPersistedImgIdx(idx); }}
               removedImageOrders={removedImageOrders}
               onRemoveImage={order => setRemovedImageOrders(prev => new Set([...prev, order]))}
               onRestoreImage={order => setRemovedImageOrders(prev => { const n = new Set(prev); n.delete(order); return n; })}
@@ -5825,6 +5936,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         articleFinalised, seoExcerpt, seoFocusKeyword, imageSeoMeta,
                         titleVariants, activeTitleIdx,
                         removedImageOrders: [...removedImageOrders],
+                        sectionImages: persistedImages,
+                        activeImgIdx: persistedImgIdx,
                         pullQuoteOverride: pullQuoteOverride ?? undefined,
                         pullQuoteRemoved,
                         draftSentAt: draftSentAt ?? undefined,
