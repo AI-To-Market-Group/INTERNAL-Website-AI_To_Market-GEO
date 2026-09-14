@@ -82,6 +82,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     seoExcerpt?: string;
     seoFocusKeyword?: string;
     seoCategory?: string;
+    pullQuote?: string;
     heroImage?: string;
     sectionImages?: (string | null)[];
   } = {};
@@ -140,13 +141,26 @@ export async function POST(req: NextRequest, { params }: Params) {
   };
 
   try {
-    const { documentId, studioUrl } = await publishToSanity(session, wpMetadata, thumbnailAssetId ?? undefined, sectionAssetIds);
-    // Mark session as sent in Supabase so the card grid can show it in "Sent to Sanity"
+    const { documentId, studioUrl } = await publishToSanity(session, wpMetadata, thumbnailAssetId ?? undefined, sectionAssetIds, body.pullQuote);
+    // Mark session as sent in Supabase so the card grid can show it in "Sent to Sanity".
+    // Sanity publish already succeeded at this point, so a failure here must stay
+    // non-fatal to the response — but it was previously silent even server-side,
+    // meaning a card could publish successfully yet never show under "Sent to
+    // Sanity" with zero trace of why. Log it, and surface it as a warning field
+    // on the response so the client can at least tell the user something's off.
+    let sessionStampWarning: string | undefined;
     try {
       const { updateSession } = await import("@/lib/builder-sessions-store");
-      await updateSession(user.id, opportunityId, { sentToWordPressAt: new Date().toISOString() });
-    } catch { /* non-fatal — publish succeeded, just couldn't stamp the session */ }
-    return Response.json({ id: documentId, studioUrl, status: "draft" });
+      const updated = await updateSession(user.id, opportunityId, { sentToWordPressAt: new Date().toISOString() });
+      if (!updated) {
+        sessionStampWarning = "Published to Sanity, but couldn't mark the session as sent (no matching session row) — it may not show under \"Sent to Sanity\" yet.";
+        console.error(`[publish-draft] updateSession returned null for opportunityId=${opportunityId} — sentToWordPressAt not set`);
+      }
+    } catch (e) {
+      sessionStampWarning = "Published to Sanity, but couldn't mark the session as sent — it may not show under \"Sent to Sanity\" yet.";
+      console.error(`[publish-draft] updateSession threw for opportunityId=${opportunityId}:`, e);
+    }
+    return Response.json({ id: documentId, studioUrl, status: "draft", warning: sessionStampWarning });
   } catch (e) {
     const message = e instanceof Error ? e.message : "Unknown error";
     return Response.json({ error: message }, { status: 500 });

@@ -238,41 +238,39 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
     }
   }
 
-  // 5. Normalise FAQ paragraphs:
-  //    a) Split RUN-ON paragraphs that contain multiple "Q: ... A: ..." pairs
-  //       into separate paragraphs (GPT sometimes crams 3-4 Q/A into one string,
-  //       breaking the FAQ accordion rendering)
-  //    b) Ensure every Q: paragraph has the \nA: separator
+  // 5. Normalise FAQ paragraphs by pooling and re-extracting Q:/A: pairs from
+  //    scratch, rather than splitting each paragraph in place. GPT's paragraph
+  //    boundaries for FAQ content are unreliable in several ways: it crams
+  //    multiple "Q: ... A: ..." pairs into one paragraph, splits a single pair
+  //    across two paragraphs, or lets an answer leak into its own paragraph
+  //    without its question (so the paragraph starts with "A:", not "Q:").
+  //    The previous approach only fixed paragraphs that already started with
+  //    "Q:", silently leaving "A:"-first paragraphs (and their garbled
+  //    neighbours) untouched. Pooling all paragraph text into one string and
+  //    re-deriving clean pairs from it is robust to all of the above, since it
+  //    no longer depends on where GPT happened to put paragraph breaks.
   for (const sec of sections) {
     if (sec.type !== "faq" && !/frequently.asked/i.test(sec.heading)) continue;
+    if (sec.content.paragraphs.every((p) => !p.text.includes("Q:") && !p.text.includes("A:"))) continue;
 
-    const expanded: typeof sec.content.paragraphs = [];
-    for (const p of sec.content.paragraphs) {
-      const text = p.text;
-      if (!text.trimStart().startsWith("Q:")) {
-        expanded.push(p);
-        continue;
+    const combined = sec.content.paragraphs.map((p) => p.text).join(" ");
+    const pairRe = /Q:\s*([\s\S]*?)\s*A:\s*([\s\S]*?)(?=\s*Q:\s|$)/g;
+    const pairs: typeof sec.content.paragraphs = [];
+    const baseId = sec.content.paragraphs[0]?.id ?? 0;
+    let match: RegExpExecArray | null;
+    let i = 0;
+    while ((match = pairRe.exec(combined)) !== null) {
+      // A missing-answer gap (a "Q:" immediately followed by another "Q:" with
+      // no "A:" between) makes the regex swallow the second "Q:" into group 1 —
+      // strip that trailing marker rather than showing it as part of the question.
+      const q = match[1].replace(/\s*Q:\s*$/, "").trim();
+      const a = match[2].trim();
+      if (q.length >= 5 && a.length >= 5) {
+        pairs.push({ id: baseId + i, text: `Q: ${q}\nA: ${a}` });
+        i++;
       }
-
-      // Split when we find another "Q:" later in the string (run-on case).
-      // Lookahead matches whitespace+Q: that comes AFTER the first character.
-      const parts = text
-        .split(/(?<=[\s\S])(?=\s+Q:\s)/g)
-        .map((s) => s.trim())
-        .filter(Boolean);
-
-      parts.forEach((part, i) => {
-        // Ensure \nA: separator
-        let fixed = part;
-        if (!fixed.includes("\nA:")) {
-          fixed = fixed
-            .replace(/([?.!])\s*A:\s*/, "$1\nA: ")
-            .replace(/\s+A:\s*/, "\nA: ");
-        }
-        expanded.push({ id: p.id + i, text: fixed });
-      });
     }
-    sec.content.paragraphs = expanded;
+    if (pairs.length > 0) sec.content.paragraphs = pairs;
   }
 
   return { title: raw.title ?? articleTitle, sections };

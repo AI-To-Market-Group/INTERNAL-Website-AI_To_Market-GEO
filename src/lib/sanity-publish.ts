@@ -1,5 +1,37 @@
 ﻿import type { ArticleDraftBlock, BuilderSessionInfo, WordPressMetadata } from "@/types";
 
+/**
+ * Distinct category labels already in use across published blog posts.
+ * Queried directly from Sanity (the canonical source of what's actually live)
+ * rather than from our own session store, which may hold categories from
+ * articles that were drafted but never published.
+ *
+ * Read-only GROQ query against the public dataset — no API token needed,
+ * same as the website itself uses to fetch blog content.
+ */
+export async function getExistingCategories(): Promise<string[]> {
+  const projectId = process.env.SANITY_PROJECT_ID;
+  const dataset = process.env.SANITY_DATASET ?? "production";
+  const apiVersion = process.env.SANITY_API_VERSION ?? "2024-01-01";
+  if (!projectId) return [];
+
+  try {
+    const query = encodeURIComponent(
+      `array::unique(*[_type == "blogPost" && defined(customCategory)].customCategory)`
+    );
+    const res = await fetch(
+      `https://${projectId}.api.sanity.io/v${apiVersion}/data/query/${dataset}?query=${query}`,
+      { cache: "no-store" }
+    );
+    if (!res.ok) return [];
+    const data = (await res.json()) as { result?: unknown };
+    if (!Array.isArray(data.result)) return [];
+    return data.result.filter((c): c is string => typeof c === "string" && c.trim().length > 0);
+  } catch {
+    return [];
+  }
+}
+
 /** Strip all HTML to plain text — used for headings and read-time estimation. */
 function stripHtmlToPlain(html: string): string {
   return html
@@ -58,6 +90,22 @@ function faqBlockToHtml(text: string): string {
       if (q && a) {
         return `<details class="faq-item"><summary><span>${q}</span></summary><p>${a}</p></details>`;
       }
+    }
+  }
+
+  // Format 4 (last resort): a garbled/run-on paragraph that doesn't start with
+  // "Q:" at all — e.g. an answer that leaked into its own paragraph with no
+  // question ("A: ... Q: <next question>..."). Formats 1-3 all require the
+  // paragraph to start with "Q:", so this would otherwise publish as a raw,
+  // unstyled dump of Q:/A: markers on the live site. Pull the first genuine
+  // Q:/A: pair out of the text anywhere it appears; if none exists, fall
+  // through to the plain-paragraph fallback below.
+  const looseMatch = clean.match(/Q:\s*([\s\S]*?)\s*A:\s*([\s\S]*?)(?=\s*Q:\s|$)/i);
+  if (looseMatch) {
+    const q = looseMatch[1].replace(/\s*Q:\s*$/i, "").trim();
+    const a = looseMatch[2].trim();
+    if (q.length >= 5 && a.length >= 5) {
+      return `<details class="faq-item"><summary><span>${q}</span></summary><p>${a}</p></details>`;
     }
   }
 
@@ -245,7 +293,9 @@ export async function publishToSanity(
   session: BuilderSessionInfo,
   wpMetadata: WordPressMetadata | null | undefined,
   thumbnailAssetId?: string,
-  sectionAssetIds?: (string | null)[]
+  sectionAssetIds?: (string | null)[],
+  /** Mid-article pull-quote. "" = the author removed it; undefined = let the site auto-extract one. */
+  pullQuote?: string
 ): Promise<SanityPublishResult> {
   const projectId = process.env.SANITY_PROJECT_ID;
   const dataset = process.env.SANITY_DATASET ?? "production";
@@ -282,6 +332,7 @@ export async function publishToSanity(
     publishedAt,
     readTime: estimateReadTime(draft.blocks),
     contentGeo: blocksToContentGeo(draft.blocks, sectionAssetIds),
+    ...(pullQuote !== undefined ? { pullQuote } : {}),
     ...(thumbnailAssetId ? { thumbnail: { _type: "image", asset: { _type: "reference", _ref: thumbnailAssetId } } } : {}),
   };
 

@@ -25,6 +25,8 @@ interface DraftCard {
   opportunityId: string;
   brief: BriefFields;
   createdAt: string;
+  /** Last-modified time (outline edits, article generation, send to Sanity, etc.) — falls back to createdAt when absent (e.g. trashed-sessions fetch doesn't request it). */
+  updatedAt?: string;
   creatorEmail?: string;
 }
 
@@ -83,6 +85,14 @@ interface V2CardCache {
   seoCategory?: string;
   imageSeoMeta?: Record<number, ImageSeoMeta>;
   draftSentAt?: string;
+  titleVariants?: string[];
+  activeTitleIdx?: number;
+  /** Section orders whose illustration the user explicitly removed — kept out of the article, the Image SEO panel, and the publish payload. */
+  removedImageOrders?: number[];
+  /** User-edited pull-quote text. Absent = use the auto-extracted one. */
+  pullQuoteOverride?: string;
+  /** True once the user removes the pull-quote entirely. */
+  pullQuoteRemoved?: boolean;
   savedAt: string;
 }
 
@@ -145,12 +155,66 @@ function extractPullQuote(section: GeneratedSection | undefined): string | null 
   return candidates.sort((a, b) => b.length - a.length)[0];
 }
 
+/** Read-only pull-quote, used by the website-preview pane. */
 function PullQuote({ text }: { text: string }) {
   return (
     <blockquote style={{ margin: "36px 0 0", padding: "2px 0 2px 26px", borderLeft: `3px solid ${C.salmon}` }}>
       <p style={{ margin: 0, fontSize: 22, fontWeight: 600, fontStyle: "italic", lineHeight: 1.5, letterSpacing: "-.3px", color: C.dark }}>
         &ldquo;{text}&rdquo;
       </p>
+    </blockquote>
+  );
+}
+
+/** Pull-quote in the editor: click the text to rewrite it, × to drop it from the article. */
+function EditablePullQuote({ text, onEdit, onRemove }: { text: string; onEdit?: (v: string) => void; onRemove?: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(text);
+  const [hovered, setHovered] = useState(false);
+
+  const commit = () => {
+    const v = draft.trim();
+    if (v && v !== text) onEdit?.(v);
+    setEditing(false);
+  };
+
+  return (
+    <blockquote
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{ position: "relative", margin: "36px 0 0", padding: "2px 0 2px 26px", borderLeft: `3px solid ${C.salmon}` }}
+    >
+      {hovered && onRemove && !editing && (
+        <button
+          onClick={onRemove}
+          title="Remove the pull-quote"
+          style={{ position: "absolute", top: -6, right: -6, zIndex: 3, width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(249,57,67,.45)", background: C.white, color: C.red, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0, boxShadow: "0 2px 6px rgba(0,0,0,.18)" }}
+        >
+          ×
+        </button>
+      )}
+      {editing ? (
+        <textarea
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commit(); }
+            if (e.key === "Escape") { setDraft(text); setEditing(false); }
+          }}
+          autoFocus
+          rows={3}
+          style={{ width: "100%", margin: 0, fontSize: 22, fontWeight: 600, fontStyle: "italic", lineHeight: 1.5, letterSpacing: "-.3px", color: C.dark, background: "rgba(22,61,38,.04)", border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 8px", outline: "none", resize: "none", boxSizing: "border-box", fontFamily: "inherit" }}
+        />
+      ) : (
+        <p
+          onClick={() => { setDraft(text); setEditing(true); }}
+          title="Click to edit the pull-quote"
+          style={{ margin: 0, fontSize: 22, fontWeight: 600, fontStyle: "italic", lineHeight: 1.5, letterSpacing: "-.3px", color: C.dark, cursor: "text" }}
+        >
+          &ldquo;{text}&rdquo;
+        </p>
+      )}
     </blockquote>
   );
 }
@@ -185,7 +249,7 @@ const NAV_ITEMS: [Screen, string, string, string][] = [
 const SCREEN_HEAD: Record<Screen, [string, string, string]> = {
   dashboard:  ["OVERVIEW",       "Answer engine visibility",          "How often the engines quote you, and what to write next."],
   generate:   ["CREATE",         "New GEO article",                   "Start from a prompt buyers actually type. We build the brief, draft and score in one run."],
-  queue:      ["PRODUCTION",     "Batch queue",                       "Twelve prompts drafting, scoring and staging in parallel."],
+  queue:      ["PRODUCTION",     "Batch queue",                       "Drafting, scoring and staging your queued prompts in parallel."],
   editor:     ["DRAFT",          "What is generative engine optimization?", "Edit alongside live scoring. Accept a suggestion and the score moves."],
   score:      ["DIAGNOSTIC",     "GEO score and recommendations",     "Where this draft wins a citation, and where it loses one."],
   keywords:   ["LIBRARY",        "Prompts and clusters",              "The question set we are trying to own for this client."],
@@ -354,8 +418,9 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
 
 // ─── Header ───────────────────────────────────────────────────────────────────
 
-function PageHeader({ screen, onGenerate, onKeywords }: { screen: Screen; onGenerate: () => void; onKeywords: () => void }) {
-  const [eyebrow, title, subtitle] = SCREEN_HEAD[screen];
+function PageHeader({ screen, onGenerate, onKeywords, subtitleOverride }: { screen: Screen; onGenerate: () => void; onKeywords: () => void; subtitleOverride?: string }) {
+  const [eyebrow, title, defaultSubtitle] = SCREEN_HEAD[screen];
+  const subtitle = subtitleOverride ?? defaultSubtitle;
   return (
     <header style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 24, padding: "32px 40px 24px", borderBottom: `1px solid ${C.border}`, background: C.bg, position: "sticky", top: 0, zIndex: 5 }}>
       <div style={{ minWidth: 0 }}>
@@ -619,6 +684,14 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
   const [oneShotFormat, setOneShotFormat] = useState("Definitional explainer");
   const [oneShotLength, setOneShotLength] = useState(1200);
   const [oneShotGenerating, setOneShotGenerating] = useState(false);
+  // setState-based guards (oneShotGenerating/generating below) don't take effect
+  // until the next render, so a fast double-click can fire the handler twice
+  // before React re-renders with the flag set — both calls see the stale
+  // "not generating" value and both create a session. This is exactly what
+  // produced duplicate builder_sessions rows ~100-300ms apart in production.
+  // A ref updates synchronously, so it actually blocks the second call.
+  const oneShotSubmittingRef = useRef(false);
+  const chatSubmittingRef = useRef(false);
   const [chatInput, setChatInput] = useState("");
 
   // ── Conversational chat state ────────────────────────────────────────────────
@@ -667,7 +740,8 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
   }
 
   async function generateFromBrief() {
-    if (!readyToGenerate || generating) return;
+    if (!readyToGenerate || generating || chatSubmittingRef.current) return;
+    chatSubmittingRef.current = true;
     setGenerating(true);
     setChatError(null);
     try {
@@ -697,11 +771,14 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
     } catch (e) {
       setChatError(e instanceof Error ? e.message : "Failed to create session");
       setGenerating(false);
+    } finally {
+      chatSubmittingRef.current = false;
     }
   }
 
   async function handleOneShotGenerate() {
-    if (!brief.trim() || oneShotGenerating) return;
+    if (!brief.trim() || oneShotGenerating || oneShotSubmittingRef.current) return;
+    oneShotSubmittingRef.current = true;
     setOneShotGenerating(true);
     try {
       const activeFlags = TOGGLE_LABELS.filter((_, i) => togglesOn.includes(i));
@@ -730,6 +807,7 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
       console.error("[one-shot] failed to create session:", e);
     } finally {
       setOneShotGenerating(false);
+      oneShotSubmittingRef.current = false;
     }
   }
 
@@ -1068,13 +1146,14 @@ const QUEUE_ROWS_DATA = [
 ];
 
 function QueueScreen({
-  onEditor, onGenerate, batchQueueEntries, onRemoveFromBatchQueue, onActivateCard,
+  onEditor, onGenerate, batchQueueEntries, onRemoveFromBatchQueue, onActivateCard, onArticleBuilt,
 }: {
   onEditor: () => void;
   onGenerate: () => void;
   batchQueueEntries: BatchQueueEntry[];
   onRemoveFromBatchQueue: (id: string) => void;
   onActivateCard: (id: string) => void;
+  onArticleBuilt?: (id: string) => void;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [buildProgress, setBuildProgress] = useState<Map<string, { pct: number; stage: string; error?: string }>>(new Map());
@@ -1134,6 +1213,8 @@ function QueueScreen({
                 brandVoiceStatus: parsed.brand_voice_status ?? null,
                 seoPageTitle: parsed.article!.title ?? title,
                 seoTitle: "", seoSlug: "", seoMetaDesc: "", seoTags: [],
+                titleVariants: [parsed.article!.title ?? title],
+                activeTitleIdx: 0,
                 savedAt: new Date().toISOString(),
               });
               // Persist to Supabase so the article survives a page refresh
@@ -1142,6 +1223,33 @@ function QueueScreen({
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ article: parsed.article }),
               }).catch(() => {});
+              // Fetch 2 more title alternatives in the background, same as live
+              // generation — batch-built cards previously never got these, so
+              // opening one afterward only ever showed a single title option.
+              {
+                const _art = parsed.article!;
+                const introText = _art.sections[0]?.content.paragraphs[0]?.text ?? "";
+                fetch(`/api/builder-sessions/${id}/title-variants`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ title: _art.title, intro: introText }),
+                }).then(r => r.json()).then((d: { variants?: string[] }) => {
+                  if (d.variants && d.variants.length > 1) {
+                    const existing = readCardCache(id);
+                    if (existing) writeCardCache(id, { ...existing, titleVariants: d.variants });
+                  }
+                }).catch(() => {});
+              }
+              // Mark this card as having an article at the top level too — the
+              // "Open" button's restore effect falls back to fetching straight
+              // from the server (bypassing local cache entirely) when a card's
+              // id is in withArticleIds, and that set previously only ever got
+              // updated by live single-article generation or a periodic
+              // background fetch, never by a batch build. Without this, a
+              // batch-built card whose local cache write raced with something
+              // else (e.g. the async per-user cache-key init) had NO fallback
+              // and landed back on the Plan step instead of the Article step.
+              onArticleBuilt?.(id);
             }
           } catch { /* partial chunk */ }
         }
@@ -1426,7 +1534,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
       <div style={{ paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.08)", marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <span style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.42)" }}>{timeAgo(card.createdAt)}</span>
+            <span style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.42)" }}>{timeAgo(card.updatedAt || card.createdAt)}</span>
             {card.creatorEmail && (
               <span style={{ fontSize: 10, fontWeight: 500, color: "rgba(22,61,38,.38)" }}>{card.creatorEmail.split("@")[0]}</span>
             )}
@@ -1696,7 +1804,7 @@ function EditablePara({ text, style, paraKey, sectionOrder, paraId, onEditParagr
   return <p key={paraKey} {...shared} ref={elRef as React.RefObject<HTMLParagraphElement>} />;
 }
 
-function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet, sidebarCollapsed, previewMode, onExitPreview, skipAutoImagesRef, articleGenerationId, onImagesChange, titleVariants, activeTitleIdx, onTitleIdxChange, onTitleEdit }: {
+function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet, sidebarCollapsed, previewMode, onExitPreview, skipAutoImagesRef, articleGenerationId, onImagesChange, removedImageOrders, onRemoveImage, onRestoreImage, pullQuoteOverride, pullQuoteRemoved, onPullQuoteEdit, onPullQuoteRemove, titleVariants, activeTitleIdx, onTitleIdxChange, onTitleEdit }: {
   article: GeneratedArticle;
   outline: V2OutlineSection[];
   onScore: () => void;
@@ -1714,6 +1822,13 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
    *  the auto-image effect doesn't key off article.title (which changes on rename). */
   articleGenerationId?: number;
   onImagesChange?: (thumbnails: Record<number, string | null>) => void;
+  removedImageOrders?: Set<number>;
+  onRemoveImage?: (order: number) => void;
+  onRestoreImage?: (order: number) => void;
+  pullQuoteOverride?: string | null;
+  pullQuoteRemoved?: boolean;
+  onPullQuoteEdit?: (text: string) => void;
+  onPullQuoteRemove?: () => void;
   titleVariants?: string[];
   activeTitleIdx?: number;
   onTitleIdxChange?: (idx: number) => void;
@@ -1768,6 +1883,7 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
       const order = imgModal.order;
       setSectionImages(prev => ({ ...prev, [order]: [dataUrl, ...(prev[order] ?? [])] }));
       setActiveImgIdx(prev => ({ ...prev, [order]: 0 }));
+      onRestoreImage?.(order); // giving the slot a picture again undoes an earlier removal
     };
     reader.readAsDataURL(file);
     // Reset so the same file can be re-selected if needed
@@ -1854,6 +1970,7 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
         if (data.cdnUrl) {
           setSectionImages(prev => ({ ...prev, [order]: [data.cdnUrl!, ...(prev[order] ?? [])] }));
           setActiveImgIdx(prev => ({ ...prev, [order]: 0 }));
+          onRestoreImage?.(order); // regenerating undoes an earlier removal
         }
       } else {
         const res = await fetch("/api/illustration-generate-claude", {
@@ -1865,6 +1982,7 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
         if (data.svgString) {
           setSectionImages(prev => ({ ...prev, [order]: [data.svgString!, ...(prev[order] ?? [])] }));
           setActiveImgIdx(prev => ({ ...prev, [order]: 0 }));
+          onRestoreImage?.(order); // regenerating undoes an earlier removal
         }
       }
     } catch {}
@@ -1999,7 +2117,8 @@ const hlStyle = (heading: string): React.CSSProperties =>
         );
       })()}
 
-      {/* Hero image — clickable to generate */}
+      {/* Hero image — clickable to generate. Removing it keeps this slot as an empty
+          placeholder so it can be regenerated; the removed flag is what excludes it. */}
       {(() => {
         const heroImgs = sectionImages[0] ?? [];
         const heroSvg = heroImgs[activeImgIdx[0] ?? 0] ?? null;
@@ -2013,6 +2132,22 @@ const hlStyle = (heading: string): React.CSSProperties =>
             onMouseLeave={() => setHoveredImg(null)}
             style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", cursor: "pointer", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)`, border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none" }}
           >
+            {/* Remove hero — clears the picture and drops the slot from the Image SEO panel
+                and publish payload, but leaves the placeholder here to regenerate from */}
+            {heroHovered && heroSvg && onRemoveImage && (
+              <button
+                onClick={e => {
+                  e.stopPropagation();
+                  setSectionImages(prev => ({ ...prev, 0: [] }));
+                  setActiveImgIdx(prev => ({ ...prev, 0: 0 }));
+                  onRemoveImage(0);
+                }}
+                title="Remove the hero image"
+                style={{ position: "absolute", top: 10, right: 10, zIndex: 3, width: 26, height: 26, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(249,57,67,.45)", background: C.white, color: C.red, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0, boxShadow: "0 2px 6px rgba(0,0,0,.18)" }}
+              >
+                ×
+              </button>
+            )}
             {heroSvg ? (
               heroSvg.startsWith("data:") || heroSvg.startsWith("http")
                 ? <img src={heroSvg} alt={article.title} style={{ width: "100%", height: 260, objectFit: imgFitMode[0] ?? "contain", objectPosition: imgPositions[0] ?? "50% 50%", display: "block" }} />
@@ -2086,7 +2221,8 @@ const hlStyle = (heading: string): React.CSSProperties =>
         {/* Body sections — floated image so text wraps underneath if content is longer */}
         {(() => {
           const midBodySec = body.length ? body[Math.floor(body.length / 2)] : undefined;
-          const pullQuoteText = extractPullQuote(midBodySec);
+          // A user edit wins over the auto-extracted sentence; removal wins over both.
+          const pullQuoteText = pullQuoteRemoved ? null : (pullQuoteOverride ?? extractPullQuote(midBodySec));
           return body.map((s, bi) => {
           const imgLeft = bi % 2 === 0;
           return (
@@ -2096,7 +2232,10 @@ const hlStyle = (heading: string): React.CSSProperties =>
                 section's boundary, producing a hard-edged line instead of a soft card-lift. */}
             <div id={sectionSlug(s.heading)} style={{ scrollMarginTop: 32, ...hlStyle(s.heading) }}>
               {divider}
-              {/* Floated illustration — clickable, shows active image from history */}
+              {/* Floated illustration — clickable, shows active image from history.
+                  A removed image keeps its slot here as an empty "generate" placeholder,
+                  so the author can change their mind; it's the removed flag (not this
+                  block) that keeps it out of the Image SEO panel and the publish payload. */}
               {(() => {
                 const imgs = sectionImages[s.order] ?? [];
                 const idx = activeImgIdx[s.order] ?? 0;
@@ -2109,16 +2248,37 @@ const hlStyle = (heading: string): React.CSSProperties =>
                   // Shadow lives on this outer wrapper (no overflow:hidden here) — putting both
                   // overflow:hidden and box-shadow on the same box makes browsers clip the shadow
                   // unevenly against the rounded corners. The inner box below owns the clipping.
-                  <div style={{
-                    float: imgLeft ? "left" : "right",
-                    marginRight: imgLeft ? 28 : 0,
-                    marginLeft: imgLeft ? 0 : 28,
-                    marginBottom: 16,
-                    width: 300, height: 240,
-                    borderRadius: 9,
-                    boxShadow: "0 12px 28px -8px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.06)",
-                    flexShrink: 0,
-                  }}>
+                  <div
+                    onMouseEnter={() => setHoveredImg(s.order)}
+                    onMouseLeave={() => setHoveredImg(null)}
+                    style={{
+                      float: imgLeft ? "left" : "right",
+                      marginRight: imgLeft ? 28 : 0,
+                      marginLeft: imgLeft ? 0 : 28,
+                      marginBottom: 16,
+                      width: 300, height: 240,
+                      borderRadius: 9,
+                      boxShadow: "0 12px 28px -8px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.06)",
+                      flexShrink: 0,
+                      position: "relative",
+                    }}
+                  >
+                  {/* Remove image — clears the picture and drops the slot from the Image SEO
+                      panel and publish payload, but leaves the placeholder here to regenerate from */}
+                  {isHovered && activeSvg && onRemoveImage && (
+                    <button
+                      onClick={e => {
+                        e.stopPropagation();
+                        setSectionImages(prev => ({ ...prev, [s.order]: [] }));
+                        setActiveImgIdx(prev => ({ ...prev, [s.order]: 0 }));
+                        onRemoveImage(s.order);
+                      }}
+                      title="Remove this image from the section"
+                      style={{ position: "absolute", top: -9, right: -9, zIndex: 3, width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(249,57,67,.45)", background: C.white, color: C.red, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0, boxShadow: "0 2px 6px rgba(0,0,0,.18)" }}
+                    >
+                      ×
+                    </button>
+                  )}
                   <div
                     onClick={() => { setImgModal({ order: s.order, heading: s.heading, sType: s.type, prompt: summary }); setImgPrompt(summary); }}
                     onMouseEnter={() => setHoveredImg(s.order)}
@@ -2190,7 +2350,12 @@ const hlStyle = (heading: string): React.CSSProperties =>
               <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 10 }}>
                 {s.eyebrow || s.type.replace(/_/g, " ").toUpperCase()}
               </div>
-              <h3 style={{ margin: "0 0 14px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-.2px", color: C.dark }}>{s.heading}</h3>
+              <EditableText
+                text={s.heading}
+                as="h3"
+                style={{ margin: "0 0 14px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-.2px", color: C.dark, display: "block" }}
+                onSave={newH => onEditHeading?.(s.order, newH)}
+              />
               {s.content.paragraphs.map((p, i) =>
                 <EditablePara key={p.id} text={p.text} style={{ margin: i < s.content.paragraphs.length - 1 ? "0 0 13px" : 0, fontSize: 14, fontWeight: 400, lineHeight: 1.7, color: "#222" }} paraKey={p.id} sectionOrder={s.order} paraId={p.id} onEditParagraph={onEditParagraph} />
               )}
@@ -2203,7 +2368,9 @@ const hlStyle = (heading: string): React.CSSProperties =>
               )}
               <div style={{ clear: "both" }} />
             </div>
-            {pullQuoteText && s === midBodySec && <PullQuote text={pullQuoteText} />}
+            {pullQuoteText && s === midBodySec && (
+              <EditablePullQuote text={pullQuoteText} onEdit={onPullQuoteEdit} onRemove={onPullQuoteRemove} />
+            )}
             </React.Fragment>
           );
           });
@@ -2679,7 +2846,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
           </div>
 
           {/* Hero image */}
-          {(() => {
+          {!removedImageOrders?.has(0) && (() => {
             const heroSvg = (sectionImages[0] ?? [])[activeImgIdx[0] ?? 0] ?? null;
             return (
               <div style={{ height: 260, overflow: "hidden", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)`, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none" }}>
@@ -2710,7 +2877,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
             {/* Body sections */}
             {(() => {
               const midBodySec = body.length ? body[Math.floor(body.length / 2)] : undefined;
-              const pullQuoteText = extractPullQuote(midBodySec);
+              const pullQuoteText = pullQuoteRemoved ? null : (pullQuoteOverride ?? extractPullQuote(midBodySec));
               return body.map((s, bi) => {
               const imgLeft = bi % 2 === 0;
               const activeSvg = (sectionImages[s.order] ?? [])[activeImgIdx[s.order] ?? 0] ?? null;
@@ -2718,7 +2885,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
                 <React.Fragment key={s.order}>
                 <div>
                   <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "44px 0" }} />
-                  {activeSvg && (
+                  {activeSvg && !removedImageOrders?.has(s.order) && (
                     // Shadow on the outer wrapper (no overflow:hidden) — the inner box owns the clip.
                     <div style={{
                       float: imgLeft ? "left" : "right",
@@ -2959,7 +3126,7 @@ function sectionTypeStyle(type: string) {
 
 // ─── Editor screen ────────────────────────────────────────────────────────────
 
-function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, sidebarCollapsed, newCardId, batchQueuedIds, onSendToBatchQueue, onRemoveFromBatchQueue, cardsLoading }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; sidebarCollapsed?: boolean; newCardId?: string | null; batchQueuedIds?: string[]; onSendToBatchQueue?: (id: string, title: string, outline: V2OutlineSection[]) => void; onRemoveFromBatchQueue?: (id: string) => void; cardsLoading?: boolean }) {
+function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, sidebarCollapsed, newCardId, batchQueuedIds, onSendToBatchQueue, onRemoveFromBatchQueue, cardsLoading, batchBuiltIds }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; sidebarCollapsed?: boolean; newCardId?: string | null; batchQueuedIds?: string[]; onSendToBatchQueue?: (id: string, title: string, outline: V2OutlineSection[]) => void; onRemoveFromBatchQueue?: (id: string) => void; cardsLoading?: boolean; batchBuiltIds?: Set<string> }) {
   // ── Plan step state ────────────────────────────────────────────────────────
   type EditorStep = "plan" | "article";
   const [editorStep, setEditorStep] = useState<EditorStep>("plan");
@@ -2989,6 +3156,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const outlineActiveRef = useRef(false); // true while outline fetch is in-flight — blocks re-runs
   const preloadedPlanRef = useRef<{ outline: V2OutlineSection[]; title: string; brief: BriefFields } | null>(null);
   const metadataAutoFetchRef = useRef(false);
+  // Holds the card id we last kicked a title-variants fetch off for, so the
+  // backfill runs at most once per card and a late response can be discarded
+  // if the user has since switched cards.
+  const titleVariantsFetchRef = useRef<string | null>(null);
   const skipAutoImagesRef = useRef(false); // true when resuming — prevents auto-regeneration of images
   // Bumped only when a genuinely NEW/different article is loaded (fresh generation or
   // resume) — NOT when the title is merely edited. The auto-image effect keys off this
@@ -3027,6 +3198,9 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [seoCategory, setSeoCategory] = useState("");
   const [imageSeoMeta, setImageSeoMeta] = useState<Record<number, ImageSeoMeta>>({});
   const [sectionThumbnails, setSectionThumbnails] = useState<Record<number, string | null>>({});
+  const [removedImageOrders, setRemovedImageOrders] = useState<Set<number>>(new Set());
+  const [pullQuoteOverride, setPullQuoteOverride] = useState<string | null>(null);
+  const [pullQuoteRemoved, setPullQuoteRemoved] = useState(false);
   const [titleVariants, setTitleVariants] = useState<string[]>([]);
   const [activeTitleIdx, setActiveTitleIdx] = useState(0);
   const [newTagInput, setNewTagInput] = useState("");
@@ -3058,11 +3232,15 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags, seoExcerpt, seoFocusKeyword, seoCategory,
-          heroImage: sectionThumbnails[0] ?? undefined,
-          // Section images in article-section order (excluding hero at order=0)
+          // "" means the user removed it — distinct from undefined, which lets the
+          // site fall back to auto-extracting a quote for older articles.
+          pullQuote: pullQuoteRemoved ? "" : (pullQuoteOverride ?? undefined),
+          heroImage: removedImageOrders.has(0) ? undefined : (sectionThumbnails[0] ?? undefined),
+          // Section images in article-section order (excluding hero at order=0).
+          // A removed image publishes as null so the section renders without one.
           sectionImages: (() => {
             const sorted = [...(articleData?.sections ?? [])].sort((a, b) => a.order - b.order).filter(s => s.order > 0)
-            const imgs = sorted.map(s => sectionThumbnails[s.order] ?? null)
+            const imgs = sorted.map(s => removedImageOrders.has(s.order) ? null : (sectionThumbnails[s.order] ?? null))
             return imgs.some(Boolean) ? imgs : undefined
           })(),
         }),
@@ -3154,9 +3332,14 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       seoCategory,
       imageSeoMeta,
       draftSentAt: draftSentAt ?? undefined,
+      titleVariants,
+      activeTitleIdx,
+      removedImageOrders: [...removedImageOrders],
+      pullQuoteOverride: pullQuoteOverride ?? undefined,
+      pullQuoteRemoved,
       savedAt: new Date().toISOString(),
     });
-  }, [activeCardId, editorStep, outline, articleTitle, articleData, geoScore, qualityFlags, brandVoiceStatus, seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags, articleFinalised, seoExcerpt, seoFocusKeyword, seoCategory, imageSeoMeta]);
+  }, [activeCardId, editorStep, outline, articleTitle, articleData, geoScore, qualityFlags, brandVoiceStatus, seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags, articleFinalised, seoExcerpt, seoFocusKeyword, seoCategory, imageSeoMeta, titleVariants, activeTitleIdx, removedImageOrders, pullQuoteOverride, pullQuoteRemoved]);
 
   // ── Debounced Supabase auto-save: fires 3 s after articleData last changed ─
   useEffect(() => {
@@ -3207,12 +3390,25 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           articleFinalised,
           seoExcerpt,
           seoFocusKeyword,
+          titleVariants,
+          activeTitleIdx,
+          removedImageOrders: [...removedImageOrders],
+          pullQuoteOverride: pullQuoteOverride ?? undefined,
+          pullQuoteRemoved,
+          // Missing here previously — this write REPLACES the whole cache entry
+          // (not a merge), so a "sent to Sanity" card that navigated straight
+          // back to the grid without any other edit in between had its
+          // draftSentAt silently dropped from local cache, leaving _isSent()'s
+          // cache-fallback check with nothing to find.
+          draftSentAt: draftSentAt ?? undefined,
           savedAt: new Date().toISOString(),
         });
       }
       prevCardIdRef.current = null;
       outlineActiveRef.current = false;
       metadataAutoFetchRef.current = false;
+      // Cleared so re-opening a card retries the backfill if its first attempt failed
+      titleVariantsFetchRef.current = null;
       // Clear article state so the next card activation starts from a clean slate
       setEditorStep("plan");
       setOutline([]);
@@ -3232,6 +3428,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       setSeoExcerpt("");
       setSeoFocusKeyword("");
       setImageSeoMeta({});
+      setTitleVariants([]);
+      setActiveTitleIdx(0);
+      setRemovedImageOrders(new Set());
+      setPullQuoteOverride(null);
+      setPullQuoteRemoved(false);
       return;
     }
     // If an outline fetch is already in-flight for this card, don't interrupt it
@@ -3284,6 +3485,16 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         if (cached.seoCategory) setSeoCategory(cached.seoCategory);
         setImageSeoMeta(cached.imageSeoMeta ?? {});
         if (cached.draftSentAt) { setDraftSentAt(cached.draftSentAt); setDraftState("success"); }
+        // Fall back to the article's own title when older cached articles (saved
+        // before this field existed) have no titleVariants — better than showing
+        // a blank title-picker.
+        setTitleVariants(cached.titleVariants && cached.titleVariants.length > 0
+          ? cached.titleVariants
+          : [cached.articleData.title ?? ""]);
+        setActiveTitleIdx(cached.activeTitleIdx ?? 0);
+        setRemovedImageOrders(new Set(cached.removedImageOrders ?? []));
+        setPullQuoteOverride(cached.pullQuoteOverride ?? null);
+        setPullQuoteRemoved(cached.pullQuoteRemoved ?? false);
         setArticleLoading(false);
         setArticleError(null);
       }
@@ -3292,7 +3503,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
 
     // Sent-to-Sanity OR article-saved cards: fetch from server directly —
     // skip outline generation entirely, no token cost, land on article step.
-    if (sentToSanityIds.has(activeCardId) || withArticleIds.has(activeCardId)) {
+    // batchBuiltIds also counts here — it's the one signal that's synchronously
+    // available on this very first render (a prop, not an async fetch result),
+    // covering a card that was just built through the batch queue before
+    // withArticleIds' own background fetch has had a chance to resolve.
+    if (sentToSanityIds.has(activeCardId) || withArticleIds.has(activeCardId) || batchBuiltIds?.has(activeCardId)) {
       setEditorStep("article");
       setArticleLoading(true);
       setArticleError(null);
@@ -3323,6 +3538,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               description: [],
               keywords: [],
             })));
+            // This path restores straight from the server (no local cache), which
+            // never stored title variants — fall back to just the saved title so
+            // the picker at least shows something instead of nothing.
+            setTitleVariants([data.article.title ?? ""]);
+            setActiveTitleIdx(0);
           } else {
             setArticleError(data.error ?? "Could not load saved article");
           }
@@ -3376,7 +3596,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       })
       .catch((e: unknown) => { setOutlineError(e instanceof Error ? e.message : String(e)); setOutlineRetrying(false); })
       .finally(() => { outlineActiveRef.current = false; setOutlineLoading(false); });
-  }, [activeCardId, draftCards, savedPlans, sentToSanityIds, withArticleIds, outlineRetryCount]);
+  }, [activeCardId, draftCards, savedPlans, sentToSanityIds, withArticleIds, outlineRetryCount, batchBuiltIds]);
 
   // ── Outline progress: NProgress-style easing + organic trickle, 100% before reveal ──
   useEffect(() => {
@@ -3946,6 +4166,38 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   // generateMetadata reads from closure; only re-run when finalised state or card changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [articleFinalised, articleData, activeCardId]);
+
+  // ── Backfill title variants whenever an article has fewer than 2 ──
+  // Fetching these at article-creation time alone proved unreliable: the batch
+  // queue builds articles while this screen isn't mounted, a server restore
+  // carries no variants at all, and any article generated before variants
+  // existed has none. Worse, the batch path's background write could be
+  // clobbered by this screen's own autosave writing the stale single-entry
+  // value back over it. Backfilling here instead covers every one of those
+  // paths with one rule: if the picker has nothing to show, go get them.
+  useEffect(() => {
+    if (!activeCardId || !articleData || articleLoading) return;
+    if (titleVariants.length > 1) return;           // already have a set
+    if (titleVariantsFetchRef.current === activeCardId) return; // already tried for this card
+    titleVariantsFetchRef.current = activeCardId;
+    const cardId = activeCardId;
+    const introText = articleData.sections[0]?.content.paragraphs[0]?.text ?? "";
+    fetch(`/api/builder-sessions/${cardId}/title-variants`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: articleData.title, intro: introText }),
+    })
+      .then(r => r.json())
+      .then((d: { variants?: string[] }) => {
+        // Ignore a late response for a card the user has already navigated away from
+        if (titleVariantsFetchRef.current !== cardId) return;
+        if (d.variants && d.variants.length > 1) {
+          setTitleVariants(d.variants);
+          setActiveTitleIdx(0);
+        }
+      })
+      .catch(() => {});
+  }, [activeCardId, articleData, articleLoading, titleVariants.length]);
 
   // ── Generate article via validate-plan SSE ─────────────────────────────────
   async function generateArticle() {
@@ -4705,6 +4957,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                     setSeoExcerpt(cached.seoExcerpt ?? "");
                     setSeoFocusKeyword(cached.seoFocusKeyword ?? "");
                     if (cached.seoCategory) setSeoCategory(cached.seoCategory);
+                    setTitleVariants(cached.titleVariants && cached.titleVariants.length > 0
+                      ? cached.titleVariants
+                      : [cached.articleData.title ?? ""]);
+                    setActiveTitleIdx(cached.activeTitleIdx ?? 0);
                     setEditorStep("article");
                   }}
                   style={{ padding: "13px 24px", borderRadius: 8, background: C.mid, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
@@ -4716,7 +4972,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                 </button>
               )}
               {/* Load from server — shown when card has a saved article on server but nothing in state or cache */}
-              {activeCardId && !articleData && !readCardCache(activeCardId)?.articleData && (sentToSanityIds.has(activeCardId) || withArticleIds.has(activeCardId)) && (
+              {activeCardId && !articleData && !readCardCache(activeCardId)?.articleData && (sentToSanityIds.has(activeCardId) || withArticleIds.has(activeCardId) || batchBuiltIds?.has(activeCardId)) && (
                 <button
                   disabled={restoring}
                   onClick={async () => {
@@ -4746,6 +5002,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                           description: [],
                           keywords: [],
                         })));
+                        setTitleVariants([data.article.title ?? ""]);
+                        setActiveTitleIdx(0);
                         setEditorStep("article");
                       }
                     } catch { /* non-fatal */ }
@@ -4863,6 +5121,13 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               skipAutoImagesRef={skipAutoImagesRef}
               articleGenerationId={articleGenerationId}
               onImagesChange={setSectionThumbnails}
+              removedImageOrders={removedImageOrders}
+              onRemoveImage={order => setRemovedImageOrders(prev => new Set([...prev, order]))}
+              onRestoreImage={order => setRemovedImageOrders(prev => { const n = new Set(prev); n.delete(order); return n; })}
+              pullQuoteOverride={pullQuoteOverride}
+              pullQuoteRemoved={pullQuoteRemoved}
+              onPullQuoteEdit={setPullQuoteOverride}
+              onPullQuoteRemove={() => setPullQuoteRemoved(true)}
               brandVoiceMatches={
                 brandVoiceStatus?.status === "partial"
                   ? (brandVoiceStatus.residuals?.flatMap(r => r.violations.map(v => v.match)) ?? [])
@@ -5180,7 +5445,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                       <div style={{ fontSize: 11, color: "rgba(22,61,38,.4)", lineHeight: 1.5, maxWidth: "22ch", margin: "0 auto" }}>Complete your edits, then finalise to unlock SEO metadata.</div>
                     </div>
                     <button
-                      onClick={() => setArticleFinalised(true)}
+                      onClick={() => { setArticleFinalised(true); void generateMetadata(); }}
                       style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6, padding: "9px 16px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 11, fontWeight: 700, border: "none", cursor: "pointer" }}
                     >
                       <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6l3 3 5-5"/></svg>
@@ -5297,7 +5562,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
 
                     {/* ── IMAGE SEO ── */}
                     {(() => {
-                      // Only sections that actually get images — same filter as the auto-image loader
+                      // Only sections that actually get images — same filter as the auto-image
+                      // loader, minus any whose image the user removed with the × in the article.
                       const imgSlots = [
                         { order: 0, label: "Hero", type: "hero", heading: articleData?.title ?? "Hero" },
                         ...(articleData?.sections ?? [])
@@ -5307,7 +5573,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                             !/frequently asked/i.test(s.heading)
                           )
                           .map(s => ({ order: s.order, label: s.type.toUpperCase(), type: s.type, heading: s.heading })),
-                      ];
+                      ].filter(slot => !removedImageOrders.has(slot.order));
                       return (
                         <div>
                           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, marginTop: 4 }}>
@@ -5438,6 +5704,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         geoScore, qualityFlags, brandVoiceStatus,
                         seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags,
                         articleFinalised, seoExcerpt, seoFocusKeyword, imageSeoMeta,
+                        titleVariants, activeTitleIdx,
+                        removedImageOrders: [...removedImageOrders],
+                        pullQuoteOverride: pullQuoteOverride ?? undefined,
+                        pullQuoteRemoved,
+                        draftSentAt: draftSentAt ?? undefined,
                         savedAt: new Date().toISOString(),
                       });
                       // Also persist to Supabase so restore-article always returns the latest version
@@ -7165,7 +7436,7 @@ function TrashScreen({ trashedCards, onRestore, onDeletePermanently, onEmptyTras
             )}
             <div style={{ flex: 1 }} />
             <div style={{ fontSize: 11, color: "rgba(22,61,38,.38)", marginBottom: 16, paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.07)" }}>
-              {timeAgo(card.createdAt)}
+              {timeAgo(card.updatedAt || card.createdAt)}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button
@@ -7505,6 +7776,14 @@ function AtelierV2Page() {
 
   // ── Batch queue ───────────────────────────────────────────────────────────────
   const [batchQueueEntries, setBatchQueueEntries] = useState<BatchQueueEntry[]>([]);
+  // Lives at this top level (not inside EditorScreen) because EditorScreen fully
+  // unmounts whenever the user leaves the editor screen — its own withArticleIds
+  // resets to empty on every fresh mount and only repopulates via an async
+  // fetch. A card built through the batch queue is built while EditorScreen
+  // isn't even mounted, so without this, clicking "Open" right after a batch
+  // build could lose the race against that fetch and fall through to
+  // generating a brand new outline instead of showing the finished article.
+  const [batchBuiltIds, setBatchBuiltIds] = useState<Set<string>>(new Set());
 
   function handleSendToBatchQueue(id: string, title: string, outline: V2OutlineSection[]) {
     setBatchQueueEntries(prev => {
@@ -7530,7 +7809,7 @@ function AtelierV2Page() {
   // Load existing active sessions from DB on mount (trashed excluded server-side)
   useEffect(() => {
     fetch("/api/builder-sessions")
-      .then(r => r.ok ? r.json() as Promise<Array<{ opportunityId: string; topicTitle: string; createdAt: string; creatorEmail?: string; batchQueuedAt?: string | null; outline?: V2OutlineSection[] }>> : null)
+      .then(r => r.ok ? r.json() as Promise<Array<{ opportunityId: string; topicTitle: string; createdAt: string; updatedAt?: string; creatorEmail?: string; batchQueuedAt?: string | null; outline?: V2OutlineSection[] }>> : null)
       .then(sessions => {
         if (sessions?.length) {
           const sorted = [...sessions].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -7542,6 +7821,7 @@ function AtelierV2Page() {
                 opportunityId: s.opportunityId,
                 brief: { prompt: s.topicTitle } as BriefFields,
                 createdAt: s.createdAt,
+                updatedAt: s.updatedAt,
                 creatorEmail: s.creatorEmail,
               }));
             return [...prev, ...toAdd];
@@ -7766,13 +8046,22 @@ function AtelierV2Page() {
       />
 
       <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-        {screen !== "editor" && screen !== "generate" && <PageHeader screen={screen} onGenerate={go("generate")} onKeywords={go("keywords")} />}
+        {screen !== "editor" && screen !== "generate" && (
+          <PageHeader
+            screen={screen}
+            onGenerate={go("generate")}
+            onKeywords={go("keywords")}
+            subtitleOverride={screen === "queue"
+              ? `${batchQueueEntries.length} prompt${batchQueueEntries.length !== 1 ? "s" : ""} drafting, scoring and staging in parallel.`
+              : undefined}
+          />
+        )}
 
         <div style={{ flex: 1, padding: "32px 40px 64px" }}>
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}
           {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} onFlowChange={setGenerateDefaultFlow} />}
-          {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} batchQueueEntries={batchQueueEntries} onRemoveFromBatchQueue={handleRemoveFromBatchQueue} onActivateCard={handleActivateCard} />}
-          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} newCardId={newCardId} batchQueuedIds={batchQueueEntries.map(e => e.id)} onSendToBatchQueue={handleSendToBatchQueue} onRemoveFromBatchQueue={handleRemoveFromBatchQueue} cardsLoading={cardsLoading} />}
+          {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} batchQueueEntries={batchQueueEntries} onRemoveFromBatchQueue={handleRemoveFromBatchQueue} onActivateCard={handleActivateCard} onArticleBuilt={id => setBatchBuiltIds(prev => new Set([...prev, id]))} />}
+          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} newCardId={newCardId} batchQueuedIds={batchQueueEntries.map(e => e.id)} onSendToBatchQueue={handleSendToBatchQueue} onRemoveFromBatchQueue={handleRemoveFromBatchQueue} cardsLoading={cardsLoading} batchBuiltIds={batchBuiltIds} />}
           {/* {screen === "score" && <ScoreScreen onEditor={go("editor")} />} — score lives inside the article editor */}
           {screen === "keywords"   && <KeywordsScreen />}
           {screen === "publish"    && <PublishScreen />}

@@ -139,13 +139,27 @@ Return valid JSON only (no markdown):
     // Repair FAQ paragraphs whose \n separator was dropped during refinement.
     // Also split run-on paragraphs that GPT crams with multiple Q/A pairs.
     const repairFaqText = (text: string): string => {
-      if (!text.trimStart().startsWith("Q:")) return text;
+      const trimmed = text.trim();
+      if (!trimmed.startsWith("Q:")) {
+        // GPT can also leak an answer into its own paragraph with no "Q:" prefix
+        // at all (e.g. "A: ... Q: <next question>..."), which the old guard
+        // left completely untouched, rendering as a garbled run-on item in the
+        // accordion. This route must keep exactly one paragraph in, one out —
+        // it can't split into a new pair like the main generation path does —
+        // so the best available fix is to cut at the first embedded "Q:" marker
+        // (dropping the rest, which belongs to a different, unrecoverable pair
+        // here) and strip the leaked "A:" label rather than showing it raw.
+        if (!trimmed.includes("Q:") && !trimmed.includes("A:")) return text;
+        const firstQ = trimmed.search(/\sQ:\s/);
+        const cut = firstQ > 0 ? trimmed.slice(0, firstQ).trim() : trimmed;
+        return cut.replace(/^A:\s*/, "").trim();
+      }
       // If the text contains MULTIPLE Q: occurrences, keep only the first Q/A
       // (the route currently has 1 paragraph per array index — splitting would
       // change the array length and break the structure-preserving refine.
       // Better to truncate than to render run-on garbage in the accordion.)
-      const secondQ = text.indexOf(" Q:", 3);
-      const cleanText = secondQ > 0 ? text.slice(0, secondQ).trim() : text;
+      const secondQ = trimmed.indexOf(" Q:", 3);
+      const cleanText = secondQ > 0 ? trimmed.slice(0, secondQ).trim() : trimmed;
       if (cleanText.includes("\nA:")) return cleanText;
       return cleanText
         .replace(/([?.!])\s*A:\s*/, "$1\nA: ")

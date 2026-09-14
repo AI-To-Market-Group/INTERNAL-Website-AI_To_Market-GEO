@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { getSession, updateSession } from "@/lib/builder-sessions-store";
 import { requireUser } from "@/lib/api-auth";
+import { getExistingCategories } from "@/lib/sanity-publish";
 import type { ArticleDraftBlock, GenerateArticleResponse, InferArticleMetadataResponse, SeoWarning } from "@/types";
 
 type Params = { params: Promise<{ opportunityId: string }> };
@@ -105,12 +106,23 @@ Return JSON only:
 async function generateContentFields(
   apiKey: string,
   title: string,
-  articleText: string
+  articleText: string,
+  existingCategories: string[]
 ): Promise<{ tags: string[]; excerpt: string; seo_description: string; category: string }> {
   // Send title + first ~800 words — enough context, minimal tokens
   const wordLimit = 800;
   const words = articleText.split(/\s+/);
   const snippet = words.slice(0, wordLimit).join(" ") + (words.length > wordLimit ? "…" : "");
+
+  // Without this, the model invents a fresh category label on every single
+  // article (no memory of prior runs) — the category list grows unbounded
+  // and near-duplicates pile up ("AI Strategy" / "AI Strategies" / "Strategy
+  // & AI"). Feeding back what's already live lets it reuse a matching one.
+  const categoryGuidance = existingCategories.length
+    ? `- "category": pick the BEST-FITTING category for this article. First check the EXISTING categories already in use on the site — if this article reasonably fits one of them, return that EXACT label (same spelling and casing, verbatim):
+${existingCategories.map((c) => `  • ${c}`).join("\n")}
+  Only invent a new category (2–4 words max, title case) if none of the existing ones genuinely fit. Do not create a near-duplicate of an existing one (e.g. a different phrasing of the same idea) — reuse the existing label instead.`
+    : `- "category": a short, natural content category label for this article (2–4 words max, title case). Examples: "Industry News", "Case Study", "Deep Dive", "AI Strategy", "Product Update", "Thought Leadership", "How-To Guide". Pick the label that best fits the article's purpose and tone — do not force it into a predefined list.`;
 
   const system = `You are an SEO metadata writer for AI To Market, a B2B AI content and strategy company.
 
@@ -119,7 +131,7 @@ Generate metadata for a blog article. Return JSON only with these four fields:
 - "tags": array of 5–7 lowercase topic tags relevant to the article (B2B, AI, marketing, strategy — no generic words like "article" or "blog"). Use hyphenated multi-word tags where appropriate, e.g. "ai-content", "geo-optimisation", "b2b-marketing".
 - "excerpt": 1–2 sentence summary of the article (max 200 chars). Write as a value statement, not "This article covers…".
 - "seo_description": compelling meta description for search results (max 160 chars). Include a benefit or insight hook. No trailing full stop needed.
-- "category": a short, natural content category label for this article (2–4 words max, title case). Examples: "Industry News", "Case Study", "Deep Dive", "AI Strategy", "Product Update", "Thought Leadership", "How-To Guide". Pick the label that best fits the article's purpose and tone — do not force it into a predefined list.
+${categoryGuidance}
 
 Return ONLY valid JSON: { "tags": [...], "excerpt": "...", "seo_description": "...", "category": "..." }`;
 
@@ -191,8 +203,9 @@ export async function POST(req: NextRequest, { params }: Params) {
     const warnings: SeoWarning[] = [];
 
     if (apiKey) {
+      const existingCategories = await getExistingCategories();
       const [contentFields, imgMeta] = await Promise.allSettled([
-        generateContentFields(apiKey, title, articleResponseToText(article)),
+        generateContentFields(apiKey, title, articleResponseToText(article), existingCategories),
         body.sections?.length
           ? generateImageMetadata(apiKey, title, body.sections)
           : Promise.resolve([] as ImageMetaItem[]),
@@ -238,7 +251,8 @@ export async function POST(req: NextRequest, { params }: Params) {
   if (apiKey && blocks.length > 0) {
     try {
       const articleText = blocksToText(blocks);
-      ({ tags, excerpt, seo_description } = await generateContentFields(apiKey, title, articleText));
+      const existingCategories = await getExistingCategories();
+      ({ tags, excerpt, seo_description } = await generateContentFields(apiKey, title, articleText, existingCategories));
     } catch {
       // Fall back to safe defaults if LLM fails — don't block the whole metadata generation
       tags = [title.replace(/[^a-zA-Z0-9\s]/g, "").trim().split(/\s+/)[0]?.toLowerCase() ?? "ai"];
