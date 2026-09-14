@@ -28,8 +28,8 @@ export function computeBudget(
  * Returns the length-control block to inject into a GENERATION prompt.
  * Call this in validate-plan with outline.length as sectionCount.
  */
-export function getGenerationLengthPrompt(sectionCount: number): string {
-  const { total, perSection, perParagraph } = computeBudget(sectionCount);
+export function getGenerationLengthPrompt(sectionCount: number, totalBudget?: number): string {
+  const { total, perSection, perParagraph } = computeBudget(sectionCount, totalBudget);
   return `WORD COUNT CONTROLLER (mandatory):
 - Total article: ${total} words maximum across all sections
 - Per section: ~${perSection} words

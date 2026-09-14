@@ -92,11 +92,20 @@ export function mapGenerateArticleResponseToDraft(
 ): ArticleDraft {
   const blocks: ArticleDraftBlock[] = [];
   for (const sec of response.sections.sort((a, b) => a.order - b.order)) {
+    const rawBullets = (sec.content.bullets ?? []) as unknown[];
+    const bulletStrings = rawBullets
+      .map((b) => typeof b === "string" ? b.replace(/<[^>]+>/g, "").trim() : "")
+      .filter(Boolean);
     blocks.push({
       id: uid(),
       type: "heading",
       content: sec.heading,
-      meta: { sectionOrder: sec.order, sectionType: sec.type },
+      meta: {
+        sectionOrder: sec.order,
+        sectionType: sec.type,
+        ...(sec.eyebrow ? { eyebrow: sec.eyebrow } : {}),
+        ...(bulletStrings.length ? { bullets: bulletStrings } : {}),
+      },
     });
     for (const p of sec.content.paragraphs) {
       blocks.push({

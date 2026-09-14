@@ -1,5 +1,5 @@
 import type { NextRequest } from "next/server";
-import { updateSession } from "@/lib/builder-sessions-store";
+import { getSession, updateSession } from "@/lib/builder-sessions-store";
 import { chatJson } from "@/lib/openai-article";
 import { requireUser } from "@/lib/api-auth";
 import { getBrandVoicePrompt } from "@/lib/brand-voice";
@@ -143,7 +143,17 @@ export async function POST(req: NextRequest, { params }: Params) {
     justification_signals?: string[];
     tags?: string[];
   };
-  const topicTitle = body.topic_title ?? "Article";
+
+  // Merge stored session context — lets one-shot briefs (format/length/flags
+  // embedded in opportunityContext.content_brief) reach outline generation
+  // without the editor needing to re-pass them explicitly.
+  const session = await getSession(user.id, opportunityId);
+  const sessionCtx = session?.opportunityContext;
+  const resolvedContentBrief = body.content_brief ?? sessionCtx?.content_brief;
+  const resolvedTheme = body.theme ?? sessionCtx?.theme;
+  const resolvedTags = body.tags?.length ? body.tags : sessionCtx?.tags;
+
+  const topicTitle = body.topic_title ?? session?.topicTitle ?? "Article";
 
   let response: GenerateArticleSectionsResponse;
   const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -181,11 +191,11 @@ STRUCTURE RULES:
 8. For every "introduction", "section", "comparison", and "how_to" section, write a punchy 2–4 word "eyebrow" in ALL CAPS that captures the specific tension or angle of that section (e.g. "THE PROOF PROBLEM", "TOOL SHOWDOWN", "WHY FLUENCY FAILS"). Do NOT set eyebrow for faq, stats, or conclusion — those use fixed structural labels.
 9. Each description array MUST have exactly 3 bullets: "What to cover: [specific content with real product names]", "Angle: [perspective]", "Avoid: [pitfalls]". No generic bullets like "explain benefits" — name the actual mechanism, brand, or stat.`;
       const contextLines: string[] = [`Topic: ${topicTitle}`];
-      if (body.theme) contextLines.push(`Theme: ${body.theme}`);
+      if (resolvedTheme) contextLines.push(`Theme: ${resolvedTheme}`);
       if (body.intents?.length) contextLines.push(`Intents: ${body.intents.join(", ")}`);
-      if (body.content_brief) contextLines.push(`Why this topic now: ${body.content_brief}`);
+      if (resolvedContentBrief) contextLines.push(`Why this topic now: ${resolvedContentBrief}`);
       if (body.justification_signals?.length) contextLines.push(`Content gap signals: ${body.justification_signals.join("; ")}`);
-      if (body.tags?.length) contextLines.push(`Target keywords: ${body.tags.join(", ")}`);
+      if (resolvedTags?.length) contextLines.push(`Target keywords: ${resolvedTags.join(", ")}`);
       const userPrompt = contextLines.join("\n");
       response = await chatJson<GenerateArticleSectionsResponse>(system, userPrompt, undefined, { userId: user.id, feature: "article-outline" });
       if (!response.sections?.length) {

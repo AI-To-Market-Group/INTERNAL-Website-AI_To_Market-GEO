@@ -11,6 +11,7 @@ import { getBrandVoicePrompt, getWordCountTargets } from "@/lib/brand-voice";
 import { detectViolations, correctViolations } from "@/lib/brand-voice-checker";
 import { computeGeoScore } from "@/lib/geo-score";
 import { mapGenerateArticleResponseToDraft } from "@/lib/article-builder-utils";
+import { searchForCitation, rewriteWithCitation } from "@/lib/citation-finder";
 import type {
   OutlineSection,
   GenerateArticleResponse,
@@ -73,7 +74,19 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
         id: (p as GenerateArticleParagraph).id ?? i * 10 + j + 1,
         text: (p as GenerateArticleParagraph).text ?? "",
       })),
-      bullets: s.content?.bullets ?? [],
+      // Defensive: the schema example only shows an empty "bullets": [] with no
+      // populated-item example, so the model occasionally mirrors the nearby
+      // {id, text} paragraph shape instead of plain strings. Coerce anything
+      // that isn't already a string so the client never renders "[object Object]".
+      bullets: (s.content?.bullets ?? []).map((b) => {
+        if (typeof b === "string") return b;
+        if (b && typeof b === "object") {
+          const obj = b as Record<string, unknown>;
+          const text = obj.text ?? obj.content ?? obj.value ?? obj.finding;
+          if (typeof text === "string") return text;
+        }
+        return String(b ?? "").trim();
+      }).filter((b) => b && b !== "[object Object]"),
     },
   }));
 
@@ -180,23 +193,30 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
   // 4. True empty-section backfill: if a section is STILL empty (no paragraphs,
   //    no bullets), pull prose from the outline bullets so the section heading
   //    isn't followed by a void.
+  //    Note: every outline line is prefixed "What to cover:"/"Angle:"/"Avoid:" —
+  //    only "Avoid:" (pitfalls to skip) should be dropped wholesale; the other
+  //    two carry real scaffolding content and must have just their label stripped,
+  //    not the whole line discarded (that previously zeroed out every fallback).
   for (const sec of sections) {
+    const isConclusion = /^conclusion$/i.test(sec.type);
     if (sec.content.paragraphs.length > 0) continue;
+    if (isConclusion && sec.content.bullets.length > 0) continue; // already backfilled by step 3/3b
     const outlineSec = outline.find((o) => o.title === sec.heading) ?? outline[sec.order - 1];
-    const bulletProse = outlineSec?.content
+    const usableLines = outlineSec?.content
       ? outlineSec.content
           .split("\n")
           .map((l) => l.replace(/^[\s•\-*]+/, "").trim())
           .filter(Boolean)
-          .filter((l) => !/^(what to cover|angle|avoid)\s*:/i.test(l))
-          .join(" ")
-          .replace(/\s+/g, " ")
-          .trim()
-      : "";
-    if (bulletProse) {
-      sec.content.paragraphs = [{ id: sec.order * 10 + 1, text: bulletProse }];
+          .filter((l) => !/^avoid\s*:/i.test(l))
+          .map((l) => l.replace(/^(?:what to cover|angle)\s*:\s*/i, "").trim())
+          .filter(Boolean)
+      : [];
+    if (usableLines.length === 0) continue; // still nothing — leave empty rather than write embarrassing placeholder
+    if (isConclusion) {
+      sec.content.bullets = usableLines;
+    } else {
+      sec.content.paragraphs = [{ id: sec.order * 10 + 1, text: usableLines.join(" ") }];
     }
-    // If still nothing, leave empty rather than write embarrassing placeholder
   }
 
   // 4. Place orphan Q/A into the faq section (or create one)
@@ -218,44 +238,60 @@ function processResponse(raw: GenerateArticleResponse, articleTitle: string, out
     }
   }
 
-  // 5. Normalise FAQ paragraphs:
-  //    a) Split RUN-ON paragraphs that contain multiple "Q: ... A: ..." pairs
-  //       into separate paragraphs (GPT sometimes crams 3-4 Q/A into one string,
-  //       breaking the FAQ accordion rendering)
-  //    b) Ensure every Q: paragraph has the \nA: separator
+  // 5. Normalise FAQ paragraphs by pooling and re-extracting Q:/A: pairs from
+  //    scratch, rather than splitting each paragraph in place. GPT's paragraph
+  //    boundaries for FAQ content are unreliable in several ways: it crams
+  //    multiple "Q: ... A: ..." pairs into one paragraph, splits a single pair
+  //    across two paragraphs, or lets an answer leak into its own paragraph
+  //    without its question (so the paragraph starts with "A:", not "Q:").
+  //    The previous approach only fixed paragraphs that already started with
+  //    "Q:", silently leaving "A:"-first paragraphs (and their garbled
+  //    neighbours) untouched. Pooling all paragraph text into one string and
+  //    re-deriving clean pairs from it is robust to all of the above, since it
+  //    no longer depends on where GPT happened to put paragraph breaks.
   for (const sec of sections) {
     if (sec.type !== "faq" && !/frequently.asked/i.test(sec.heading)) continue;
+    if (sec.content.paragraphs.every((p) => !p.text.includes("Q:") && !p.text.includes("A:"))) continue;
 
-    const expanded: typeof sec.content.paragraphs = [];
-    for (const p of sec.content.paragraphs) {
-      const text = p.text;
-      if (!text.trimStart().startsWith("Q:")) {
-        expanded.push(p);
-        continue;
+    const combined = sec.content.paragraphs.map((p) => p.text).join(" ");
+    const pairRe = /Q:\s*([\s\S]*?)\s*A:\s*([\s\S]*?)(?=\s*Q:\s|$)/g;
+    const pairs: typeof sec.content.paragraphs = [];
+    const baseId = sec.content.paragraphs[0]?.id ?? 0;
+    let match: RegExpExecArray | null;
+    let i = 0;
+    while ((match = pairRe.exec(combined)) !== null) {
+      // A missing-answer gap (a "Q:" immediately followed by another "Q:" with
+      // no "A:" between) makes the regex swallow the second "Q:" into group 1 —
+      // strip that trailing marker rather than showing it as part of the question.
+      const q = match[1].replace(/\s*Q:\s*$/, "").trim();
+      const a = match[2].trim();
+      if (q.length >= 5 && a.length >= 5) {
+        pairs.push({ id: baseId + i, text: `Q: ${q}\nA: ${a}` });
+        i++;
       }
-
-      // Split when we find another "Q:" later in the string (run-on case).
-      // Lookahead matches whitespace+Q: that comes AFTER the first character.
-      const parts = text
-        .split(/(?<=[\s\S])(?=\s+Q:\s)/g)
-        .map((s) => s.trim())
-        .filter(Boolean);
-
-      parts.forEach((part, i) => {
-        // Ensure \nA: separator
-        let fixed = part;
-        if (!fixed.includes("\nA:")) {
-          fixed = fixed
-            .replace(/([?.!])\s*A:\s*/, "$1\nA: ")
-            .replace(/\s+A:\s*/, "\nA: ");
-        }
-        expanded.push({ id: p.id + i, text: fixed });
-      });
     }
-    sec.content.paragraphs = expanded;
+    if (pairs.length > 0) sec.content.paragraphs = pairs;
   }
 
   return { title: raw.title ?? articleTitle, sections };
+}
+
+function parseOneShotHints(contentBrief: string | undefined): { targetWords?: number; flagModifiers: string[] } {
+  if (!contentBrief) return { flagModifiers: [] };
+  const targetWordsMatch = contentBrief.match(/^TARGET_WORDS:\s*(\d+)/m);
+  const flagsMatch = contentBrief.match(/^FLAGS:\s*(.+)/m);
+  const FLAG_MAP: Record<string, string> = {
+    "Inject FAQ schema": "After the FAQ section, output a JSON-LD FAQPage schema block as a paragraph with id 9999 and text starting with <script type=\"application/ld+json\">.",
+    "Add comparison table": "In the most appropriate body section, include an HTML <table> comparison (2-4 columns, 3-5 rows) embedded as a paragraph.",
+    "Require 3 citable sources": "Cite at least 3 named external sources in format 'According to [Named Source, Year]'. Do not use generic 'According to research' more than once.",
+    "Write answer block per section": "Begin every non-introduction, non-conclusion section with a 1–2 sentence direct answer block (bold the key claim) before expanding into full paragraphs.",
+  };
+  const activeFlags = flagsMatch ? flagsMatch[1].split(",").map(f => f.trim()).filter(Boolean) : [];
+  const flagModifiers = activeFlags.map(f => FLAG_MAP[f]).filter(Boolean);
+  return {
+    targetWords: targetWordsMatch ? parseInt(targetWordsMatch[1]) : undefined,
+    flagModifiers,
+  };
 }
 
 export async function POST(req: NextRequest, { params }: Params) {
@@ -275,6 +311,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   const ctx = session?.opportunityContext;
   const targetKeywords = ctx?.tags ?? [];
   const wordCountTargets = await getWordCountTargets();
+  const { targetWords, flagModifiers } = parseOneShotHints(ctx?.content_brief);
 
   const apiKey = process.env.OPENAI_API_KEY?.trim();
   if (!apiKey || outline.length === 0) {
@@ -328,6 +365,8 @@ Return valid JSON in this exact shape:
   ]
 }
 
+"bullets" is ALWAYS an array of plain strings — one sentence per string, e.g. "bullets": ["First takeaway, a complete sentence.", "Second takeaway, a complete sentence."]. NEVER an array of objects — no {"id":..., "text":...} shape there (that shape is only for "paragraphs"). Leave "bullets" as [] unless the section type below says to use it.
+
 CRITICAL — THE OUTLINE IS SCAFFOLDING, NOT CONTENT
 The outline bullets describe WHAT to cover. Your job is to write the actual article. NEVER quote outline bullets back as the final content with minor rephrasing — that produces lazy, useless articles. Every outline bullet must become substantial new content with details GPT adds: a specific tool or platform name, a real-world workflow example, a mechanism explanation, a tradeoff acknowledgment, or a "watch out for" tip. If the outline says "use agentic automation", you write WHY it works, WHEN it breaks down, and what specific tool or workflow pattern (n8n, Make, Claude, GPT-4o) fits each use case.
 
@@ -359,7 +398,7 @@ SECTION-TYPE RULES (each one MUST add value beyond the outline):
 - For other "section" types: 2–3 paragraphs (60–80 words each) of real specific content using brand and product names from the outline.
 
 Every section must have at least one paragraph or one bullet entry. Use outline bullets as content scaffolding — never ignore them, never quote them.
-${getGenerationLengthPrompt(outline.length)}`;
+${getGenerationLengthPrompt(outline.length, targetWords)}${flagModifiers.length ? `\n\nONE-SHOT FLAGS (apply all):\n${flagModifiers.map((m, i) => `${i + 1}. ${m}`).join("\n")}` : ""}`;
 
   const userPrompt = [
     `Article title: ${articleTitle}`,
@@ -369,7 +408,7 @@ ${getGenerationLengthPrompt(outline.length)}`;
 
   const TARGET_WORDS = 900;
 
-  const stream = chatJsonStream(system, userPrompt, "gpt-5.4-mini", async (accumulated) => {
+  const stream = chatJsonStream(system, userPrompt, "gpt-5.4-mini", async (accumulated, sendEvent) => {
     let response: GenerateArticleResponse;
     try {
       response = processResponse(JSON.parse(accumulated) as GenerateArticleResponse, articleTitle, outline);
@@ -386,6 +425,8 @@ ${getGenerationLengthPrompt(outline.length)}`;
         // non-fatal — keep the over-length article rather than crashing
       }
     }
+
+    sendEvent({ stage: "brand_voice" });
 
     // ── Brand voice correction — applied in-place before quality + GEO ──
     let brand_voice_status: import("@/types").BrandVoiceStatus | null = null;
@@ -436,6 +477,54 @@ ${getGenerationLengthPrompt(outline.length)}`;
       console.error("[validate-plan] brand voice correction failed:", e);
       brand_voice_status = { status: "error" };
     }
+
+    sendEvent({ stage: "citation" });
+
+    // ── Auto-embed citation so "Cited claims" GEO check passes from the start ──
+    // Non-fatal: if the web search or rewrite fails for every candidate, the
+    // article still ships without a hyperlinked citation. Tries the 2 longest
+    // body paragraphs (across all non-intro/faq/conclusion sections) rather
+    // than only the single longest one — the search-preview model frequently
+    // can't verify a source for a given claim, and a single silent attempt
+    // meant most articles shipped with zero clickable citations.
+    try {
+      const bodySections = response.sections.filter(
+        (s) => !["introduction", "faq", "conclusion"].includes(s.type)
+      );
+      const candidates = bodySections
+        .flatMap((s) => s.content.paragraphs.map((p) => ({ section: s, para: p })))
+        .sort((a, b) => b.para.text.length - a.para.text.length)
+        .slice(0, 2);
+
+      console.log(`[auto-citation] trying ${candidates.length} candidate paragraph(s)`);
+      for (const { section, para } of candidates) {
+        const claim = para.text.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim().slice(0, 300);
+        const citation = await searchForCitation(claim, apiKey!);
+        if (!citation) {
+          console.warn("[auto-citation] no verifiable source found for candidate");
+          continue;
+        }
+        console.log(`[auto-citation] found: ${citation.source} (${citation.year}) → ${citation.url}`);
+        const newText = await rewriteWithCitation(para.text, citation, {
+          userId: user.id,
+          feature: "auto-citation",
+        });
+        if (!newText) {
+          console.warn("[auto-citation] rewrite returned nothing");
+          continue;
+        }
+        const idx = section.content.paragraphs.findIndex((p) => p.id === para.id);
+        if (idx >= 0) {
+          section.content.paragraphs[idx].text = newText;
+          console.log(`[auto-citation] embedded, hyperlinked=${/<a\s+href=/i.test(newText)}`);
+        }
+        break; // succeeded — no need to try the second candidate
+      }
+    } catch (e) {
+      console.warn("[validate-plan] auto-citation failed (non-fatal):", e);
+    }
+
+    sendEvent({ stage: "scoring" });
 
     const qualityFlags = reviewArticleQuality(response, targetKeywords, wordCountTargets);
 

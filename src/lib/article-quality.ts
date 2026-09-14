@@ -66,5 +66,29 @@ export function reviewArticleQuality(
     }
   }
 
+  // Malformed-content check: catches fields that got stringified from the
+  // wrong shape (e.g. a model returning bullet objects instead of plain
+  // strings) before they ever reach the reader as literal "[object Object]".
+  const MALFORMED_RE = /\[object Object\]|\bundefined\b|\bNaN\b/;
+  for (const section of article.sections) {
+    const bulletsText = (section.content.bullets ?? []).join(" ");
+    if (MALFORMED_RE.test(bulletsText)) {
+      flags.push({
+        section: section.heading,
+        type: "malformed_content",
+        message: `"${section.heading}" has malformed bullet content (a bullet rendered as a raw object instead of text).`,
+      });
+    }
+    for (const p of section.content.paragraphs) {
+      if (MALFORMED_RE.test(p.text)) {
+        flags.push({
+          section: section.heading,
+          type: "malformed_content",
+          message: `"${section.heading}" has a malformed paragraph (renders as a raw object/undefined instead of text).`,
+        });
+      }
+    }
+  }
+
   return flags;
 }

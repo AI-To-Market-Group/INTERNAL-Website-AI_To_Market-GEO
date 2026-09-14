@@ -55,6 +55,7 @@ export async function updateSession(
     metadataWordPress?: WordPressMetadata | null;
     currentStep?: 1 | 2 | 3;
     sentToWordPressAt?: string | null;
+    batchQueuedAt?: string | null;
   }
 ): Promise<BuilderSessionInfo | null> {
   return dbUpdateSession(userId, opportunityId, updates);

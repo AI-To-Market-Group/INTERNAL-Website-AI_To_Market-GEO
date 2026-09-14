@@ -42,6 +42,7 @@ function rowToSession(row: DbRow): BuilderSessionInfo {
     opportunityContext: ctx,
     currentStep: (row.current_step as 1 | 2 | 3) ?? 1,
     sentToWordPressAt: row.sent_to_wordpress_at ?? undefined,
+    batchQueuedAt: ctx?.batchQueuedAt ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -153,6 +154,8 @@ export type SessionUpdates = {
   currentStep?: 1 | 2 | 3;
   sentToWordPressAt?: string | null;
   opportunityContext?: BuilderSessionInfo["opportunityContext"];
+  /** Set to ISO string to queue, null to unqueue */
+  batchQueuedAt?: string | null;
 };
 
 export async function dbDeleteSession(
@@ -179,7 +182,20 @@ export async function dbUpdateSession(
   if (updates.metadataWordPress !== undefined) patch.wp_metadata = updates.metadataWordPress;
   if (updates.currentStep !== undefined) patch.current_step = updates.currentStep;
   if (updates.sentToWordPressAt !== undefined) patch.sent_to_wordpress_at = updates.sentToWordPressAt;
-  if (updates.opportunityContext !== undefined) patch.opportunity_context = updates.opportunityContext;
+
+  // batchQueuedAt is stored inside opportunity_context JSON — merge rather than replace
+  if (updates.batchQueuedAt !== undefined) {
+    const { data: existing } = await supabaseAdmin
+      .from("builder_sessions")
+      .select("opportunity_context")
+      .eq("opportunity_id", opportunityId)
+      .limit(1)
+      .single();
+    const existingCtx = (existing?.opportunity_context as Record<string, unknown> | null) ?? {};
+    patch.opportunity_context = { ...existingCtx, batchQueuedAt: updates.batchQueuedAt };
+  } else if (updates.opportunityContext !== undefined) {
+    patch.opportunity_context = updates.opportunityContext;
+  }
 
   const { data, error } = await supabaseAdmin
     .from("builder_sessions")

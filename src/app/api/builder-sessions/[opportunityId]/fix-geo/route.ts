@@ -133,15 +133,38 @@ export async function POST(req: NextRequest, { params }: Params) {
   const updatedBlocks = [...draft.blocks];
 
   if (parsed.blockIndex === -1) {
-    // Append FAQ blocks
-    const faqPairs = parsed.newContent.split(/\n\n+/).filter(Boolean);
-    for (const pair of faqPairs) {
+    // Append FAQ blocks. Don't trust the LLM to reliably blank-line-separate
+    // each pair (relying on split(/\n\n+/) alone silently produced run-on
+    // blocks with multiple Q:/A: pairs crammed together whenever it didn't) —
+    // instead pool the whole response and re-derive clean pairs from it,
+    // the same way the main article generator's FAQ normalizer does.
+    const pairRe = /Q:\s*([\s\S]*?)\s*A:\s*([\s\S]*?)(?=\s*Q:\s|$)/g;
+    let match: RegExpExecArray | null;
+    let found = false;
+    while ((match = pairRe.exec(parsed.newContent)) !== null) {
+      const q = match[1].replace(/\s*Q:\s*$/, "").trim();
+      const a = match[2].trim();
+      if (q.length < 5 || a.length < 5) continue;
+      found = true;
       updatedBlocks.push({
         id: `block-fix-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
         type: "paragraph",
-        content: pair.trim(),
+        content: `Q: ${q}\nA: ${a}`,
         meta: { sectionType: "faq" },
       });
+    }
+    if (!found) {
+      // No literal Q:/A: markers found at all — fall back to the old
+      // blank-line split rather than silently dropping the content.
+      const faqPairs = parsed.newContent.split(/\n\n+/).filter(Boolean);
+      for (const pair of faqPairs) {
+        updatedBlocks.push({
+          id: `block-fix-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          type: "paragraph",
+          content: pair.trim(),
+          meta: { sectionType: "faq" },
+        });
+      }
     }
   } else if (parsed.blockIndex >= 0 && parsed.blockIndex < updatedBlocks.length) {
     const target = updatedBlocks[parsed.blockIndex];

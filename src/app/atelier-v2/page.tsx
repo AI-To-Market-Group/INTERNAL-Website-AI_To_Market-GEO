@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef, useLayoutEffect } from "react";
+import React, { useState, useEffect, useRef, useLayoutEffect } from "react";
+import dynamic from "next/dynamic";
 import { toast } from "sonner";
 import { KeywordWorkspace } from "./components/KeywordWorkspace";
 import { useSettings } from "@/hooks/useSettings";
@@ -24,6 +25,8 @@ interface DraftCard {
   opportunityId: string;
   brief: BriefFields;
   createdAt: string;
+  /** Last-modified time (outline edits, article generation, send to Sanity, etc.) — falls back to createdAt when absent (e.g. trashed-sessions fetch doesn't request it). */
+  updatedAt?: string;
   creatorEmail?: string;
 }
 
@@ -40,6 +43,8 @@ interface V2OutlineSection {
   eyebrow?: string;
   description: string[];
   keywords: string[];
+  /** If true, skip auto-generating an illustration for this section's article content */
+  noImage?: boolean;
 }
 
 interface SavedPlan {
@@ -54,6 +59,12 @@ interface SavedPlan {
 // ─── Per-card autosave cache ──────────────────────────────────────────────────
 
 const CARD_CACHE_PREFIX = "v2_card_";
+// User-scoped prefix — set once on mount so two accounts on the same browser
+// (e.g. localhost dev with two tabs) never share or overwrite each other's cache.
+let _cacheUserId = "anon";
+function initCacheUser(uid: string) { _cacheUserId = uid; }
+
+type ImageSeoMeta = { altText: string; caption: string; fileName: string };
 
 interface V2CardCache {
   editorStep: "plan" | "article";
@@ -71,35 +82,37 @@ interface V2CardCache {
   articleFinalised?: boolean;
   seoExcerpt?: string;
   seoFocusKeyword?: string;
+  seoCategory?: string;
+  imageSeoMeta?: Record<number, ImageSeoMeta>;
   draftSentAt?: string;
+  titleVariants?: string[];
+  activeTitleIdx?: number;
+  /** Section orders whose illustration the user explicitly removed — kept out of the article, the Image SEO panel, and the publish payload. */
+  removedImageOrders?: number[];
+  /** User-edited pull-quote text. Absent = use the auto-extracted one. */
+  pullQuoteOverride?: string;
+  /** True once the user removes the pull-quote entirely. */
+  pullQuoteRemoved?: boolean;
   savedAt: string;
 }
 
+function cardCacheKey(id: string) { return `${CARD_CACHE_PREFIX}${_cacheUserId}_${id}`; }
 function readCardCache(id: string): V2CardCache | null {
-  try { return JSON.parse(localStorage.getItem(CARD_CACHE_PREFIX + id) ?? "null") as V2CardCache | null; }
+  try { return JSON.parse(localStorage.getItem(cardCacheKey(id)) ?? "null") as V2CardCache | null; }
   catch { return null; }
 }
 function writeCardCache(id: string, data: V2CardCache) {
-  try { localStorage.setItem(CARD_CACHE_PREFIX + id, JSON.stringify(data)); }
+  try { localStorage.setItem(cardCacheKey(id), JSON.stringify(data)); }
   catch {}
 }
 
-// ─── Batch queue (localStorage) ───────────────────────────────────────────────
+// ─── Batch queue ──────────────────────────────────────────────────────────────
 
 interface BatchQueueEntry {
   id: string;
   title: string;
   outline: V2OutlineSection[];
   addedAt: string;
-}
-const BATCH_QUEUE_KEY = "v2_batch_queue";
-function readBatchQueue(): BatchQueueEntry[] {
-  try { return JSON.parse(localStorage.getItem(BATCH_QUEUE_KEY) ?? "[]") as BatchQueueEntry[]; }
-  catch { return []; }
-}
-function saveBatchQueue(entries: BatchQueueEntry[]) {
-  try { localStorage.setItem(BATCH_QUEUE_KEY, JSON.stringify(entries)); }
-  catch {}
 }
 
 // ─── Palette constants ────────────────────────────────────────────────────────
@@ -117,6 +130,94 @@ const C = {
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+// Coerce a "bullet" from generated content into plain text — some already-saved
+// articles have bullets stored as {id,text}-style objects (a model formatting
+// slip from before the API-side fix), which would otherwise render as the
+// literal string "[object Object]".
+function bulletText(b: unknown): string {
+  if (typeof b === "string") return b;
+  if (b && typeof b === "object") {
+    const obj = b as Record<string, unknown>;
+    const text = obj.text ?? obj.content ?? obj.value ?? obj.finding;
+    if (typeof text === "string") return text;
+  }
+  return "";
+}
+
+/** Pull the single best sentence (60-160 chars) from a section's plain text, for a mid-article pull-quote. */
+function extractPullQuote(section: GeneratedSection | undefined): string | null {
+  if (!section) return null;
+  const text = section.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, " ")).join(" ");
+  const sentences = (text.match(/[^.!?]+[.!?]/g) ?? []).map(s => s.trim());
+  const candidates = sentences.filter(s => s.length >= 60 && s.length <= 160);
+  if (!candidates.length) return null;
+  return candidates.sort((a, b) => b.length - a.length)[0];
+}
+
+/** Read-only pull-quote, used by the website-preview pane. */
+function PullQuote({ text }: { text: string }) {
+  return (
+    <blockquote style={{ margin: "36px 0 0", padding: "2px 0 2px 26px", borderLeft: `3px solid ${C.salmon}` }}>
+      <p style={{ margin: 0, fontSize: 22, fontWeight: 600, fontStyle: "italic", lineHeight: 1.5, letterSpacing: "-.3px", color: C.dark }}>
+        &ldquo;{text}&rdquo;
+      </p>
+    </blockquote>
+  );
+}
+
+/** Pull-quote in the editor: click the text to rewrite it, × to drop it from the article. */
+function EditablePullQuote({ text, onEdit, onRemove }: { text: string; onEdit?: (v: string) => void; onRemove?: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(text);
+  const [hovered, setHovered] = useState(false);
+
+  const commit = () => {
+    const v = draft.trim();
+    if (v && v !== text) onEdit?.(v);
+    setEditing(false);
+  };
+
+  return (
+    <blockquote
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={{ position: "relative", margin: "36px 0 0", padding: "2px 0 2px 26px", borderLeft: `3px solid ${C.salmon}` }}
+    >
+      {hovered && onRemove && !editing && (
+        <button
+          onClick={onRemove}
+          title="Remove the pull-quote"
+          style={{ position: "absolute", top: -6, right: -6, zIndex: 3, width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(249,57,67,.45)", background: C.white, color: C.red, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0, boxShadow: "0 2px 6px rgba(0,0,0,.18)" }}
+        >
+          ×
+        </button>
+      )}
+      {editing ? (
+        <textarea
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={e => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); commit(); }
+            if (e.key === "Escape") { setDraft(text); setEditing(false); }
+          }}
+          autoFocus
+          rows={3}
+          style={{ width: "100%", margin: 0, fontSize: 22, fontWeight: 600, fontStyle: "italic", lineHeight: 1.5, letterSpacing: "-.3px", color: C.dark, background: "rgba(22,61,38,.04)", border: `1px solid ${C.border}`, borderRadius: 6, padding: "6px 8px", outline: "none", resize: "none", boxSizing: "border-box", fontFamily: "inherit" }}
+        />
+      ) : (
+        <p
+          onClick={() => { setDraft(text); setEditing(true); }}
+          title="Click to edit the pull-quote"
+          style={{ margin: 0, fontSize: 22, fontWeight: 600, fontStyle: "italic", lineHeight: 1.5, letterSpacing: "-.3px", color: C.dark, cursor: "text" }}
+        >
+          &ldquo;{text}&rdquo;
+        </p>
+      )}
+    </blockquote>
+  );
+}
 
 function scoreColor(v: number) {
   return v >= 80 ? C.dark : v >= 70 ? C.mid : C.red;
@@ -148,7 +249,7 @@ const NAV_ITEMS: [Screen, string, string, string][] = [
 const SCREEN_HEAD: Record<Screen, [string, string, string]> = {
   dashboard:  ["OVERVIEW",       "Answer engine visibility",          "How often the engines quote you, and what to write next."],
   generate:   ["CREATE",         "New GEO article",                   "Start from a prompt buyers actually type. We build the brief, draft and score in one run."],
-  queue:      ["PRODUCTION",     "Batch queue",                       "Twelve prompts drafting, scoring and staging in parallel."],
+  queue:      ["PRODUCTION",     "Batch queue",                       "Drafting, scoring and staging your queued prompts in parallel."],
   editor:     ["DRAFT",          "What is generative engine optimization?", "Edit alongside live scoring. Accept a suggestion and the score moves."],
   score:      ["DIAGNOSTIC",     "GEO score and recommendations",     "Where this draft wins a citation, and where it loses one."],
   keywords:   ["LIBRARY",        "Prompts and clusters",              "The question set we are trying to own for this client."],
@@ -317,8 +418,9 @@ function Sidebar({ screen, setScreen, collapsed, onToggle, creditPct, creditLabe
 
 // ─── Header ───────────────────────────────────────────────────────────────────
 
-function PageHeader({ screen, onGenerate, onKeywords }: { screen: Screen; onGenerate: () => void; onKeywords: () => void }) {
-  const [eyebrow, title, subtitle] = SCREEN_HEAD[screen];
+function PageHeader({ screen, onGenerate, onKeywords, subtitleOverride }: { screen: Screen; onGenerate: () => void; onKeywords: () => void; subtitleOverride?: string }) {
+  const [eyebrow, title, defaultSubtitle] = SCREEN_HEAD[screen];
+  const subtitle = subtitleOverride ?? defaultSubtitle;
   return (
     <header style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", gap: 24, padding: "32px 40px 24px", borderBottom: `1px solid ${C.border}`, background: C.bg, position: "sticky", top: 0, zIndex: 5 }}>
       <div style={{ minWidth: 0 }}>
@@ -517,13 +619,79 @@ const PIPELINE_STEPS = [
   "Stage for human review, never auto publish below 75",
 ];
 
-function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, defaultFlow }: { onSettings: () => void; onQueue: () => void; onSessionCreated: (opportunityId: string, brief: BriefFields) => void; seedKeywords: string[]; defaultFlow?: FlowMode; }) {
-  const [flow, setFlow] = useState<FlowMode>(defaultFlow ?? "wizard");
+// ─── Brand-styled dropdown (replaces native <select> to avoid browser blue) ───
+
+function BrandSelect<T extends string | number>({ value, onChange, options }: {
+  value: T;
+  onChange: (v: T) => void;
+  options: { value: T; label: string }[];
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+  const selected = options.find(o => o.value === value);
+  return (
+    <div ref={ref} style={{ position: "relative", width: "100%" }}>
+      <button
+        type="button"
+        onClick={() => setOpen(p => !p)}
+        style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 14px", border: `1px solid ${open ? "rgba(22,61,38,.5)" : "rgba(22,61,38,.24)"}`, borderRadius: 8, fontSize: 13, fontWeight: 600, background: C.bg, color: C.dark, cursor: "pointer", outline: "none", textAlign: "left" }}
+      >
+        <span>{selected?.label ?? String(value)}</span>
+        <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="rgba(22,61,38,.5)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, transition: "transform .15s", transform: open ? "rotate(180deg)" : "none" }}>
+          <path d="M2 4l4 4 4-4"/>
+        </svg>
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 200, background: "#fff", border: "1px solid rgba(22,61,38,.18)", borderRadius: 10, boxShadow: "0 8px 28px rgba(0,0,0,.12)", overflow: "hidden" }}>
+          {options.map(opt => {
+            const active = opt.value === value;
+            return (
+              <button
+                key={String(opt.value)}
+                type="button"
+                onClick={() => { onChange(opt.value); setOpen(false); }}
+                style={{ display: "block", width: "100%", padding: "11px 14px", textAlign: "left", fontSize: 13, fontWeight: active ? 600 : 400, background: active ? "#163D26" : "transparent", color: active ? "#fff" : "#163D26", border: "none", cursor: "pointer" }}
+                onMouseEnter={e => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "rgba(22,61,38,.06)"; }}
+                onMouseLeave={e => { if (!active) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, defaultFlow, onFlowChange }: { onSettings: () => void; onQueue: () => void; onSessionCreated: (opportunityId: string, brief: BriefFields) => void; seedKeywords: string[]; defaultFlow?: FlowMode; onFlowChange?: (f: FlowMode) => void; }) {
+  const [flow, setFlow] = useState<FlowMode>(defaultFlow ?? "single");
+  const handleFlowChange = (f: FlowMode) => { setFlow(f); onFlowChange?.(f); };
   const [step, setStep] = useState(1);
   const [promptText, setPromptText] = useState("what is generative engine optimization");
   const [adjacentOn, setAdjacentOn] = useState([0, 2]);
   const [togglesOn, setTogglesOn] = useState([0, 1, 3]);
   const [brief, setBrief] = useState("Explainer for B2B marketing leads on how answer engines pick sources, with a comparison of GEO and classic SEO and a short checklist.");
+  const [oneShotFormat, setOneShotFormat] = useState("Definitional explainer");
+  const [oneShotLength, setOneShotLength] = useState(1200);
+  const [oneShotGenerating, setOneShotGenerating] = useState(false);
+  // setState-based guards (oneShotGenerating/generating below) don't take effect
+  // until the next render, so a fast double-click can fire the handler twice
+  // before React re-renders with the flag set — both calls see the stale
+  // "not generating" value and both create a session. This is exactly what
+  // produced duplicate builder_sessions rows ~100-300ms apart in production.
+  // A ref updates synchronously, so it actually blocks the second call.
+  const oneShotSubmittingRef = useRef(false);
+  const chatSubmittingRef = useRef(false);
   const [chatInput, setChatInput] = useState("");
 
   // ── Conversational chat state ────────────────────────────────────────────────
@@ -572,7 +740,8 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
   }
 
   async function generateFromBrief() {
-    if (!readyToGenerate || generating) return;
+    if (!readyToGenerate || generating || chatSubmittingRef.current) return;
+    chatSubmittingRef.current = true;
     setGenerating(true);
     setChatError(null);
     try {
@@ -602,6 +771,43 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
     } catch (e) {
       setChatError(e instanceof Error ? e.message : "Failed to create session");
       setGenerating(false);
+    } finally {
+      chatSubmittingRef.current = false;
+    }
+  }
+
+  async function handleOneShotGenerate() {
+    if (!brief.trim() || oneShotGenerating || oneShotSubmittingRef.current) return;
+    oneShotSubmittingRef.current = true;
+    setOneShotGenerating(true);
+    try {
+      const activeFlags = TOGGLE_LABELS.filter((_, i) => togglesOn.includes(i));
+      const contentBrief = [
+        brief.trim(),
+        `\nFORMAT: ${oneShotFormat}`,
+        `TARGET_WORDS: ${oneShotLength}`,
+        activeFlags.length ? `FLAGS: ${activeFlags.join(", ")}` : "",
+      ].filter(Boolean).join("\n");
+
+      const res = await fetch("/api/builder-sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          topic_title: brief.slice(0, 120),
+          opportunity_context: { content_brief: contentBrief },
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error ?? `HTTP ${res.status}`);
+      }
+      const data = await res.json() as { opportunityId: string };
+      onSessionCreated(data.opportunityId, { prompt: brief.slice(0, 120), format: oneShotFormat });
+    } catch (e) {
+      console.error("[one-shot] failed to create session:", e);
+    } finally {
+      setOneShotGenerating(false);
+      oneShotSubmittingRef.current = false;
     }
   }
 
@@ -629,15 +835,15 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
     <div>
       {/* Flow tabs */}
       <div style={{ display: "flex", gap: 6, padding: 5, marginBottom: 32, border: "1px solid rgba(22,61,38,.16)", borderRadius: 10, width: "fit-content", background: C.white }}>
-        {(["wizard", "single", "chat", "keywords"] as FlowMode[]).map(f => (
-          <button key={f} onClick={() => setFlow(f)} style={btnStyle(flow === f)}>
-            {f === "wizard" ? "Guided wizard" : f === "single" ? "One shot brief" : f === "chat" ? "Conversational" : "Keyword workspace"}
+        {(["single", "chat", "keywords"] as FlowMode[]).map(f => (
+          <button key={f} onClick={() => handleFlowChange(f)} style={btnStyle(flow === f)}>
+            {f === "single" ? "One shot brief" : f === "chat" ? "Conversational" : "Keyword workspace"}
           </button>
         ))}
       </div>
 
-      {/* ── Wizard ── */}
-      {flow === "wizard" && (
+      {/* ── Wizard ── (commented out — not yet wired for v2) */}
+      {false && flow === "wizard" && (
         <div style={{ display: "grid", gridTemplateColumns: "236px 1fr", gap: 40, alignItems: "start" }}>
           {/* Step sidebar */}
           <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -787,7 +993,7 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
 
       {/* ── Single shot ── */}
       {flow === "single" && (
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 360px", gap: 32, alignItems: "start" }}>
+        <div>
           <section style={{ padding: 32, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white }}>
             <h2 style={{ margin: "0 0 24px", fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>One brief, one pass</h2>
             <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
@@ -796,12 +1002,26 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
                 <textarea value={brief} onChange={e => setBrief(e.target.value)} rows={7} style={{ width: "100%", padding: 14, border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 14, fontWeight: 400, lineHeight: 1.55, color: C.dark, background: C.bg, resize: "vertical", outline: "none" }} />
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 16 }}>
-                {[["FORMAT", "Definitional explainer"], ["LENGTH", "1200 to 1600"], ["VOICE", "House style"]].map(([lbl, val]) => (
-                  <div key={lbl}>
-                    <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>{lbl}</label>
-                    <div style={{ padding: "12px 14px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, fontWeight: 600, background: C.bg }}>{val}</div>
-                  </div>
-                ))}
+                <div>
+                  <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>FORMAT</label>
+                  <BrandSelect
+                    value={oneShotFormat}
+                    onChange={setOneShotFormat}
+                    options={["Definitional explainer", "How-to guide", "Comparison", "Listicle", "Opinion piece"].map(f => ({ value: f, label: f }))}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>LENGTH (words)</label>
+                  <BrandSelect
+                    value={oneShotLength}
+                    onChange={(v) => setOneShotLength(Number(v))}
+                    options={[[600, "600 – 800"], [900, "900 – 1100"], [1200, "1200 – 1600"], [1800, "1800 – 2200"]].map(([v, label]) => ({ value: v as number, label: label as string }))}
+                  />
+                </div>
+                <div>
+                  <label style={{ display: "block", fontSize: 11, fontWeight: 700, letterSpacing: ".1em", color: C.mid, marginBottom: 8 }}>VOICE</label>
+                  <div style={{ padding: "12px 14px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 8, fontSize: 13, fontWeight: 600, background: C.bg, color: "rgba(22,61,38,.5)" }}>House style</div>
+                </div>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                 {TOGGLE_LABELS.map((label, i) => {
@@ -814,16 +1034,9 @@ function GenerateScreen({ onSettings, onQueue, onSessionCreated, seedKeywords, d
                   );
                 })}
               </div>
-              <button onClick={onQueue} style={{ alignSelf: "flex-start", padding: "14px 24px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer" }}>Generate and score</button>
+              <button onClick={handleOneShotGenerate} disabled={oneShotGenerating || !brief.trim()} style={{ alignSelf: "flex-start", padding: "14px 24px", borderRadius: 8, background: oneShotGenerating ? "rgba(22,61,38,.4)" : C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: oneShotGenerating ? "wait" : "pointer" }}>{oneShotGenerating ? "Creating session…" : "Generate"}</button>
             </div>
           </section>
-          <aside style={{ padding: 24, border: `1px solid ${C.border}`, borderRadius: 12, background: C.dark, color: C.white, position: "sticky", top: 180 }}>
-            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", opacity: .75 }}>WHAT WE WILL DO</div>
-            <ol style={{ margin: "16px 0 0", paddingLeft: 18, display: "flex", flexDirection: "column", gap: 12, fontSize: 12, fontWeight: 400, lineHeight: 1.5 }}>
-              {PIPELINE_STEPS.map(p => <li key={p}>{p}</li>)}
-            </ol>
-            <div style={{ marginTop: 24, paddingTop: 20, borderTop: "1px solid rgba(255,255,255,.18)", fontSize: 11, fontWeight: 400, opacity: .75 }}>Typical run: 3 to 5 minutes, 1 credit.</div>
-          </aside>
         </div>
       )}
 
@@ -933,13 +1146,14 @@ const QUEUE_ROWS_DATA = [
 ];
 
 function QueueScreen({
-  onEditor, onGenerate, batchQueueEntries, onRemoveFromBatchQueue, onActivateCard,
+  onEditor, onGenerate, batchQueueEntries, onRemoveFromBatchQueue, onActivateCard, onArticleBuilt,
 }: {
   onEditor: () => void;
   onGenerate: () => void;
   batchQueueEntries: BatchQueueEntry[];
   onRemoveFromBatchQueue: (id: string) => void;
   onActivateCard: (id: string) => void;
+  onArticleBuilt?: (id: string) => void;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   const [buildProgress, setBuildProgress] = useState<Map<string, { pct: number; stage: string; error?: string }>>(new Map());
@@ -999,8 +1213,43 @@ function QueueScreen({
                 brandVoiceStatus: parsed.brand_voice_status ?? null,
                 seoPageTitle: parsed.article!.title ?? title,
                 seoTitle: "", seoSlug: "", seoMetaDesc: "", seoTags: [],
+                titleVariants: [parsed.article!.title ?? title],
+                activeTitleIdx: 0,
                 savedAt: new Date().toISOString(),
               });
+              // Persist to Supabase so the article survives a page refresh
+              fetch(`/api/builder-sessions/${id}/save-article`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ article: parsed.article }),
+              }).catch(() => {});
+              // Fetch 2 more title alternatives in the background, same as live
+              // generation — batch-built cards previously never got these, so
+              // opening one afterward only ever showed a single title option.
+              {
+                const _art = parsed.article!;
+                const introText = _art.sections[0]?.content.paragraphs[0]?.text ?? "";
+                fetch(`/api/builder-sessions/${id}/title-variants`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ title: _art.title, intro: introText }),
+                }).then(r => r.json()).then((d: { variants?: string[] }) => {
+                  if (d.variants && d.variants.length > 1) {
+                    const existing = readCardCache(id);
+                    if (existing) writeCardCache(id, { ...existing, titleVariants: d.variants });
+                  }
+                }).catch(() => {});
+              }
+              // Mark this card as having an article at the top level too — the
+              // "Open" button's restore effect falls back to fetching straight
+              // from the server (bypassing local cache entirely) when a card's
+              // id is in withArticleIds, and that set previously only ever got
+              // updated by live single-article generation or a periodic
+              // background fetch, never by a batch build. Without this, a
+              // batch-built card whose local cache write raced with something
+              // else (e.g. the async per-user cache-key init) had NO fallback
+              // and landed back on the Plan step instead of the Article step.
+              onArticleBuilt?.(id);
             }
           } catch { /* partial chunk */ }
         }
@@ -1091,7 +1340,7 @@ function QueueScreen({
 
         {batchQueueEntries.map(entry => {
           const prog = buildProgress.get(entry.id);
-          const stage = prog?.stage ?? "Queued";
+          const stage = prog?.stage ?? "Outline Validated";
           const pct = prog?.pct ?? 0;
           const isSelected = selectedSet.has(entry.id);
           const isDone = stage === "Done";
@@ -1100,7 +1349,7 @@ function QueueScreen({
           const fill = isFailed ? C.red : isDone ? C.mid : C.dark;
           const s = stageStyle(stage);
           return (
-            <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "28px 2.8fr 1fr 1.5fr 80px", gap: 16, alignItems: "center", padding: "15px 20px", borderTop: "1px solid rgba(22,61,38,.08)" }}>
+            <div key={entry.id} style={{ display: "grid", gridTemplateColumns: "28px 2.8fr 1fr 1.5fr 110px", gap: 16, alignItems: "center", padding: "15px 20px", borderTop: "1px solid rgba(22,61,38,.08)" }}>
               <button onClick={() => toggleSelect(entry.id)} style={{ width: 18, height: 18, borderRadius: 5, border: isSelected ? "none" : "1.5px solid rgba(22,61,38,.3)", background: isSelected ? C.dark : "transparent", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
                 {isSelected && <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>}
               </button>
@@ -1117,7 +1366,7 @@ function QueueScreen({
                 </div>
                 <div style={{ fontSize: 11, fontWeight: 600, width: 34, textAlign: "right", color: "rgba(22,61,38,.6)" }}>{pct}%</div>
               </div>
-              <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 6, justifyContent: "flex-end", alignItems: "center" }}>
                 {isDone && (
                   <button onClick={() => { onActivateCard(entry.id); onEditor(); }} style={{ fontSize: 11, fontWeight: 700, color: C.dark, background: "none", border: "none", cursor: "pointer" }}>Open</button>
                 )}
@@ -1125,7 +1374,24 @@ function QueueScreen({
                   <button onClick={() => void buildArticle(entry)} style={{ fontSize: 11, fontWeight: 700, color: C.red, background: "none", border: "none", cursor: "pointer" }}>Retry</button>
                 )}
                 {!isDone && !isBuilding && (
-                  <button onClick={() => { onRemoveFromBatchQueue(entry.id); setSelected(prev => prev.filter(x => x !== entry.id)); }} title="Remove from queue" style={{ width: 22, height: 22, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid rgba(249,57,67,.35)`, background: "rgba(249,57,67,.07)", color: C.red, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0, flexShrink: 0 }}>×</button>
+                  <>
+                    <button
+                      onClick={() => { onRemoveFromBatchQueue(entry.id); setSelected(prev => prev.filter(x => x !== entry.id)); }}
+                      title="Undo queue — card stays in Draft Editor"
+                      style={{ display: "flex", alignItems: "center", gap: 4, padding: "4px 8px", borderRadius: 6, border: "1px solid rgba(22,61,38,.2)", background: "rgba(22,61,38,.04)", color: "rgba(22,61,38,.7)", cursor: "pointer", fontSize: 11, fontWeight: 600, lineHeight: 1, whiteSpace: "nowrap" }}
+                    >
+                      <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M1.5 4.5H7A2.5 2.5 0 0 1 7 9.5H4"/>
+                        <path d="M1.5 4.5L4 2M1.5 4.5L4 7"/>
+                      </svg>
+                      Undo
+                    </button>
+                    <button
+                      onClick={() => { onRemoveFromBatchQueue(entry.id); setSelected(prev => prev.filter(x => x !== entry.id)); }}
+                      title="Remove from queue"
+                      style={{ width: 20, height: 20, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(249,57,67,.3)", background: "rgba(249,57,67,.06)", color: C.red, cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0, flexShrink: 0 }}
+                    >×</button>
+                  </>
                 )}
               </div>
             </div>
@@ -1166,7 +1432,7 @@ function UserAvatar({ email, size = 24 }: { email: string; size?: number }) {
   );
 }
 
-function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity, hasArticle, isNew, batchQueued, onSendToBatchQueue }: {
+function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity, hasArticle, isNew, batchQueued, onSendToBatchQueue, onRemoveFromBatchQueue }: {
   card: DraftCard;
   onCreateArticle: () => void;
   onResume?: () => void;
@@ -1178,6 +1444,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
   isNew?: boolean;
   batchQueued?: boolean;
   onSendToBatchQueue?: () => void;
+  onRemoveFromBatchQueue?: () => void;
 }) {
   const rawScore = card.brief.predictedScore ? parseInt(card.brief.predictedScore) : NaN;
   const scoreNum = isNaN(rawScore) ? null : rawScore;
@@ -1267,7 +1534,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
       <div style={{ paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.08)", marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <span style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.42)" }}>{timeAgo(card.createdAt)}</span>
+            <span style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.42)" }}>{timeAgo(card.updatedAt || card.createdAt)}</span>
             {card.creatorEmail && (
               <span style={{ fontSize: 10, fontWeight: 500, color: "rgba(22,61,38,.38)" }}>{card.creatorEmail.split("@")[0]}</span>
             )}
@@ -1308,7 +1575,16 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
             >
               Resume Plan
             </button>
-            {!batchQueued && onSendToBatchQueue && (
+            {batchQueued ? (
+              <button
+                onClick={e => { e.stopPropagation(); onRemoveFromBatchQueue?.(); }}
+                title="Click to remove from batch queue"
+                style={{ padding: "11px 13px", borderRadius: 8, background: "rgba(24,95,0,.07)", border: `1px solid rgba(22,61,38,.18)`, display: "flex", alignItems: "center", gap: 5, color: C.mid, fontSize: 12, fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer" }}
+              >
+                <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>
+                Queued
+              </button>
+            ) : onSendToBatchQueue ? (
               <button
                 onClick={e => { e.stopPropagation(); onSendToBatchQueue(); }}
                 title="Add to batch queue for bulk generation"
@@ -1317,7 +1593,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
                 <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg>
                 Queue
               </button>
-            )}
+            ) : null}
           </>
         ) : (
           <button
@@ -1518,13 +1794,17 @@ function EditablePara({ text, style, paraKey, sectionOrder, paraId, onEditParagr
     onBlur: handleBlur,
     onMouseEnter: (e: React.MouseEvent<HTMLElement>) => { e.currentTarget.style.background = "rgba(22,61,38,.04)"; },
     onMouseLeave: (e: React.MouseEvent<HTMLElement>) => { if (document.activeElement !== e.currentTarget) e.currentTarget.style.background = ""; },
+    onClick: (e: React.MouseEvent<HTMLElement>) => {
+      const anchor = (e.target as HTMLElement).closest("a");
+      if (anchor?.href) { e.preventDefault(); window.open(anchor.href, "_blank", "noopener,noreferrer"); }
+    },
   };
 
   if (isHTML) return <div key={paraKey} {...shared} ref={elRef as React.RefObject<HTMLDivElement>} className="v2-rich" />;
   return <p key={paraKey} {...shared} ref={elRef as React.RefObject<HTMLParagraphElement>} />;
 }
 
-function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet, sidebarCollapsed }: {
+function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _onPublish, highlightedSectionId, brandVoiceMatches, onEditParagraph, onEditHeading, onEditBullet, sidebarCollapsed, previewMode, onExitPreview, skipAutoImagesRef, articleGenerationId, onImagesChange, removedImageOrders, onRemoveImage, onRestoreImage, pullQuoteOverride, pullQuoteRemoved, onPullQuoteEdit, onPullQuoteRemove, titleVariants, activeTitleIdx, onTitleIdxChange, onTitleEdit }: {
   article: GeneratedArticle;
   outline: V2OutlineSection[];
   onScore: () => void;
@@ -1535,40 +1815,179 @@ function NewsletterArticle({ article, outline, onScore: _onScore, onPublish: _on
   onEditHeading?: (sectionOrder: number, heading: string) => void;
   onEditBullet?: (sectionOrder: number, bulletIdx: number, text: string) => void;
   sidebarCollapsed?: boolean;
+  previewMode?: boolean;
+  onExitPreview?: () => void;
+  skipAutoImagesRef?: React.MutableRefObject<boolean>;
+  /** Bumped only on a genuinely new/resumed article — NOT on title edits — so
+   *  the auto-image effect doesn't key off article.title (which changes on rename). */
+  articleGenerationId?: number;
+  onImagesChange?: (thumbnails: Record<number, string | null>) => void;
+  removedImageOrders?: Set<number>;
+  onRemoveImage?: (order: number) => void;
+  onRestoreImage?: (order: number) => void;
+  pullQuoteOverride?: string | null;
+  pullQuoteRemoved?: boolean;
+  onPullQuoteEdit?: (text: string) => void;
+  onPullQuoteRemove?: () => void;
+  titleVariants?: string[];
+  activeTitleIdx?: number;
+  onTitleIdxChange?: (idx: number) => void;
+  onTitleEdit?: (newTitle: string) => void;
 }) {
   const { sections } = article;
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
   const [subEmail, setSubEmail] = useState("");
   const [subState, setSubState] = useState<"idle" | "loading" | "success" | "error">("idle");
   const [faqOpenIdx, setFaqOpenIdx] = useState<number | null>(0);
+  const [previewFaqOpenIdx, setPreviewFaqOpenIdx] = useState<number | null>(null);
   const articleBodyRef = useRef<HTMLDivElement>(null);
-  const [sectionSvgs, setSectionSvgs] = useState<Record<number, string>>({});
+  // Image state — arrays per section order (newest first), active index per section
+  const [sectionImages, setSectionImages] = useState<Record<number, string[]>>({});
+  const [activeImgIdx, setActiveImgIdx] = useState<Record<number, number>>({});
+  const [imgLoadingOrders, setImgLoadingOrders] = useState<Set<number>>(new Set());
+  const [imgFailedOrders, setImgFailedOrders] = useState<Set<number>>(new Set());
+  const [hoveredImg, setHoveredImg] = useState<number | null>(null);
+  // Per-slot image display settings (position = CSS objectPosition, fit = objectFit)
+  const [imgPositions, setImgPositions] = useState<Record<number, string>>({});
+  const [imgFitMode, setImgFitMode] = useState<Record<number, "contain" | "cover">>({});
+  const [isDraggingPos, setIsDraggingPos] = useState(false);
+  // Image modal state
+  type ImgModal = { order: number; heading: string; sType: string; prompt: string };
+  const [imgModal, setImgModal] = useState<ImgModal | null>(null);
+  const [imgPrompt, setImgPrompt] = useState("");
+  const [imgGenerating, setImgGenerating] = useState(false);
+  const [imgModel, setImgModel] = useState<"claude" | "openai">("claude");
+  const imgUploadRef = useRef<HTMLInputElement | null>(null);
 
-  // Fetch Claude-generated SVG illustrations for each body section
+  // Notify parent of active thumbnails so the SEO panel can show them
   useEffect(() => {
+    if (!onImagesChange) return;
+    const thumbnails: Record<number, string | null> = {};
+    for (const orderStr of Object.keys(sectionImages)) {
+      const order = Number(orderStr);
+      const imgs = sectionImages[order];
+      const idx = activeImgIdx[order] ?? 0;
+      thumbnails[order] = imgs?.[idx] ?? null;
+    }
+    onImagesChange(thumbnails);
+  }, [sectionImages, activeImgIdx, onImagesChange]);
+
+  function handleImgUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !imgModal) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      const dataUrl = ev.target?.result as string;
+      if (!dataUrl) return;
+      const order = imgModal.order;
+      setSectionImages(prev => ({ ...prev, [order]: [dataUrl, ...(prev[order] ?? [])] }));
+      setActiveImgIdx(prev => ({ ...prev, [order]: 0 }));
+      onRestoreImage?.(order); // giving the slot a picture again undoes an earlier removal
+    };
+    reader.readAsDataURL(file);
+    // Reset so the same file can be re-selected if needed
+    e.target.value = "";
+  }
+
+  // Auto-fetch Claude SVG illustrations for body sections on first load
+  useEffect(() => {
+    // Skip auto-generation when resuming a saved article — images must be manually generated
+    if (skipAutoImagesRef?.current) {
+      skipAutoImagesRef.current = false;
+      return;
+    }
+    const noImageOrders = new Set(outline.filter(o => o.noImage).map(o => o.order));
     const bodySections = sections.filter(s =>
       !/^(introduction|stats|conclusion|faq)$/i.test(s.type) &&
       !/frequently.asked/i.test(s.type) &&
-      !/frequently asked/i.test(s.heading)
+      !/frequently asked/i.test(s.heading) &&
+      !noImageOrders.has(s.order)
     );
-    if (!bodySections.length) return;
-    setSectionSvgs({});
-    bodySections.forEach(s => {
-      const summary = s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400);
+    setSectionImages({});
+    setActiveImgIdx({});
+    setImgFailedOrders(new Set());
+    const orders = new Set([0, ...bodySections.map(s => s.order)]);
+    setImgLoadingOrders(orders);
+
+    const runFetch = (order: number, heading: string, sectionType: string, summary: string) => {
       fetch("/api/illustration-generate-claude", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ heading: s.heading, sectionType: s.type, summary }),
+        body: JSON.stringify({ heading, sectionType, summary }),
       })
         .then(r => r.json())
         .then((data: { svgString?: string | null }) => {
           if (data.svgString) {
-            setSectionSvgs(prev => ({ ...prev, [s.order]: data.svgString! }));
+            setSectionImages(prev => ({ ...prev, [order]: [data.svgString!, ...(prev[order] ?? [])] }));
+            setActiveImgIdx(prev => ({ ...prev, [order]: 0 }));
+          } else {
+            setImgFailedOrders(prev => { const n = new Set(prev); n.add(order); return n; });
           }
         })
-        .catch(() => { /* silently keep placeholder */ });
+        .catch(() => setImgFailedOrders(prev => { const n = new Set(prev); n.add(order); return n; }))
+        .finally(() => setImgLoadingOrders(prev => { const n = new Set(prev); n.delete(order); return n; }));
+    };
+
+    // Hero uses first body section's type + content so it hits the same reliable generation path
+    const heroAnchor = bodySections[0];
+    const heroType = heroAnchor?.type ?? "overview";
+    const heroSummary = heroAnchor
+      ? heroAnchor.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400)
+      : article.title;
+
+    // Stagger requests 2.5s apart to avoid Anthropic rate-limiting that causes "no <svg> block" failures
+    const allRequests = [
+      { order: 0, heading: article.title, type: heroType, summary: heroSummary },
+      ...bodySections.map(s => ({
+        order: s.order,
+        heading: s.heading,
+        type: s.type,
+        summary: s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400),
+      })),
+    ];
+    allRequests.forEach(({ order, heading, type, summary }, i) => {
+      setTimeout(() => runFetch(order, heading, type, summary), i * 2500);
     });
+  // Deliberately keyed off articleGenerationId, NOT article.title — a title edit/rename
+  // must not wipe and regenerate every image. Falls back to article.title when the id
+  // isn't wired up by a caller, preserving prior behaviour there.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [article.title]);
+  }, [articleGenerationId ?? article.title]);
+
+  async function generateNewImage() {
+    if (!imgModal || imgGenerating) return;
+    setImgGenerating(true);
+    try {
+      const order = imgModal.order;
+      if (imgModel === "openai") {
+        const res = await fetch("/api/illustration-generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: imgModal.heading, summary: imgPrompt, surface: "light" }),
+        });
+        const data = await res.json() as { cdnUrl?: string };
+        if (data.cdnUrl) {
+          setSectionImages(prev => ({ ...prev, [order]: [data.cdnUrl!, ...(prev[order] ?? [])] }));
+          setActiveImgIdx(prev => ({ ...prev, [order]: 0 }));
+          onRestoreImage?.(order); // regenerating undoes an earlier removal
+        }
+      } else {
+        const res = await fetch("/api/illustration-generate-claude", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ heading: imgModal.heading, sectionType: imgModal.sType, summary: imgPrompt }),
+        });
+        const data = await res.json() as { svgString?: string | null };
+        if (data.svgString) {
+          setSectionImages(prev => ({ ...prev, [order]: [data.svgString!, ...(prev[order] ?? [])] }));
+          setActiveImgIdx(prev => ({ ...prev, [order]: 0 }));
+          onRestoreImage?.(order); // regenerating undoes an earlier removal
+        }
+      }
+    } catch {}
+    setImgGenerating(false);
+  }
 
   // DOM-based brand voice violation highlighting — same approach as v1
   useEffect(() => {
@@ -1646,29 +2065,141 @@ const hlStyle = (heading: string): React.CSSProperties =>
   const divider = <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "40px 0" }} />;
 
   return (
-    <div ref={articleBodyRef} style={{ maxWidth: sidebarCollapsed ? 900 : 720, margin: 0, transition: "max-width .22s ease" }}>
+    <>
+    <div ref={articleBodyRef} className="v2-article" style={{ maxWidth: sidebarCollapsed ? 900 : 720, margin: 0, transition: "max-width .22s ease" }}>
 
       {/* Newsletter masthead */}
-      <div className="v2-masthead" style={{ background: C.dark, padding: "28px 44px", borderRadius: "12px 12px 0 0" }}>
-        <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".22em", color: C.salmon, marginBottom: 10 }}>AI To Market · Blog</div>
-        <h1 style={{ margin: "0 0 10px", fontSize: 24, fontWeight: 700, lineHeight: 1.2, color: C.white, letterSpacing: "-.3px" }}>
-          {article.title}
-        </h1>
-      </div>
+      {(() => {
+        const displayTitle = (titleVariants && titleVariants.length > 0 ? titleVariants[activeTitleIdx ?? 0] : null) ?? article.title;
+        const varCount = titleVariants?.length ?? 0;
+        const curIdx = activeTitleIdx ?? 0;
+        return (
+          <div className="v2-masthead" style={{ background: C.dark, padding: "28px 44px", borderRadius: "12px 12px 0 0" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".22em", color: C.salmon, marginBottom: 10 }}>AI To Market · Blog</div>
+            {/* Editable title */}
+            {editingTitle ? (
+              <textarea
+                value={titleDraft}
+                onChange={e => setTitleDraft(e.target.value)}
+                onBlur={() => { const v = titleDraft.trim(); if (v) onTitleEdit?.(v); setEditingTitle(false); }}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); const v = titleDraft.trim(); if (v) onTitleEdit?.(v); setEditingTitle(false); } if (e.key === "Escape") setEditingTitle(false); }}
+                autoFocus
+                rows={3}
+                style={{ width: "100%", margin: "0 0 8px", fontSize: 24, fontWeight: 700, lineHeight: 1.2, color: C.white, letterSpacing: "-.3px", background: "rgba(255,255,255,.1)", border: "1px solid rgba(255,255,255,.25)", borderRadius: 6, padding: "6px 8px", outline: "none", resize: "none", boxSizing: "border-box", fontFamily: "inherit" }}
+              />
+            ) : (
+              <h1
+                onClick={() => { setTitleDraft(displayTitle); setEditingTitle(true); }}
+                title="Click to edit title"
+                style={{ margin: "0 0 8px", fontSize: 24, fontWeight: 700, lineHeight: 1.2, color: C.white, letterSpacing: "-.3px", cursor: "text" }}
+              >
+                {displayTitle}
+              </h1>
+            )}
+            {/* Variant switcher — only shown when variants loaded */}
+            {varCount > 1 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <button
+                  onClick={() => onTitleIdxChange?.((curIdx - 1 + varCount) % varCount)}
+                  style={{ background: "rgba(255,255,255,.12)", border: "1px solid rgba(255,255,255,.2)", borderRadius: 4, color: C.white, width: 24, height: 24, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}
+                >‹</button>
+                <span style={{ fontSize: 10, color: "rgba(255,255,255,.5)", letterSpacing: ".06em", minWidth: 28, textAlign: "center" }}>
+                  {curIdx + 1} / {varCount}
+                </span>
+                <button
+                  onClick={() => onTitleIdxChange?.((curIdx + 1) % varCount)}
+                  style={{ background: "rgba(255,255,255,.12)", border: "1px solid rgba(255,255,255,.2)", borderRadius: 4, color: C.white, width: 24, height: 24, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}
+                >›</button>
+                <span style={{ fontSize: 9, color: "rgba(255,255,255,.35)", letterSpacing: ".08em" }}>TITLE VARIANTS · CLICK TO EDIT</span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
-      {/* Hero image */}
-      <div style={{ background: `linear-gradient(140deg, #163D26 0%, #185F00 100%)`, height: 240, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden" }}>
-        <svg viewBox="0 0 400 240" width="100%" height="100%" style={{ position: "absolute", inset: 0, opacity: .06 }} preserveAspectRatio="xMidYMid slice">
-          <defs><pattern id="nlgrid" x="0" y="0" width="36" height="36" patternUnits="userSpaceOnUse"><path d="M 36 0 L 0 0 0 36" fill="none" stroke="white" strokeWidth="1"/></pattern></defs>
-          <rect width="100%" height="100%" fill="url(#nlgrid)"/>
-        </svg>
-        <div style={{ position: "relative", textAlign: "center" }}>
-          <svg viewBox="0 0 48 48" width="44" height="44" fill="none" stroke="rgba(255,255,255,.32)" strokeWidth="1.5" strokeLinecap="round">
-            <rect x="4" y="4" width="40" height="40" rx="4"/><circle cx="16" cy="18" r="4"/><path d="M44 32l-10-10-14 14"/>
-          </svg>
-          <div style={{ marginTop: 10, fontSize: 10, fontWeight: 600, letterSpacing: ".12em", color: "rgba(255,255,255,.28)" }}>HERO IMAGE</div>
-        </div>
-      </div>
+      {/* Hero image — clickable to generate. Removing it keeps this slot as an empty
+          placeholder so it can be regenerated; the removed flag is what excludes it. */}
+      {(() => {
+        const heroImgs = sectionImages[0] ?? [];
+        const heroSvg = heroImgs[activeImgIdx[0] ?? 0] ?? null;
+        const heroLoading = imgLoadingOrders.has(0);
+        const heroFailed = !heroLoading && imgFailedOrders.has(0) && !heroSvg;
+        const heroHovered = hoveredImg === 0;
+        return (
+          <div
+            onClick={() => { setImgModal({ order: 0, heading: article.title, sType: "hero", prompt: `Hero illustration for article: ${article.title}` }); setImgPrompt(`Hero illustration for article: ${article.title}`); }}
+            onMouseEnter={() => setHoveredImg(0)}
+            onMouseLeave={() => setHoveredImg(null)}
+            style={{ height: 260, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", overflow: "hidden", cursor: "pointer", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)`, border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none" }}
+          >
+            {/* Remove hero — clears the picture and drops the slot from the Image SEO panel
+                and publish payload, but leaves the placeholder here to regenerate from */}
+            {heroHovered && heroSvg && onRemoveImage && (
+              <button
+                onClick={e => {
+                  e.stopPropagation();
+                  setSectionImages(prev => ({ ...prev, 0: [] }));
+                  setActiveImgIdx(prev => ({ ...prev, 0: 0 }));
+                  onRemoveImage(0);
+                }}
+                title="Remove the hero image"
+                style={{ position: "absolute", top: 10, right: 10, zIndex: 3, width: 26, height: 26, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(249,57,67,.45)", background: C.white, color: C.red, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0, boxShadow: "0 2px 6px rgba(0,0,0,.18)" }}
+              >
+                ×
+              </button>
+            )}
+            {heroSvg ? (
+              heroSvg.startsWith("data:") || heroSvg.startsWith("http")
+                ? <img src={heroSvg} alt={article.title} style={{ width: "100%", height: 260, objectFit: imgFitMode[0] ?? "contain", objectPosition: imgPositions[0] ?? "50% 50%", display: "block" }} />
+                : <div dangerouslySetInnerHTML={{ __html: heroSvg }} style={{ width: 300, height: 240, flexShrink: 0, lineHeight: 0 }} />
+            ) : (
+              <>
+                <svg viewBox="0 0 400 240" width="100%" height="100%" style={{ position: "absolute", inset: 0, opacity: .06 }} preserveAspectRatio="xMidYMid slice">
+                  <defs><pattern id="nlgrid" x="0" y="0" width="36" height="36" patternUnits="userSpaceOnUse"><path d="M 36 0 L 0 0 0 36" fill="none" stroke="white" strokeWidth="1"/></pattern></defs>
+                  <rect width="100%" height="100%" fill="url(#nlgrid)"/>
+                </svg>
+                <div style={{ position: "relative", textAlign: "center" }}>
+                  {heroLoading ? (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+                      <div style={{ position: "relative", width: 90, height: 90 }}>
+                        <div style={{ position: "absolute", inset: 0, border: "2.5px solid rgba(255,255,255,.15)", borderTop: "2.5px solid rgba(255,255,255,.8)", borderRadius: "50%", animation: "spin 1.1s linear infinite" }} />
+                        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <svg viewBox="0 0 91 59" width="46" height="30" xmlns="http://www.w3.org/2000/svg" style={{ color: "rgba(255,255,255,.9)" }}>
+                            <path d="M26.66 0V13.32C36.72 13.32 45.24 19.96 48.08 29.1H26.66V13.32H13.34V35.76V58.2H26.66V42.42H49.1V58.2H62.42V35.76C62.42 16.04 46.38 0 26.66 0Z" fill="currentColor"/>
+                            <path d="M13.32 0H0V13.32H13.32V0Z" fill="currentColor"/>
+                            <path d="M90.26 35.76C90.26 16.04 74.22 0 54.48 0V13.32C66.86 13.32 76.92 23.38 76.92 35.76V58.2H90.24V35.76H90.26Z" fill="currentColor"/>
+                          </svg>
+                        </div>
+                      </div>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,.5)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</span>
+                    </div>
+                  ) : heroFailed ? (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 10 }}>
+                      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(255,255,255,.45)" strokeWidth="1.5" strokeLinecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,.4)", letterSpacing: ".1em" }}>CLICK TO RETRY</span>
+                    </div>
+                  ) : (
+                    <svg viewBox="0 0 48 48" width="44" height="44" fill="none" stroke="rgba(255,255,255,.32)" strokeWidth="1.5" strokeLinecap="round">
+                      <rect x="4" y="4" width="40" height="40" rx="4"/><circle cx="16" cy="18" r="4"/><path d="M44 32l-10-10-14 14"/>
+                    </svg>
+                  )}
+                  <div style={{ marginTop: 10, fontSize: 10, fontWeight: 600, letterSpacing: ".12em", color: "rgba(255,255,255,.28)" }}>HERO IMAGE</div>
+                </div>
+              </>
+            )}
+            {heroHovered && (
+              <div style={{ position: "absolute", inset: 0, background: "rgba(22,61,38,.65)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="rgba(255,255,255,.9)" strokeWidth="1.8" strokeLinecap="round">
+                  <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+                </svg>
+                <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,.9)", letterSpacing: ".1em" }}>
+                  {heroSvg ? `EDIT HERO · ${heroImgs.length} VERSION${heroImgs.length > 1 ? "S" : ""}` : "GENERATE HERO IMAGE"}
+                </span>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Article body */}
       <div style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", padding: "44px 52px" }}>
@@ -1688,48 +2219,146 @@ const hlStyle = (heading: string): React.CSSProperties =>
         })()}
 
         {/* Body sections — floated image so text wraps underneath if content is longer */}
-        {body.map((s, bi) => {
+        {(() => {
+          const midBodySec = body.length ? body[Math.floor(body.length / 2)] : undefined;
+          // A user edit wins over the auto-extracted sentence; removal wins over both.
+          const pullQuoteText = pullQuoteRemoved ? null : (pullQuoteOverride ?? extractPullQuote(midBodySec));
+          return body.map((s, bi) => {
           const imgLeft = bi % 2 === 0;
           return (
-            <div key={s.order} id={sectionSlug(s.heading)} style={{ scrollMarginTop: 32, overflow: "hidden", ...hlStyle(s.heading) }}>
+            <React.Fragment key={s.order}>
+            {/* A clear:both sentinel (not overflow:hidden) clears the floated image below it —
+                overflow:hidden here would additionally clip the image's own box-shadow at this
+                section's boundary, producing a hard-edged line instead of a soft card-lift. */}
+            <div id={sectionSlug(s.heading)} style={{ scrollMarginTop: 32, ...hlStyle(s.heading) }}>
               {divider}
-              {/* Floated illustration — text wraps around it and fills any space below */}
-              <div style={{
-                float: imgLeft ? "left" : "right",
-                marginRight: imgLeft ? 28 : 0,
-                marginLeft: imgLeft ? 0 : 28,
-                marginBottom: 16,
-                width: 300,
-                height: 240,
-                borderRadius: 9,
-                background: "rgba(22,61,38,.04)",
-                border: "1px solid rgba(22,61,38,.1)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                flexShrink: 0,
-                overflow: "hidden",
-              }}>
-                {sectionSvgs[s.order] ? (
+              {/* Floated illustration — clickable, shows active image from history.
+                  A removed image keeps its slot here as an empty "generate" placeholder,
+                  so the author can change their mind; it's the removed flag (not this
+                  block) that keeps it out of the Image SEO panel and the publish payload. */}
+              {(() => {
+                const imgs = sectionImages[s.order] ?? [];
+                const idx = activeImgIdx[s.order] ?? 0;
+                const activeSvg = imgs[idx] ?? null;
+                const isLoading = imgLoadingOrders.has(s.order);
+                const isFailed = !isLoading && imgFailedOrders.has(s.order) && !activeSvg;
+                const isHovered = hoveredImg === s.order;
+                const summary = s.content.paragraphs.map(p => p.text.replace(/<[^>]+>/g, "")).join(" ").slice(0, 400);
+                return (
+                  // Shadow lives on this outer wrapper (no overflow:hidden here) — putting both
+                  // overflow:hidden and box-shadow on the same box makes browsers clip the shadow
+                  // unevenly against the rounded corners. The inner box below owns the clipping.
                   <div
-                    dangerouslySetInnerHTML={{
-                      __html: sectionSvgs[s.order]
-                        .replace(/width="340"/, 'width="300"')
-                        .replace(/height="130"/, 'height="240"')
-                        .replace(/viewBox="0 0 340 130"/, 'viewBox="0 0 340 130" preserveAspectRatio="xMidYMid meet"'),
+                    onMouseEnter={() => setHoveredImg(s.order)}
+                    onMouseLeave={() => setHoveredImg(null)}
+                    style={{
+                      float: imgLeft ? "left" : "right",
+                      marginRight: imgLeft ? 28 : 0,
+                      marginLeft: imgLeft ? 0 : 28,
+                      marginBottom: 16,
+                      width: 300, height: 240,
+                      borderRadius: 9,
+                      boxShadow: "0 12px 28px -8px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.06)",
+                      flexShrink: 0,
+                      position: "relative",
                     }}
-                    style={{ lineHeight: 0, display: "block", width: 300, height: 240 }}
-                  />
-                ) : (
-                  <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(22,61,38,.22)" strokeWidth="1.5" strokeLinecap="round">
-                    <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
-                  </svg>
-                )}
-              </div>
+                  >
+                  {/* Remove image — clears the picture and drops the slot from the Image SEO
+                      panel and publish payload, but leaves the placeholder here to regenerate from */}
+                  {isHovered && activeSvg && onRemoveImage && (
+                    <button
+                      onClick={e => {
+                        e.stopPropagation();
+                        setSectionImages(prev => ({ ...prev, [s.order]: [] }));
+                        setActiveImgIdx(prev => ({ ...prev, [s.order]: 0 }));
+                        onRemoveImage(s.order);
+                      }}
+                      title="Remove this image from the section"
+                      style={{ position: "absolute", top: -9, right: -9, zIndex: 3, width: 24, height: 24, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(249,57,67,.45)", background: C.white, color: C.red, cursor: "pointer", fontSize: 15, lineHeight: 1, padding: 0, boxShadow: "0 2px 6px rgba(0,0,0,.18)" }}
+                    >
+                      ×
+                    </button>
+                  )}
+                  <div
+                    onClick={() => { setImgModal({ order: s.order, heading: s.heading, sType: s.type, prompt: summary }); setImgPrompt(summary); }}
+                    onMouseEnter={() => setHoveredImg(s.order)}
+                    onMouseLeave={() => setHoveredImg(null)}
+                    style={{
+                      width: "100%", height: "100%",
+                      borderRadius: 9,
+                      background: "rgba(22,61,38,.04)",
+                      border: `1px solid ${isHovered ? "rgba(22,61,38,.35)" : "rgba(22,61,38,.1)"}`,
+                      display: "flex", alignItems: "center", justifyContent: "center",
+                      overflow: "hidden",
+                      position: "relative", cursor: "pointer",
+                      transition: "border-color .15s",
+                    }}
+                  >
+                    {activeSvg ? (
+                      activeSvg.startsWith("data:") || activeSvg.startsWith("http")
+                        ? <img src={activeSvg} alt={s.heading} style={{ width: 300, height: 240, objectFit: imgFitMode[s.order] ?? "contain", objectPosition: imgPositions[s.order] ?? "50% 50%", display: "block" }} />
+                        : <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="300"').replace(/height="240"/, 'height="240"') }} style={{ lineHeight: 0, display: "block", width: 300, height: 240 }} />
+                    ) : isLoading ? (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 14, height: "100%" }}>
+                        <div style={{ position: "relative", width: 80, height: 80 }}>
+                          <div style={{ position: "absolute", inset: 0, border: "2.5px solid rgba(22,61,38,.1)", borderTop: "2.5px solid rgba(22,61,38,.65)", borderRadius: "50%", animation: "spin 1.1s linear infinite" }} />
+                          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                            <svg viewBox="0 0 91 59" width="42" height="27" xmlns="http://www.w3.org/2000/svg" style={{ color: "#163D26" }}>
+                            <path d="M26.66 0V13.32C36.72 13.32 45.24 19.96 48.08 29.1H26.66V13.32H13.34V35.76V58.2H26.66V42.42H49.1V58.2H62.42V35.76C62.42 16.04 46.38 0 26.66 0Z" fill="currentColor"/>
+                            <path d="M13.32 0H0V13.32H13.32V0Z" fill="currentColor"/>
+                            <path d="M90.26 35.76C90.26 16.04 74.22 0 54.48 0V13.32C66.86 13.32 76.92 23.38 76.92 35.76V58.2H90.24V35.76H90.26Z" fill="currentColor"/>
+                          </svg>
+                          </div>
+                        </div>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.45)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</span>
+                      </div>
+                    ) : isFailed ? (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="rgba(249,57,67,.5)" strokeWidth="1.5" strokeLinecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg>
+                        <span style={{ fontSize: 9, fontWeight: 700, color: "rgba(249,57,67,.6)", letterSpacing: ".08em" }}>RETRY</span>
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                        <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(22,61,38,.22)" strokeWidth="1.5" strokeLinecap="round">
+                          <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
+                        </svg>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.35)", letterSpacing: ".1em", textTransform: "uppercase" }}>Add image</span>
+                      </div>
+                    )}
+                    {/* Hover overlay */}
+                    {isHovered && (
+                      <div style={{
+                        position: "absolute", inset: 0, background: "rgba(22,61,38,.72)",
+                        display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8,
+                        transition: "opacity .15s",
+                      }}>
+                        <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="rgba(255,255,255,.9)" strokeWidth="1.8" strokeLinecap="round">
+                          <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/>
+                        </svg>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(255,255,255,.9)", letterSpacing: ".1em" }}>
+                          {activeSvg ? `EDIT IMAGE · ${imgs.length} VERSION${imgs.length > 1 ? "S" : ""}` : "GENERATE IMAGE"}
+                        </span>
+                      </div>
+                    )}
+                    {/* Version badge */}
+                    {imgs.length > 1 && !isHovered && (
+                      <div style={{ position: "absolute", bottom: 8, right: 8, background: "rgba(22,61,38,.7)", color: "#fff", fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 4, letterSpacing: ".05em" }}>
+                        {idx + 1}/{imgs.length}
+                      </div>
+                    )}
+                  </div>
+                  </div>
+                );
+              })()}
               <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 10 }}>
                 {s.eyebrow || s.type.replace(/_/g, " ").toUpperCase()}
               </div>
-              <h3 style={{ margin: "0 0 14px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-.2px", color: C.dark }}>{s.heading}</h3>
+              <EditableText
+                text={s.heading}
+                as="h3"
+                style={{ margin: "0 0 14px", fontSize: 18, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-.2px", color: C.dark, display: "block" }}
+                onSave={newH => onEditHeading?.(s.order, newH)}
+              />
               {s.content.paragraphs.map((p, i) =>
                 <EditablePara key={p.id} text={p.text} style={{ margin: i < s.content.paragraphs.length - 1 ? "0 0 13px" : 0, fontSize: 14, fontWeight: 400, lineHeight: 1.7, color: "#222" }} paraKey={p.id} sectionOrder={s.order} paraId={p.id} onEditParagraph={onEditParagraph} />
               )}
@@ -1742,8 +2371,13 @@ const hlStyle = (heading: string): React.CSSProperties =>
               )}
               <div style={{ clear: "both" }} />
             </div>
+            {pullQuoteText && s === midBodySec && (
+              <EditablePullQuote text={pullQuoteText} onEdit={onPullQuoteEdit} onRemove={onPullQuoteRemove} />
+            )}
+            </React.Fragment>
           );
-        })}
+          });
+        })()}
 
         {/* Stats / BY THE NUMBERS */}
         {statsSection && (() => {
@@ -1768,11 +2402,19 @@ const hlStyle = (heading: string): React.CSSProperties =>
                           const clean = p.text.replace(/<[^>]+>/g, "");
                           const m = clean.match(STAT_RE)!;
                           const stat = m[1].trim();
-                          const caption = clean.replace(stat, "").replace(/\s{2,}/g, " ").trim().slice(0, 80);
+                          const full = clean.replace(stat, "").replace(/\s{2,}/g, " ").trim() || clean;
+                          // Keep only complete sentences that fit within 180 chars
+                          const sentences = full.match(/[^.!?]+[.!?]+/g) ?? [full];
+                          let caption = "";
+                          for (const s of sentences) {
+                            if ((caption + s).length > 180) break;
+                            caption += s;
+                          }
+                          caption = caption.trim() || full.slice(0, 160).replace(/\s+\S*$/, "…");
                           return (
                             <div key={i} style={{ padding: "20px 16px", background: C.dark, borderRadius: 10, textAlign: "center" }}>
                               <div style={{ fontSize: 30, fontWeight: 700, color: C.salmon, lineHeight: 1, letterSpacing: -1 }}>{stat}</div>
-                              <div style={{ marginTop: 10, fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.6)", lineHeight: 1.45 }}>{caption || clean.slice(0, 60)}</div>
+                              <div style={{ marginTop: 10, fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.6)", lineHeight: 1.45 }}>{caption}</div>
                             </div>
                           );
                         })}
@@ -1849,7 +2491,7 @@ const hlStyle = (heading: string): React.CSSProperties =>
         {/* Conclusion / Key takeaways */}
         {conclusion && (() => {
           // Gather bullets — prefer the bullets array, then extract <li> from HTML paragraph
-          let takeaways = conclusion.content.bullets.filter(b => b.trim());
+          let takeaways = conclusion.content.bullets.map(bulletText).filter(b => b.trim());
           if (takeaways.length === 0 && conclusion.content.paragraphs.length > 0) {
             // Try each paragraph; stop when we get bullets
             for (const para of conclusion.content.paragraphs) {
@@ -1959,7 +2601,496 @@ const hlStyle = (heading: string): React.CSSProperties =>
           </div>
         </div>
       </div>
+
+      {/* Image Modal */}
+      {imgModal && (() => {
+        const modalOrder = imgModal.order;
+        const modalImgs = sectionImages[modalOrder] ?? [];
+        const modalActive = activeImgIdx[modalOrder] ?? 0;
+        const activeSvg = modalImgs[modalActive] ?? null;
+        const autoGenerating = imgLoadingOrders.has(modalOrder);
+        const isUploadedImg = !!activeSvg && (activeSvg.startsWith("data:") || activeSvg.startsWith("http"));
+        const currentFit = imgFitMode[modalOrder] ?? "contain";
+        const currentPos = imgPositions[modalOrder] ?? "50% 50%";
+        const [posX, posY] = currentPos.split(" ").map(v => parseFloat(v));
+
+        function handlePreviewMouseDown(e: React.MouseEvent<HTMLDivElement>) {
+          if (!isUploadedImg) return;
+          e.preventDefault();
+          setIsDraggingPos(true);
+          const rect = e.currentTarget.getBoundingClientRect();
+          const x = Math.max(0, Math.min(100, Math.round(((e.clientX - rect.left) / rect.width) * 100)));
+          const y = Math.max(0, Math.min(100, Math.round(((e.clientY - rect.top) / rect.height) * 100)));
+          setImgPositions(prev => ({ ...prev, [modalOrder]: `${x}% ${y}%` }));
+        }
+        function handlePreviewMouseMove(e: React.MouseEvent<HTMLDivElement>) {
+          if (!isDraggingPos || !isUploadedImg) return;
+          const rect = e.currentTarget.getBoundingClientRect();
+          const x = Math.max(0, Math.min(100, Math.round(((e.clientX - rect.left) / rect.width) * 100)));
+          const y = Math.max(0, Math.min(100, Math.round(((e.clientY - rect.top) / rect.height) * 100)));
+          setImgPositions(prev => ({ ...prev, [modalOrder]: `${x}% ${y}%` }));
+        }
+
+        return (
+          <div
+            style={{ position: "fixed", inset: 0, zIndex: 9999, background: "rgba(0,0,0,.72)", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+            onClick={e => { if (e.target === e.currentTarget) setImgModal(null); }}
+            onMouseUp={() => setIsDraggingPos(false)}
+            onMouseLeave={() => setIsDraggingPos(false)}
+          >
+            <div style={{ background: "#fff", borderRadius: 16, width: "100%", maxWidth: 720, maxHeight: "90vh", overflow: "auto", boxShadow: "0 24px 80px rgba(0,0,0,.4)" }}>
+              {/* Modal header */}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "20px 24px 16px", borderBottom: "1px solid rgba(22,61,38,.1)" }}>
+                <div>
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".12em", color: "rgba(22,61,38,.45)", textTransform: "uppercase", marginBottom: 4 }}>{imgModal.sType}</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "#163D26", lineHeight: 1.3, maxWidth: 540 }}>{imgModal.heading}</div>
+                </div>
+                <button
+                  onClick={() => setImgModal(null)}
+                  style={{ width: 32, height: 32, borderRadius: "50%", border: "1.5px solid rgba(22,61,38,.15)", background: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, color: "#163D26", fontSize: 18, lineHeight: 1 }}
+                >×</button>
+              </div>
+
+              {/* Large image preview */}
+              <div style={{ padding: "20px 24px 0" }}>
+                <div
+                  style={{ background: "#F7F5F2", borderRadius: 12, overflow: "hidden", width: "100%", height: 260, display: "flex", alignItems: "center", justifyContent: "center", position: "relative", cursor: isUploadedImg ? (isDraggingPos ? "grabbing" : "crosshair") : "default", userSelect: "none" }}
+                  onMouseDown={handlePreviewMouseDown}
+                  onMouseMove={handlePreviewMouseMove}
+                  onMouseUp={() => setIsDraggingPos(false)}
+                >
+                  {(imgGenerating || autoGenerating) ? (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14 }}>
+                      <div style={{ position: "relative", width: 80, height: 80 }}>
+                        <div style={{ position: "absolute", inset: 0, border: "2.5px solid rgba(22,61,38,.1)", borderTop: "2.5px solid rgba(22,61,38,.65)", borderRadius: "50%", animation: "spin 1.1s linear infinite" }} />
+                        <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                          <svg viewBox="0 0 91 59" width="42" height="27" xmlns="http://www.w3.org/2000/svg" style={{ color: "#163D26" }}>
+                            <path d="M26.66 0V13.32C36.72 13.32 45.24 19.96 48.08 29.1H26.66V13.32H13.34V35.76V58.2H26.66V42.42H49.1V58.2H62.42V35.76C62.42 16.04 46.38 0 26.66 0Z" fill="currentColor"/>
+                            <path d="M13.32 0H0V13.32H13.32V0Z" fill="currentColor"/>
+                            <path d="M90.26 35.76C90.26 16.04 74.22 0 54.48 0V13.32C66.86 13.32 76.92 23.38 76.92 35.76V58.2H90.24V35.76H90.26Z" fill="currentColor"/>
+                          </svg>
+                        </div>
+                      </div>
+                      <div style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.45)", letterSpacing: ".12em", textTransform: "uppercase" }}>Generating</div>
+                    </div>
+                  ) : activeSvg ? (
+                    isUploadedImg
+                      ? <>
+                          <img src={activeSvg} alt={imgModal.heading} style={{ width: "100%", height: 260, objectFit: currentFit, objectPosition: currentPos, display: "block", pointerEvents: "none" }} />
+                          {/* Focal point crosshair */}
+                          <div style={{ position: "absolute", pointerEvents: "none", left: `${posX}%`, top: `${posY}%`, transform: "translate(-50%, -50%)" }}>
+                            <div style={{ width: 20, height: 20, borderRadius: "50%", border: "2px solid #fff", boxShadow: "0 0 0 1px rgba(0,0,0,.5), inset 0 0 0 1px rgba(0,0,0,.2)", background: "rgba(255,255,255,.2)" }} />
+                          </div>
+                        </>
+                      : <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="100%"').replace(/height="240"/, 'height="260"') }} style={{ width: "100%", height: 260, lineHeight: 0 }} />
+                  ) : (
+                    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                      <svg viewBox="0 0 48 48" width="40" height="40" fill="none" stroke="rgba(22,61,38,.25)" strokeWidth="1.5" strokeLinecap="round">
+                        <rect x="4" y="4" width="40" height="40" rx="4"/><circle cx="16" cy="18" r="4"/><path d="M44 32l-10-10-14 14"/>
+                      </svg>
+                      <div style={{ fontSize: 11, color: "rgba(22,61,38,.35)", fontWeight: 600 }}>No image yet</div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Crop / reposition controls — only for uploaded images */}
+                {isUploadedImg && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "rgba(22,61,38,.45)", textTransform: "uppercase", whiteSpace: "nowrap" }}>Display</span>
+                    <button
+                      onClick={() => setImgFitMode(prev => ({ ...prev, [modalOrder]: "contain" }))}
+                      style={{ padding: "5px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, border: `1.5px solid ${currentFit === "contain" ? "#163D26" : "rgba(22,61,38,.18)"}`, background: currentFit === "contain" ? "#163D26" : "transparent", color: currentFit === "contain" ? "#fff" : "#163D26", cursor: "pointer" }}
+                    >Fit</button>
+                    <button
+                      onClick={() => setImgFitMode(prev => ({ ...prev, [modalOrder]: "cover" }))}
+                      style={{ padding: "5px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, border: `1.5px solid ${currentFit === "cover" ? "#163D26" : "rgba(22,61,38,.18)"}`, background: currentFit === "cover" ? "#163D26" : "transparent", color: currentFit === "cover" ? "#fff" : "#163D26", cursor: "pointer" }}
+                    >Fill</button>
+                    <div style={{ width: 1, height: 16, background: "rgba(22,61,38,.15)", margin: "0 2px" }} />
+                    <button
+                      onClick={() => setImgPositions(prev => ({ ...prev, [modalOrder]: "50% 50%" }))}
+                      style={{ padding: "5px 12px", borderRadius: 6, fontSize: 12, fontWeight: 600, border: "1.5px solid rgba(22,61,38,.18)", background: "transparent", color: "#163D26", cursor: "pointer" }}
+                    >Center</button>
+                    <span style={{ fontSize: 11, color: "rgba(22,61,38,.35)", marginLeft: "auto" }}>Drag image to reposition focal point</span>
+                  </div>
+                )}
+
+                {/* Version thumbnails + upload */}
+                <div style={{ display: "flex", gap: 8, marginTop: 12, overflowX: "auto", paddingBottom: 4 }}>
+                  {modalImgs.map((svg, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => setActiveImgIdx(prev => ({ ...prev, [modalOrder]: idx }))}
+                      style={{ flexShrink: 0, width: 80, height: 50, borderRadius: 8, overflow: "hidden", border: `2px solid ${idx === modalActive ? "#163D26" : "rgba(22,61,38,.15)"}`, cursor: "pointer", background: "#F7F5F2", padding: 0, position: "relative" }}
+                      title={`Version ${modalImgs.length - idx}`}
+                    >
+                      {svg.startsWith("data:") || svg.startsWith("http")
+                        ? <img src={svg} style={{ width: 80, height: 50, objectFit: "contain", display: "block", pointerEvents: "none" }} />
+                        : <div dangerouslySetInnerHTML={{ __html: svg }} style={{ transform: "scale(0.267)", transformOrigin: "top left", width: 300, height: 240, pointerEvents: "none" }} />
+                      }
+                      <div style={{ position: "absolute", bottom: 2, right: 4, fontSize: 9, fontWeight: 700, color: idx === modalActive ? "#163D26" : "rgba(22,61,38,.45)" }}>
+                        v{modalImgs.length - idx}
+                      </div>
+                    </button>
+                  ))}
+                  {/* Upload custom image */}
+                  <input
+                    ref={imgUploadRef}
+                    type="file"
+                    accept="image/*"
+                    style={{ display: "none" }}
+                    onChange={handleImgUpload}
+                  />
+                  <button
+                    onClick={() => imgUploadRef.current?.click()}
+                    title="Upload image"
+                    style={{ flexShrink: 0, width: 80, height: 50, borderRadius: 8, border: "1.5px dashed rgba(22,61,38,.3)", background: "#F7F5F2", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, color: "#163D26" }}
+                  >
+                    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round">
+                      <path d="M8 2v8M5 5l3-3 3 3"/><rect x="2" y="11" width="12" height="3" rx="1"/>
+                    </svg>
+                    <span style={{ fontSize: 9, fontWeight: 700 }}>Upload</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Prompt + generate */}
+              <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 12 }}>
+                <label style={{ fontSize: 11, fontWeight: 700, color: "rgba(22,61,38,.55)", letterSpacing: ".1em", textTransform: "uppercase" }}>Reprompt</label>
+                <textarea
+                  value={imgPrompt}
+                  onChange={e => setImgPrompt(e.target.value)}
+                  rows={3}
+                  placeholder="Describe what you want to see in the illustration…"
+                  style={{ width: "100%", padding: "10px 14px", borderRadius: 8, border: "1.5px solid rgba(22,61,38,.18)", background: "#F7F5F2", fontSize: 13, lineHeight: 1.55, color: "#163D26", resize: "vertical", outline: "none", fontFamily: "inherit", boxSizing: "border-box" }}
+                />
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                  {modalImgs.length > 0 && (
+                    <div style={{ fontSize: 11, color: "rgba(22,61,38,.45)" }}>
+                      {modalImgs.length} version{modalImgs.length > 1 ? "s" : ""} · showing v{modalImgs.length - modalActive}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+                    {/* Model picker */}
+                    <select
+                      value={imgModel}
+                      onChange={e => setImgModel(e.target.value as "claude" | "openai")}
+                      title="Image model"
+                      style={{ padding: "10px 14px", borderRadius: 8, background: "rgba(22,61,38,.07)", color: "#163D26", fontSize: 13, fontWeight: 600, border: "1.5px solid rgba(22,61,38,.18)", cursor: "pointer", outline: "none", fontFamily: "inherit" }}
+                    >
+                      <option value="claude">Claude</option>
+                      <option value="openai">GPT-4o</option>
+                    </select>
+                    <button
+                      onClick={() => void generateNewImage()}
+                      disabled={imgGenerating}
+                      style={{ padding: "10px 22px", borderRadius: 8, background: imgGenerating ? "rgba(22,61,38,.3)" : "#163D26", color: "#fff", fontSize: 13, fontWeight: 700, border: "none", cursor: imgGenerating ? "not-allowed" : "pointer", display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}
+                    >
+                      {imgGenerating && <div style={{ width: 14, height: 14, border: "2px solid rgba(255,255,255,.25)", borderTop: "2px solid #fff", borderRadius: "50%", animation: "spin 1s linear infinite" }} />}
+                      {imgGenerating ? "Generating…" : "Generate new image"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Keyframe for spinner */}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } } @keyframes previewFadeIn { from { opacity: 0; } to { opacity: 1; } }`}</style>
     </div>
+
+    {/* ── Preview overlay ── */}
+    {previewMode && (
+      <div style={{ position: "fixed", inset: 0, zIndex: 9999, background: "#F7F5F2", overflowY: "auto", animation: "previewFadeIn .22s ease" }}>
+        {/* Sticky exit bar */}
+        <div style={{ position: "sticky", top: 0, zIndex: 1, background: "rgba(22,61,38,.96)", backdropFilter: "blur(8px)", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "11px 24px", borderBottom: "1px solid rgba(255,255,255,.12)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#F93943" }} />
+            <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".14em", color: "rgba(255,255,255,.6)", textTransform: "uppercase" }}>Website preview</span>
+          </div>
+          <button
+            onClick={onExitPreview}
+            style={{ display: "flex", alignItems: "center", gap: 7, padding: "7px 14px", borderRadius: 7, background: "rgba(255,255,255,.12)", border: "1px solid rgba(255,255,255,.18)", color: "rgba(255,255,255,.85)", fontSize: 12, fontWeight: 600, cursor: "pointer", letterSpacing: ".02em" }}
+          >
+            <svg viewBox="0 0 14 14" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M2 2l10 10M12 2L2 12"/></svg>
+            Exit preview
+          </button>
+        </div>
+
+        {/* Article content — boxed card: masthead, hero, body and footer share one bordered container */}
+        <div className="v2-article" style={{ maxWidth: 820, margin: "0 auto", padding: "0 0 80px" }}>
+          {/* Masthead */}
+          <div style={{ background: C.dark, padding: "44px 44px 36px", borderRadius: "12px 12px 0 0" }}>
+            <div style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,.55)", marginBottom: 20 }}>
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10 12L6 8l4-4" /></svg>
+              Back to Blog
+            </div>
+            <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: C.salmon, marginBottom: 14 }}>AI To Market · Blog</div>
+            <h1 style={{ margin: "0 0 24px", fontSize: 28, fontWeight: 800, lineHeight: 1.15, color: C.white, letterSpacing: "-.4px" }}>{article.title}</h1>
+            {(() => {
+              const wordCount = [
+                ...(intro?.content.paragraphs ?? []),
+                ...body.flatMap(s => s.content.paragraphs),
+                ...(statsSection?.content.paragraphs ?? []),
+                ...(faqSection?.content.paragraphs ?? []),
+                ...(conclusion?.content.paragraphs ?? []),
+              ].reduce((n, p) => n + p.text.replace(/<[^>]+>/g, " ").split(/\s+/).filter(Boolean).length, 0);
+              const readTime = `${Math.max(1, Math.ceil(wordCount / 200))} min read`;
+              const formattedDate = new Date().toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+              return (
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 18, fontSize: 12, color: "rgba(255,255,255,.55)" }}>
+                  <span>{formattedDate}</span>
+                  <span>{readTime}</span>
+                  <span>AI To Market</span>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Hero image */}
+          {!removedImageOrders?.has(0) && (() => {
+            const heroSvg = (sectionImages[0] ?? [])[activeImgIdx[0] ?? 0] ?? null;
+            return (
+              <div style={{ height: 260, overflow: "hidden", background: heroSvg ? "#F7F5F2" : `linear-gradient(140deg, #163D26 0%, #185F00 100%)`, display: "flex", alignItems: "center", justifyContent: "center", border: `1px solid ${C.border}`, borderTop: "none", borderBottom: "none" }}>
+                {heroSvg ? (
+                  heroSvg.startsWith("data:") || heroSvg.startsWith("http")
+                    ? <img src={heroSvg} alt={article.title} style={{ width: "100%", height: 260, objectFit: imgFitMode[0] ?? "contain", objectPosition: imgPositions[0] ?? "50% 50%", display: "block" }} />
+                    : <div dangerouslySetInnerHTML={{ __html: heroSvg }} style={{ width: 300, height: 240, flexShrink: 0, lineHeight: 0 }} />
+                ) : (
+                  <svg viewBox="0 0 48 48" width="44" height="44" fill="none" stroke="rgba(255,255,255,.25)" strokeWidth="1.5" strokeLinecap="round"><rect x="4" y="4" width="40" height="40" rx="4"/><circle cx="16" cy="18" r="4"/><path d="M44 32l-10-10-14 14"/></svg>
+                )}
+              </div>
+            );
+          })()}
+
+          {/* Body */}
+          <div style={{ background: C.white, border: `1px solid ${C.border}`, borderTop: "none", padding: "52px 56px" }}>
+            {/* Intro */}
+            {intro && (
+              <div style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.salmon, marginBottom: 14 }}>{intro.eyebrow || "LEAD ITEM"}</div>
+                <h2 style={{ margin: "0 0 18px", fontSize: 22, fontWeight: 700, lineHeight: 1.25, letterSpacing: "-.3px", color: C.dark }}>{intro.heading}</h2>
+                {intro.content.paragraphs.map((p, i) => (
+                  <p key={i} dangerouslySetInnerHTML={{ __html: p.text }} style={{ margin: i < intro.content.paragraphs.length - 1 ? "0 0 15px" : 0, fontSize: 16, fontWeight: 400, lineHeight: 1.75, color: "#222" }} />
+                ))}
+              </div>
+            )}
+
+            {/* Body sections */}
+            {(() => {
+              const midBodySec = body.length ? body[Math.floor(body.length / 2)] : undefined;
+              const pullQuoteText = pullQuoteRemoved ? null : (pullQuoteOverride ?? extractPullQuote(midBodySec));
+              return body.map((s, bi) => {
+              const imgLeft = bi % 2 === 0;
+              const activeSvg = (sectionImages[s.order] ?? [])[activeImgIdx[s.order] ?? 0] ?? null;
+              return (
+                <React.Fragment key={s.order}>
+                <div>
+                  <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "44px 0" }} />
+                  {activeSvg && !removedImageOrders?.has(s.order) && (
+                    // Shadow on the outer wrapper (no overflow:hidden) — the inner box owns the clip.
+                    <div style={{
+                      float: imgLeft ? "left" : "right",
+                      marginRight: imgLeft ? 32 : 0,
+                      marginLeft: imgLeft ? 0 : 32,
+                      marginBottom: 18,
+                      width: 320, height: 240,
+                      borderRadius: 9,
+                      boxShadow: "0 12px 28px -8px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.06)",
+                      flexShrink: 0,
+                    }}>
+                      <div style={{
+                        width: "100%", height: "100%",
+                        borderRadius: 9,
+                        background: "rgba(22,61,38,.04)",
+                        border: "1px solid rgba(22,61,38,.1)",
+                        overflow: "hidden", lineHeight: 0,
+                        display: "flex", alignItems: "center", justifyContent: "center",
+                      }}>
+                        {activeSvg.startsWith("data:") || activeSvg.startsWith("http")
+                          ? <img src={activeSvg} alt={s.heading} style={{ width: 320, height: 240, objectFit: imgFitMode[s.order] ?? "contain", objectPosition: imgPositions[s.order] ?? "50% 50%", display: "block" }} />
+                          : <div dangerouslySetInnerHTML={{ __html: activeSvg.replace(/width="300"/, 'width="320"').replace(/height="240"/, 'height="240"') }} style={{ lineHeight: 0, display: "block", width: 320, height: 240 }} />
+                        }
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 10 }}>{s.eyebrow || s.type.replace(/_/g, " ").toUpperCase()}</div>
+                  <h3 style={{ margin: "0 0 15px", fontSize: 19, fontWeight: 700, lineHeight: 1.3, letterSpacing: "-.2px", color: C.dark }}>{s.heading}</h3>
+                  {s.content.paragraphs.map((p, i) => (
+                    <p key={i} dangerouslySetInnerHTML={{ __html: p.text }} style={{ margin: i < s.content.paragraphs.length - 1 ? "0 0 13px" : 0, fontSize: 15, fontWeight: 400, lineHeight: 1.75, color: "#222" }} />
+                  ))}
+                  {s.content.bullets.length > 0 && (
+                    <ul style={{ margin: "12px 0 0", paddingLeft: 22, display: "flex", flexDirection: "column", gap: 7 }}>
+                      {s.content.bullets.map((b, i) => <li key={i} style={{ fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: "#222" }}>{b}</li>)}
+                    </ul>
+                  )}
+                  <div style={{ clear: "both" }} />
+                </div>
+                {pullQuoteText && s === midBodySec && <PullQuote text={pullQuoteText} />}
+                </React.Fragment>
+              );
+              });
+            })()}
+
+            {/* Stats — BY THE NUMBERS */}
+            {statsSection && (() => {
+              const ps = statsSection.content.paragraphs;
+              const STAT_RE = /(\$[\d,.]+\s*(?:billion|million|trillion|[bBmMtTkK])\b|\b\d[\d,.]*\s*(?:%|[xX]\b|×|\+)|\b\d[\d,.]*\s*(?:billion|million|trillion|thousand)\b)/i;
+              const statParas = ps.filter(p => STAT_RE.test(p.text.replace(/<[^>]+>/g, ""))).slice(0, 3);
+              const plainParas = ps.filter(p => !STAT_RE.test(p.text.replace(/<[^>]+>/g, "")));
+              return (
+                <div>
+                  <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "44px 0" }} />
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.mid, marginBottom: 14 }}>BY THE NUMBERS</div>
+                  <h3 style={{ margin: "0 0 22px", fontSize: 19, fontWeight: 700, lineHeight: 1.3, color: C.dark }}>{statsSection.heading}</h3>
+                  {statParas.length > 0 && (
+                    <div style={{ display: "grid", gridTemplateColumns: `repeat(${statParas.length}, 1fr)`, gap: 14, marginBottom: 24 }}>
+                      {statParas.map((p, i) => {
+                        const clean = p.text.replace(/<[^>]+>/g, "");
+                        const m = clean.match(STAT_RE)!;
+                        const stat = m[1].trim();
+                        const full = clean.replace(stat, "").replace(/\s{2,}/g, " ").trim() || clean;
+                        // Keep only complete sentences that fit within 180 chars
+                        const sentences = full.match(/[^.!?]+[.!?]+/g) ?? [full];
+                        let caption = "";
+                        for (const s of sentences) {
+                          if ((caption + s).length > 180) break;
+                          caption += s;
+                        }
+                        caption = caption.trim() || full.slice(0, 160).replace(/\s+\S*$/, "…");
+                        return (
+                          <div key={i} style={{ padding: "20px 16px", background: C.dark, borderRadius: 10, textAlign: "center" }}>
+                            <div style={{ fontSize: 30, fontWeight: 700, color: C.salmon, lineHeight: 1, letterSpacing: -1 }}>{stat}</div>
+                            <div style={{ marginTop: 10, fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.6)", lineHeight: 1.45 }}>{caption}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {plainParas.map((p, i) => (
+                    <p key={i} dangerouslySetInnerHTML={{ __html: p.text }} style={{ margin: "0 0 13px", fontSize: 15, fontWeight: 400, lineHeight: 1.75, color: "#222" }} />
+                  ))}
+                </div>
+              );
+            })()}
+
+            {/* FAQ */}
+            {faqSection && (() => {
+              const faqItems = faqSection.content.paragraphs.map((p, i) => {
+                const raw = p.text.replace(/^<p>/i, "").replace(/<\/p>$/i, "").trim();
+                const m = raw.match(/^Q:\s*([\s\S]+?)\s*(?:\n+|\s{2,})A:\s*([\s\S]+)$/i)
+                  ?? raw.match(/^Q:\s*(.+?)\s+A:\s*([\s\S]+)$/i);
+                if (m) return { id: p.id, question: m[1].trim(), answer: m[2].trim() };
+                const splitIdx = raw.search(/(?:\n|^)A:\s/im);
+                if (splitIdx !== -1) {
+                  return { id: p.id, question: raw.slice(0, splitIdx).replace(/^Q:\s*/i, "").trim(), answer: raw.slice(splitIdx).replace(/^A:\s*/i, "").trim() };
+                }
+                return { id: p.id, question: `Question ${i + 1}`, answer: raw };
+              });
+              return (
+                <div>
+                  <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "44px 0" }} />
+                  <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.mid, marginBottom: 18 }}>FREQUENTLY ASKED QUESTIONS</div>
+                  <div style={{ border: `1px solid ${C.border}`, borderRadius: 10, overflow: "hidden" }}>
+                    {faqItems.map((item, i) => {
+                      const open = previewFaqOpenIdx === i;
+                      return (
+                        <div key={item.id} style={{ borderBottom: i < faqItems.length - 1 ? `1px solid ${C.border}` : "none" }}>
+                          <button
+                            onClick={() => setPreviewFaqOpenIdx(open ? null : i)}
+                            style={{ width: "100%", display: "flex", alignItems: "center", gap: 16, padding: "16px 20px", background: open ? C.faint : "transparent", border: "none", cursor: "pointer", textAlign: "left", transition: "background .15s" }}
+                          >
+                            <span style={{ fontSize: 14, fontWeight: 600, lineHeight: 1.45, color: C.dark, flex: 1 }}>{item.question}</span>
+                            <span style={{ width: 22, height: 22, flexShrink: 0, borderRadius: "50%", border: `1.5px solid ${C.border}`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, lineHeight: 1, color: C.mid, transform: open ? "rotate(45deg)" : "none", transition: "transform .18s" }}>+</span>
+                          </button>
+                          {open && item.answer && (
+                            <div style={{ padding: "2px 20px 18px", fontSize: 14, fontWeight: 400, lineHeight: 1.65, color: C.muted }}>{item.answer}</div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Conclusion */}
+            {conclusion && (() => {
+              let takeaways = conclusion.content.bullets.map(bulletText).filter(b => b.trim());
+              if (takeaways.length === 0 && conclusion.content.paragraphs.length > 0) {
+                for (const para of conclusion.content.paragraphs) {
+                  const pText = para.text;
+                  if (/<li/i.test(pText)) {
+                    takeaways = (pText.match(/<li[^>]*>([\s\S]*?)<\/li>/gi) ?? [])
+                      .map(li => li.replace(/<\/?li[^>]*>/gi, "").replace(/<[^>]+>/g, "").trim())
+                      .filter(Boolean);
+                    if (takeaways.length > 0) break;
+                  } else {
+                    const sentences = pText.replace(/<[^>]+>/g, "").trim()
+                      .split(/(?<=[.!?])\s+/).map(s => s.trim()).filter(Boolean);
+                    takeaways.push(...sentences);
+                  }
+                }
+              }
+              return (
+                <div>
+                  <div style={{ height: 1, background: "rgba(22,61,38,.1)", margin: "44px 0" }} />
+                  <div style={{ background: C.dark, borderRadius: 12, padding: "36px 40px" }}>
+                    <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".16em", color: C.salmon, marginBottom: 14 }}>KEY TAKEAWAYS</div>
+                    <h3 style={{ margin: "0 0 22px", fontSize: 19, fontWeight: 700, color: C.white, lineHeight: 1.3 }}>{conclusion.heading}</h3>
+                    {takeaways.map((b, i) => (
+                      <div key={i} style={{ display: "flex", gap: 12, alignItems: "flex-start", marginBottom: i < takeaways.length - 1 ? 14 : 0 }}>
+                        <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.salmon, marginTop: 6, flexShrink: 0 }} />
+                        <div style={{ fontSize: 15, fontWeight: 400, lineHeight: 1.65, color: "rgba(255,255,255,.85)" }}>{b}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Footer — connected to body via border radius, identical to article footer */}
+          <div style={{ background: C.dark, padding: "28px 44px", borderRadius: "0 0 12px 12px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: C.white }}>AI To Market</div>
+              <div style={{ display: "flex", gap: 10 }}>
+                <a href="https://www.linkedin.com/company/ai-to-market" target="_blank" rel="noreferrer"
+                  style={{ width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,.1)", border: "1px solid rgba(255,255,255,.18)", display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}>
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill={C.white}>
+                    <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.064 2.064 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
+                  </svg>
+                </a>
+                <a href="https://x.com/aitomarket" target="_blank" rel="noreferrer"
+                  style={{ width: 34, height: 34, borderRadius: 8, background: "rgba(255,255,255,.1)", border: "1px solid rgba(255,255,255,.18)", display: "flex", alignItems: "center", justifyContent: "center", textDecoration: "none" }}>
+                  <svg viewBox="0 0 24 24" width="15" height="15" fill={C.white}>
+                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-4.714-6.231-5.401 6.231H2.744l7.73-8.835L2.25 2.25h6.918l4.253 5.623 5.823-5.623zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                  </svg>
+                </a>
+              </div>
+            </div>
+            <div style={{ borderTop: "1px solid rgba(255,255,255,.12)", paddingTop: 20 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.white, marginBottom: 4 }}>Get our blogs in your DMs</div>
+              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                <input
+                  type="email"
+                  placeholder="your@email.com"
+                  style={{ flex: 1, padding: "9px 12px", borderRadius: 7, border: "1px solid rgba(255,255,255,.2)", background: "rgba(255,255,255,.08)", color: C.white, fontSize: 12, outline: "none" }}
+                />
+                <button style={{ padding: "9px 16px", borderRadius: 7, background: C.salmon, color: C.dark, fontSize: 12, fontWeight: 700, border: "none", cursor: "pointer", whiteSpace: "nowrap" }}>
+                  Subscribe
+                </button>
+              </div>
+              <div style={{ fontSize: 11, fontWeight: 400, color: "rgba(255,255,255,.4)" }}>
+                Have a suggestion? Tell us more at <span style={{ color: C.salmon }}>socials@aitomarketgroup.com</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    )}
+  </>
   );
 }
 
@@ -1998,7 +3129,7 @@ function sectionTypeStyle(type: string) {
 
 // ─── Editor screen ────────────────────────────────────────────────────────────
 
-function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, sidebarCollapsed, newCardId, batchQueuedIds, onSendToBatchQueue }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; sidebarCollapsed?: boolean; newCardId?: string | null; batchQueuedIds?: string[]; onSendToBatchQueue?: (id: string, title: string, outline: V2OutlineSection[]) => void }) {
+function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivateCard, onBackToCards, onResumeChat, onTrashCard, presenceData, sidebarCollapsed, newCardId, batchQueuedIds, onSendToBatchQueue, onRemoveFromBatchQueue, cardsLoading, batchBuiltIds }: { onScore: () => void; onPublish: () => void; draftCards?: DraftCard[]; activeCardId: string | null; onActivateCard: (id: string) => void; onBackToCards: () => void; onResumeChat?: () => void; onTrashCard?: (id: string) => void; presenceData?: PresenceUser[]; sidebarCollapsed?: boolean; newCardId?: string | null; batchQueuedIds?: string[]; onSendToBatchQueue?: (id: string, title: string, outline: V2OutlineSection[]) => void; onRemoveFromBatchQueue?: (id: string) => void; cardsLoading?: boolean; batchBuiltIds?: Set<string> }) {
   // ── Plan step state ────────────────────────────────────────────────────────
   type EditorStep = "plan" | "article";
   const [editorStep, setEditorStep] = useState<EditorStep>("plan");
@@ -2011,9 +3142,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [expandedSection, setExpandedSection] = useState<number | null>(null);
   const [editingTitles, setEditingTitles] = useState<Record<number, string>>({});
   const [savedPlans, setSavedPlans] = useState<SavedPlan[]>([]);
+  const [dashFilter, setDashFilter] = useState<"all" | "plans" | "article" | "build" | "sanity">("all");
   const [sentToSanityIds, setSentToSanityIds] = useState<Set<string>>(new Set());
   const [withArticleIds, setWithArticleIds] = useState<Set<string>>(new Set());
-  const [savePulse, setSavePulse] = useState(false);
+  const [isPlanSaved, setIsPlanSaved] = useState(false);
   const [isSaved, setIsSaved] = useState(false);
   const [autoSaving, setAutoSaving] = useState(false);
   const [bvExpanded, setBvExpanded] = useState(false);
@@ -2024,13 +3156,34 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [hoveredBtn, setHoveredBtn] = useState<string | null>(null);
   const [regeneratingSections, setRegeneratingSections] = useState<Set<number>>(new Set());
   const prevCardIdRef = useRef<string | null>(null);
+  const outlineActiveRef = useRef(false); // true while outline fetch is in-flight — blocks re-runs
   const preloadedPlanRef = useRef<{ outline: V2OutlineSection[]; title: string; brief: BriefFields } | null>(null);
   const metadataAutoFetchRef = useRef(false);
+  // Holds the card id we last kicked a title-variants fetch off for, so the
+  // backfill runs at most once per card and a late response can be discarded
+  // if the user has since switched cards.
+  const titleVariantsFetchRef = useRef<string | null>(null);
+  const skipAutoImagesRef = useRef(false); // true when resuming — prevents auto-regeneration of images
+  // Bumped only when a genuinely NEW/different article is loaded (fresh generation or
+  // resume) — NOT when the title is merely edited. The auto-image effect keys off this
+  // instead of article.title so renaming the article doesn't wipe and regenerate images.
+  const [articleGenerationId, setArticleGenerationId] = useState(0);
   const autoSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // ── Article generation state ────────────────────────────────────────────────
   const [articleData, setArticleData] = useState<GeneratedArticle | null>(null);
   const [articleLoading, setArticleLoading] = useState(false);
+  const [articleLoaderVisible, setArticleLoaderVisible] = useState(false);
+  const [articleProgress, setArticleProgress] = useState(0);
+  const [articlePhase, setArticlePhase] = useState(0);
+  const [outlineProgress, setOutlineProgress] = useState(0);
+  const [outlineLoaderVisible, setOutlineLoaderVisible] = useState(false);
+  const outlineRafRef = useRef<number | null>(null);
+  const outlineTargetRef = useRef(0);
+  const articleBarRafRef = useRef<number | null>(null);
+  const articleBarTargetRef = useRef(0); // mutated by real events; rAF eases toward it
+  const articlePhaseRef = useRef(0);    // mirrors articlePhase so rAF can read it without stale closure
+  const [articleSectionIdx, setArticleSectionIdx] = useState(0); // which section is currently being drafted
   const [articleError, setArticleError] = useState<string | null>(null);
   const [geoScore, setGeoScore] = useState<{ score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number } | null>(null);
   const [qualityFlags, setQualityFlags] = useState<{ section?: string; type: string; message: string }[]>([]);
@@ -2045,6 +3198,14 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [seoMetadataLoading, setSeoMetadataLoading] = useState(false);
   const [seoExcerpt, setSeoExcerpt] = useState("");
   const [seoFocusKeyword, setSeoFocusKeyword] = useState("");
+  const [seoCategory, setSeoCategory] = useState("");
+  const [imageSeoMeta, setImageSeoMeta] = useState<Record<number, ImageSeoMeta>>({});
+  const [sectionThumbnails, setSectionThumbnails] = useState<Record<number, string | null>>({});
+  const [removedImageOrders, setRemovedImageOrders] = useState<Set<number>>(new Set());
+  const [pullQuoteOverride, setPullQuoteOverride] = useState<string | null>(null);
+  const [pullQuoteRemoved, setPullQuoteRemoved] = useState(false);
+  const [titleVariants, setTitleVariants] = useState<string[]>([]);
+  const [activeTitleIdx, setActiveTitleIdx] = useState(0);
   const [newTagInput, setNewTagInput] = useState("");
   // ── Publish state ──────────────────────────────────────────────────────────
   const [draftState, setDraftState] = useState<"idle"|"loading"|"success"|"error">("idle");
@@ -2053,6 +3214,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   const [liveState, setLiveState] = useState<"idle"|"loading"|"success"|"error">("idle");
   const [liveError, setLiveError] = useState<string | null>(null);
   const [liveUrl, setLiveUrl] = useState<string | null>(null);
+  const [previewMode, setPreviewMode] = useState(false);
 
   const [highlightedSectionId, setHighlightedSectionId] = useState<string | null>(null);
 
@@ -2071,7 +3233,20 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       const res = await fetch(`/api/builder-sessions/${activeCardId}/publish-draft`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags, seoExcerpt, seoFocusKeyword }),
+        body: JSON.stringify({
+          seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags, seoExcerpt, seoFocusKeyword, seoCategory,
+          // "" means the user removed it — distinct from undefined, which lets the
+          // site fall back to auto-extracting a quote for older articles.
+          pullQuote: pullQuoteRemoved ? "" : (pullQuoteOverride ?? undefined),
+          heroImage: removedImageOrders.has(0) ? undefined : (sectionThumbnails[0] ?? undefined),
+          // Section images in article-section order (excluding hero at order=0).
+          // A removed image publishes as null so the section renders without one.
+          sectionImages: (() => {
+            const sorted = [...(articleData?.sections ?? [])].sort((a, b) => a.order - b.order).filter(s => s.order > 0)
+            const imgs = sorted.map(s => removedImageOrders.has(s.order) ? null : (sectionThumbnails[s.order] ?? null))
+            return imgs.some(Boolean) ? imgs : undefined
+          })(),
+        }),
       });
       const data = await res.json() as { error?: string };
       if (!res.ok) { setDraftState("error"); setDraftError(data.error ?? "Failed to save draft"); return; }
@@ -2122,14 +3297,17 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
             .filter(s => s.opportunityId && s.sentToWordPressAt)
             .map(s => s.opportunityId!)
         );
-        setSentToSanityIds(sent);
-        // Cards with a generated article (step 2+) that haven't been sent to Sanity yet
+        setSentToSanityIds(prev => new Set([...prev, ...sent]));
+        // Cards with a generated article (step 2+) that haven't been sent to Sanity yet.
+        // Merge rather than replace: this fetch can race with an in-flight save-article
+        // POST (e.g. right after generation completes), and a stale GET response here
+        // must never wipe out an id that generateArticle() already added in memory.
         const withArticle = new Set(
           sessions
             .filter(s => s.opportunityId && (s.currentStep ?? 1) >= 2 && !s.sentToWordPressAt)
             .map(s => s.opportunityId!)
         );
-        setWithArticleIds(withArticle);
+        setWithArticleIds(prev => new Set([...prev, ...withArticle]));
       })
       .catch(() => {});
   }, []);
@@ -2154,10 +3332,17 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       articleFinalised,
       seoExcerpt,
       seoFocusKeyword,
+      seoCategory,
+      imageSeoMeta,
       draftSentAt: draftSentAt ?? undefined,
+      titleVariants,
+      activeTitleIdx,
+      removedImageOrders: [...removedImageOrders],
+      pullQuoteOverride: pullQuoteOverride ?? undefined,
+      pullQuoteRemoved,
       savedAt: new Date().toISOString(),
     });
-  }, [activeCardId, editorStep, outline, articleTitle, articleData, geoScore, qualityFlags, brandVoiceStatus, seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags, articleFinalised, seoExcerpt, seoFocusKeyword]);
+  }, [activeCardId, editorStep, outline, articleTitle, articleData, geoScore, qualityFlags, brandVoiceStatus, seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags, articleFinalised, seoExcerpt, seoFocusKeyword, seoCategory, imageSeoMeta, titleVariants, activeTitleIdx, removedImageOrders, pullQuoteOverride, pullQuoteRemoved]);
 
   // ── Debounced Supabase auto-save: fires 3 s after articleData last changed ─
   useEffect(() => {
@@ -2208,11 +3393,25 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           articleFinalised,
           seoExcerpt,
           seoFocusKeyword,
+          titleVariants,
+          activeTitleIdx,
+          removedImageOrders: [...removedImageOrders],
+          pullQuoteOverride: pullQuoteOverride ?? undefined,
+          pullQuoteRemoved,
+          // Missing here previously — this write REPLACES the whole cache entry
+          // (not a merge), so a "sent to Sanity" card that navigated straight
+          // back to the grid without any other edit in between had its
+          // draftSentAt silently dropped from local cache, leaving _isSent()'s
+          // cache-fallback check with nothing to find.
+          draftSentAt: draftSentAt ?? undefined,
           savedAt: new Date().toISOString(),
         });
       }
       prevCardIdRef.current = null;
+      outlineActiveRef.current = false;
       metadataAutoFetchRef.current = false;
+      // Cleared so re-opening a card retries the backfill if its first attempt failed
+      titleVariantsFetchRef.current = null;
       // Clear article state so the next card activation starts from a clean slate
       setEditorStep("plan");
       setOutline([]);
@@ -2231,8 +3430,16 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       setArticleFinalised(false);
       setSeoExcerpt("");
       setSeoFocusKeyword("");
+      setImageSeoMeta({});
+      setTitleVariants([]);
+      setActiveTitleIdx(0);
+      setRemovedImageOrders(new Set());
+      setPullQuoteOverride(null);
+      setPullQuoteRemoved(false);
       return;
     }
+    // If an outline fetch is already in-flight for this card, don't interrupt it
+    if (outlineActiveRef.current) return;
     if (prevCardIdRef.current === activeCardId) return;
     prevCardIdRef.current = activeCardId;
 
@@ -2248,6 +3455,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       setExpandedSection(null);
       setOutlineError(null);
       setOutlineLoading(false);
+      setIsPlanSaved(false);
       return;
     }
 
@@ -2259,9 +3467,12 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       setArticleTitle(cached.articleTitle ?? "");
       setEditingTitles({});
       setExpandedSection(null);
+      setIsPlanSaved(false);
       setOutlineError(null);
       setOutlineLoading(false);
       if (cached.editorStep === "article" && cached.articleData) {
+        skipAutoImagesRef.current = true;
+        setArticleGenerationId(id => id + 1);
         setArticleData(cached.articleData);
         setGeoScore(cached.geoScore ?? null);
         setQualityFlags(cached.qualityFlags ?? []);
@@ -2274,7 +3485,19 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         setArticleFinalised(cached.articleFinalised ?? false);
         setSeoExcerpt(cached.seoExcerpt ?? "");
         setSeoFocusKeyword(cached.seoFocusKeyword ?? "");
+        if (cached.seoCategory) setSeoCategory(cached.seoCategory);
+        setImageSeoMeta(cached.imageSeoMeta ?? {});
         if (cached.draftSentAt) { setDraftSentAt(cached.draftSentAt); setDraftState("success"); }
+        // Fall back to the article's own title when older cached articles (saved
+        // before this field existed) have no titleVariants — better than showing
+        // a blank title-picker.
+        setTitleVariants(cached.titleVariants && cached.titleVariants.length > 0
+          ? cached.titleVariants
+          : [cached.articleData.title ?? ""]);
+        setActiveTitleIdx(cached.activeTitleIdx ?? 0);
+        setRemovedImageOrders(new Set(cached.removedImageOrders ?? []));
+        setPullQuoteOverride(cached.pullQuoteOverride ?? null);
+        setPullQuoteRemoved(cached.pullQuoteRemoved ?? false);
         setArticleLoading(false);
         setArticleError(null);
       }
@@ -2283,7 +3506,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
 
     // Sent-to-Sanity OR article-saved cards: fetch from server directly —
     // skip outline generation entirely, no token cost, land on article step.
-    if (sentToSanityIds.has(activeCardId) || withArticleIds.has(activeCardId)) {
+    // batchBuiltIds also counts here — it's the one signal that's synchronously
+    // available on this very first render (a prop, not an async fetch result),
+    // covering a card that was just built through the batch queue before
+    // withArticleIds' own background fetch has had a chance to resolve.
+    if (sentToSanityIds.has(activeCardId) || withArticleIds.has(activeCardId) || batchBuiltIds?.has(activeCardId)) {
       setEditorStep("article");
       setArticleLoading(true);
       setArticleError(null);
@@ -2296,6 +3523,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
             error?: string;
           };
           if (r.ok && data.article) {
+            skipAutoImagesRef.current = true;
+            setArticleGenerationId(id => id + 1);
             setArticleData(data.article);
             setGeoScore(data.geoScore ?? null);
             setQualityFlags(data.qualityFlags ?? []);
@@ -2312,6 +3541,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               description: [],
               keywords: [],
             })));
+            // This path restores straight from the server (no local cache), which
+            // never stored title variants — fall back to just the saved title so
+            // the picker at least shows something instead of nothing.
+            setTitleVariants([data.article.title ?? ""]);
+            setActiveTitleIdx(0);
           } else {
             setArticleError(data.error ?? "Could not load saved article");
           }
@@ -2341,6 +3575,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     setEditingTitles({});
     setExpandedSection(null);
     setOutlineLoading(true);
+    outlineActiveRef.current = true;
 
     fetch(`/api/builder-sessions/${activeCardId}/generate-outline`, {
       method: "POST",
@@ -2355,31 +3590,115 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       .then(data => {
         setOutlineError(null);
         setOutlineRetrying(false);
-        setArticleTitle(data.article_title ?? card?.brief?.prompt ?? "Article");
-        setOutline(data.sections ?? []);
+        const freshSections = data.sections ?? [];
+        const freshTitle = data.article_title ?? card?.brief?.prompt ?? "Article";
+        setArticleTitle(freshTitle);
+        setOutline(freshSections);
+        // Auto-save plan immediately with fresh data (state not yet propagated)
+        void handleSavePlan(freshSections, freshTitle);
       })
       .catch((e: unknown) => { setOutlineError(e instanceof Error ? e.message : String(e)); setOutlineRetrying(false); })
-      .finally(() => setOutlineLoading(false));
-  }, [activeCardId, draftCards, savedPlans, sentToSanityIds, withArticleIds, outlineRetryCount]);
+      .finally(() => { outlineActiveRef.current = false; setOutlineLoading(false); });
+  }, [activeCardId, draftCards, savedPlans, sentToSanityIds, withArticleIds, outlineRetryCount, batchBuiltIds]);
+
+  // ── Outline progress: NProgress-style easing + organic trickle, 100% before reveal ──
+  useEffect(() => {
+    if (outlineLoading) {
+      outlineTargetRef.current = 8;
+      setOutlineProgress(0);
+      setOutlineLoaderVisible(true);
+      function tick() {
+        // Organic trickle — slows near the end; 99.2 cap means bar never freezes even during long citation searches
+        const t = outlineTargetRef.current;
+        const rate = t < 70 ? 0.018 : t < 90 ? 0.008 : 0.003;
+        if (t < 99.2) outlineTargetRef.current = Math.min(t + rate, 99.2);
+        setOutlineProgress(prev => {
+          const target = outlineTargetRef.current;
+          const diff = target - prev;
+          if (Math.abs(diff) < 0.05) return target;
+          return prev + diff * 0.08;
+        });
+        outlineRafRef.current = requestAnimationFrame(tick);
+      }
+      outlineRafRef.current = requestAnimationFrame(tick);
+    } else {
+      if (outlineRafRef.current !== null) {
+        cancelAnimationFrame(outlineRafRef.current);
+        outlineRafRef.current = null;
+      }
+      outlineTargetRef.current = 100;
+      setOutlineProgress(100);
+      setTimeout(() => setOutlineLoaderVisible(false), 700);
+    }
+    return () => {
+      if (outlineRafRef.current !== null) {
+        cancelAnimationFrame(outlineRafRef.current);
+        outlineRafRef.current = null;
+      }
+    };
+  }, [outlineLoading]);
+
+  // ── Article progress: NProgress-style single rAF easing toward a target ─────
+  // Real events (chunks, stage signals) only mutate articleBarTargetRef — never
+  // call setArticleProgress directly. The rAF reads the ref and eases toward it
+  // at 8% of remaining distance per frame (~60fps), so the bar cannot jump or drop.
+  useEffect(() => {
+    if (!articleLoading) {
+      if (articleBarRafRef.current !== null) {
+        cancelAnimationFrame(articleBarRafRef.current);
+        articleBarRafRef.current = null;
+      }
+      return;
+    }
+    articleBarTargetRef.current = 6; // instant early nudge so bar visibly starts
+    setArticleProgress(0);
+    function tick() {
+      // Organic trickle: each phase has a hard ceiling so the bar only advances
+      // when a real stage event bumps the target past it. This prevents the bar
+      // from running ahead of what has actually happened server-side.
+      const PHASE_CAPS = [67, 79, 89, 99.2]; // Drafting / Reviewing / Citing / Scoring
+      const phaseCap = PHASE_CAPS[articlePhaseRef.current] ?? 99.2;
+      const t = articleBarTargetRef.current;
+      const rate = t < 90 ? 0.018 : 0.003;
+      if (t < phaseCap) articleBarTargetRef.current = Math.min(t + rate, phaseCap);
+
+      setArticleProgress(prev => {
+        const target = articleBarTargetRef.current;
+        const diff = target - prev;
+        if (Math.abs(diff) < 0.05) return target;
+        return prev + diff * 0.08; // ease: fast when far, slows near target
+      });
+      articleBarRafRef.current = requestAnimationFrame(tick);
+    }
+    articleBarRafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (articleBarRafRef.current !== null) {
+        cancelAnimationFrame(articleBarRafRef.current);
+        articleBarRafRef.current = null;
+      }
+    };
+  }, [articleLoading]);
 
   // ── Save current plan (org-wide via Supabase) ─────────────────────────────
-  async function handleSavePlan() {
-    if (!activeCardId || outline.length === 0) return;
+  // overrideOutline / overrideTitle let callers pass fresh data before React state updates
+  async function handleSavePlan(overrideOutline?: V2OutlineSection[], overrideTitle?: string) {
+    const effectiveOutline = overrideOutline ?? outline;
+    const effectiveTitle   = overrideTitle   ?? articleTitle;
+    if (!activeCardId || effectiveOutline.length === 0) return;
     const card = draftCards?.find(c => c.opportunityId === activeCardId);
-    const finalOutline = outline.map((s, i) => ({
+    const finalOutline = effectiveOutline.map((s, i) => ({
       ...s,
       title: editingTitles[i] !== undefined ? editingTitles[i] : s.title,
     }));
     const plan: SavedPlan = {
       opportunityId: activeCardId,
-      articleTitle,
+      articleTitle: effectiveTitle,
       outline: finalOutline,
       brief: card?.brief ?? {},
       savedAt: new Date().toISOString(),
     };
     setSavedPlans(prev => [plan, ...prev.filter(p => p.opportunityId !== activeCardId)]);
-    setSavePulse(true);
-    setTimeout(() => setSavePulse(false), 1400);
+    setIsPlanSaved(true);
     await fetch("/api/saved-plans", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2407,6 +3726,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
 
   // ── Section manipulation ───────────────────────────────────────────────────
   function handleDeleteSection(idx: number) {
+    setIsPlanSaved(false);
     setOutline(prev => prev.filter((_, i) => i !== idx));
     setEditingTitles(prev => {
       const next: Record<number, string> = {};
@@ -2422,6 +3742,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   }
 
   function handleDuplicateSection(idx: number) {
+    setIsPlanSaved(false);
     const section = outline[idx];
     const copy = { ...section, title: getSectionTitle(idx, section.title) };
     setOutline(prev => { const next = [...prev]; next.splice(idx + 1, 0, copy); return next; });
@@ -2455,6 +3776,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       const data = await res.json() as { sections: V2OutlineSection[] };
       const match = data.sections?.find(s => s.type === section.type) ?? data.sections?.[0];
       if (match) {
+        setIsPlanSaved(false);
         setOutline(prev => prev.map((s, i) => i === idx ? { ...s, description: match.description, keywords: match.keywords } : s));
       }
     } catch { /* silently keep existing section */ } finally {
@@ -2476,6 +3798,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     e.preventDefault();
     if (dragIdx === null || dragIdx === dropIdx) { setDragIdx(null); setDragOverIdx(null); return; }
     const from = dragIdx;
+    setIsPlanSaved(false);
     setOutline(prev => { const next = [...prev]; const [m] = next.splice(from, 1); next.splice(dropIdx, 0, m); return next; });
     setEditingTitles(prev => {
       const order = Array.from({ length: outline.length }, (_, i) => i);
@@ -2617,7 +3940,12 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           if (!fixes.length) return s;
           const updatedParas = s.content.paragraphs.map(p => {
             const fix = fixes.find(f => f.paragraphId === p.id);
-            return fix ? { ...p, text: fix.newText } : p;
+            if (!fix) return p;
+            // Never let an unrelated GEO-check fix silently overwrite a paragraph
+            // that already carries a real, verified <a href> citation — only the
+            // "Cited claims" fix itself is allowed to touch such a paragraph.
+            if (checkLabel !== "Cited claims" && /<a\s+href=/i.test(p.text)) return p;
+            return { ...p, text: fix.newText };
           });
           return { ...s, content: { ...s.content, paragraphs: updatedParas } };
         });
@@ -2637,6 +3965,98 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       }
     } catch { /* non-fatal */ }
     finally { setFixingCheckIdx(null); }
+  }
+
+  // ── Auto-fix ALL failing GEO checks in sequence ──────────────────────────
+  const [fixingAllGeo, setFixingAllGeo] = useState(false);
+  const [fixAllGeoProgress, setFixAllGeoProgress] = useState<string | null>(null);
+
+  async function autoFixAllGeo() {
+    if (!activeCardId || !articleData || fixingAllGeo) return;
+    const failingChecks = (geoScore?.checks ?? []).filter(ch => !ch.pass);
+    if (!failingChecks.length) return;
+    setFixingAllGeo(true);
+    let currentArticle = { ...articleData, sections: [...articleData.sections] };
+
+    for (const ch of failingChecks) {
+      setFixAllGeoProgress(`Fixing "${ch.label}"…`);
+
+      // AI-tell density: local replace, no LLM
+      if (ch.label === "AI-tell density") {
+        currentArticle = {
+          ...currentArticle,
+          sections: currentArticle.sections.map(s => ({
+            ...s,
+            content: {
+              ...s.content,
+              paragraphs: s.content.paragraphs.map(p => ({ ...p, text: fixAiTells(p.text) })),
+            },
+          })),
+        };
+        continue;
+      }
+
+      try {
+        const res = await fetch(`/api/builder-sessions/${activeCardId}/fix-section-v2`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            fixType: "geo_check",
+            checkLabel: ch.label,
+            articleTitle: currentArticle.title,
+            sections: currentArticle.sections,
+          }),
+        });
+        const data = await res.json() as {
+          sectionHeading?: string;
+          paragraphs?: { id: number; text: string }[];
+          multifix?: { sectionHeading: string; paragraphId: number; newText: string }[];
+        };
+        const headingMatch = (a: string, b: string) =>
+          a.trim().toLowerCase() === b.trim().toLowerCase() ||
+          a.trim().toLowerCase().includes(b.trim().toLowerCase()) ||
+          b.trim().toLowerCase().includes(a.trim().toLowerCase());
+
+        if (res.ok && data.multifix?.length) {
+          currentArticle = {
+            ...currentArticle,
+            sections: currentArticle.sections.map(s => {
+              const fixes = data.multifix!.filter(f => headingMatch(s.heading, f.sectionHeading));
+              if (!fixes.length) return s;
+              return {
+                ...s,
+                content: {
+                  ...s.content,
+                  paragraphs: s.content.paragraphs.map(p => {
+                    const fix = fixes.find(f => f.paragraphId === p.id);
+                    if (!fix) return p;
+                    // Never let an unrelated GEO-check fix silently overwrite a paragraph
+                    // that already carries a real, verified <a href> citation — only the
+                    // "Cited claims" fix itself is allowed to touch such a paragraph.
+                    if (ch.label !== "Cited claims" && /<a\s+href=/i.test(p.text)) return p;
+                    return { ...p, text: fix.newText };
+                  }),
+                },
+              };
+            }),
+          };
+        } else if (res.ok && data.paragraphs?.length && data.sectionHeading) {
+          currentArticle = {
+            ...currentArticle,
+            sections: currentArticle.sections.map(s =>
+              headingMatch(s.heading, data.sectionHeading!) ? { ...s, content: { ...s.content, paragraphs: data.paragraphs! } } : s
+            ),
+          };
+        }
+      } catch (e) { console.warn("[autoFixAllGeo] fix failed for", ch.label, e); }
+    }
+
+    setArticleData(currentArticle);
+    setExpandedCheckIdx(null);
+    setFixAllGeoProgress("Rescoring…");
+    await rescoreGeo(currentArticle);
+    setFixAllGeoProgress(null);
+    setFixingAllGeo(false);
   }
 
   // ── Auto-fix ALL quality flags in sequence ────────────────────────────────
@@ -2703,14 +4123,20 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     if (!activeCardId || !articleData || seoMetadataLoading) return;
     setSeoMetadataLoading(true);
     try {
+      // Build section list: hero (order 0) + all body sections
+      const sections = [
+        { order: 0, heading: articleData.title ?? "Hero", type: "hero" },
+        ...articleData.sections.map(s => ({ order: s.order, heading: s.heading, type: s.type })),
+      ];
       const res = await fetch(`/api/builder-sessions/${activeCardId}/generate-metadata`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ article: articleData }),
+        body: JSON.stringify({ article: articleData, sections }),
       });
       const data = await res.json() as {
         title?: string; slug?: string; seo_title?: string; seo_description?: string;
-        tags?: string[]; excerpt?: string; focus_keyword?: string;
+        tags?: string[]; excerpt?: string; focus_keyword?: string; category?: string;
+        image_metadata?: { order: number; alt_text: string; caption: string; file_name: string }[];
       };
       if (res.ok) {
         setSeoPageTitle(data.title ?? "");
@@ -2720,6 +4146,14 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         setSeoTags(data.tags ?? []);
         setSeoExcerpt(data.excerpt ?? "");
         setSeoFocusKeyword(data.focus_keyword ?? "");
+        if (data.category) setSeoCategory(data.category);
+        if (data.image_metadata?.length) {
+          const imgMap: Record<number, ImageSeoMeta> = {};
+          for (const img of data.image_metadata) {
+            imgMap[img.order] = { altText: img.alt_text, caption: img.caption, fileName: img.file_name };
+          }
+          setImageSeoMeta(imgMap);
+        }
       }
     } catch { /* non-fatal */ }
     finally { setSeoMetadataLoading(false); }
@@ -2736,16 +4170,58 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [articleFinalised, articleData, activeCardId]);
 
+  // ── Backfill title variants whenever an article has fewer than 2 ──
+  // Fetching these at article-creation time alone proved unreliable: the batch
+  // queue builds articles while this screen isn't mounted, a server restore
+  // carries no variants at all, and any article generated before variants
+  // existed has none. Worse, the batch path's background write could be
+  // clobbered by this screen's own autosave writing the stale single-entry
+  // value back over it. Backfilling here instead covers every one of those
+  // paths with one rule: if the picker has nothing to show, go get them.
+  useEffect(() => {
+    if (!activeCardId || !articleData || articleLoading) return;
+    if (titleVariants.length > 1) return;           // already have a set
+    if (titleVariantsFetchRef.current === activeCardId) return; // already tried for this card
+    titleVariantsFetchRef.current = activeCardId;
+    const cardId = activeCardId;
+    const introText = articleData.sections[0]?.content.paragraphs[0]?.text ?? "";
+    fetch(`/api/builder-sessions/${cardId}/title-variants`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: articleData.title, intro: introText }),
+    })
+      .then(r => r.json())
+      .then((d: { variants?: string[] }) => {
+        // Ignore a late response for a card the user has already navigated away from
+        if (titleVariantsFetchRef.current !== cardId) return;
+        if (d.variants && d.variants.length > 1) {
+          setTitleVariants(d.variants);
+          setActiveTitleIdx(0);
+        }
+      })
+      .catch(() => {});
+  }, [activeCardId, articleData, articleLoading, titleVariants.length]);
+
   // ── Generate article via validate-plan SSE ─────────────────────────────────
   async function generateArticle() {
     if (!activeCardId) return;
     setArticleData(null);
+    setTitleVariants([]);
+    setActiveTitleIdx(0);
     setGeoScore(null);
     setQualityFlags([]);
     setBrandVoiceStatus(null);
     setArticleLoading(true);
+    setArticleLoaderVisible(true);
     setArticleError(null);
+    setArticleProgress(0);
+    setArticlePhase(0);
+    articlePhaseRef.current = 0;
+    setArticleSectionIdx(0);
     setEditorStep("article");
+    // Mark card as in-article immediately so the dashboard moves it to the Article section
+    // even before generation completes (generation can take 2-3 minutes)
+    setWithArticleIds(prev => { const n = new Set(prev); n.add(activeCardId); return n; });
     try {
       const finalOutline = outline.map((s, i) => ({
         ...s,
@@ -2764,6 +4240,10 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
+      let charsReceived = 0;
+      let clientAccumulated = "";
+      let lastSectionCount = 0;
+      let articleReceived = false;
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -2777,27 +4257,90 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           try {
             const parsed = JSON.parse(json) as {
               article?: GeneratedArticle;
+              chunk?: string;
+              stage?: string;
+              error?: string;
               quality_flags?: { section?: string; type: string; message: string }[];
               geo_score?: { score: number; checks: { label: string; pass: boolean; evidence: string }[]; wordCount: number };
               brand_voice_status?: { status: string; residuals?: { paragraphIndex: number; violations: { type: string; match: string }[] }[] };
             };
+            // Server sent an error event — surface it immediately
+            if (parsed.error) throw new Error(parsed.error);
+            // Chunks: push target forward and detect section starts from streamed JSON
+            if (parsed.chunk) {
+              charsReceived += parsed.chunk.length;
+              clientAccumulated += parsed.chunk;
+              articleBarTargetRef.current = Math.max(
+                articleBarTargetRef.current,
+                Math.min((charsReceived / 4000) * 65, 65)
+              );
+              // Count "order": occurrences — each new section object starts with this key
+              const sectionCount = (clientAccumulated.match(/"order"\s*:/g) ?? []).length;
+              if (sectionCount > lastSectionCount) {
+                lastSectionCount = sectionCount;
+                setArticleSectionIdx(Math.max(0, sectionCount - 1));
+              }
+            }
+            // Stage events: open a new target ceiling; pill advances simultaneously
+            if (parsed.stage === "brand_voice") { setArticlePhase(1); articlePhaseRef.current = 1; articleBarTargetRef.current = Math.max(articleBarTargetRef.current, 72); }
+            if (parsed.stage === "citation")    { setArticlePhase(2); articlePhaseRef.current = 2; articleBarTargetRef.current = Math.max(articleBarTargetRef.current, 83); }
+            if (parsed.stage === "scoring")     { setArticlePhase(3); articlePhaseRef.current = 3; articleBarTargetRef.current = Math.max(articleBarTargetRef.current, 93); }
             if (parsed.article) {
+              articleReceived = true;
+              articleBarTargetRef.current = 100;
+              setArticleProgress(100); // snap bar to 100% immediately
+              // Hold the loader open so the user clearly sees 100% before content reveals
+              setTimeout(() => setArticleLoaderVisible(false), 1500);
               setArticleData(parsed.article);
+              setArticleGenerationId(id => id + 1);
+              setTitleVariants([parsed.article.title ?? ""]);
+              setActiveTitleIdx(0);
+              // Fetch 2 more title alternatives in background
+              {
+                const _art = parsed.article;
+                const _cardId2 = activeCardId;
+                const introText = _art.sections[0]?.content.paragraphs[0]?.text ?? "";
+                fetch(`/api/builder-sessions/${_cardId2}/title-variants`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ title: _art.title, intro: introText }),
+                }).then(r => r.json()).then((d: { variants?: string[] }) => {
+                  if (d.variants && d.variants.length > 1) setTitleVariants(d.variants);
+                }).catch(() => {});
+              }
+              // Auto-save plan when article generation completes
+              void handleSavePlan();
               if (parsed.geo_score) setGeoScore(parsed.geo_score);
               if (parsed.quality_flags) setQualityFlags(parsed.quality_flags);
               if (parsed.brand_voice_status) setBrandVoiceStatus(parsed.brand_voice_status);
               const t = parsed.article.title ?? "";
-              setSeoPageTitle(t);   // article title → SEO "Title" field
-              setSeoTitle("");      // clear until LLM generates it
-              setSeoSlug("");       // clear until LLM generates it
+              setSeoPageTitle(t);
+              setSeoTitle("");
+              setSeoSlug("");
               setSeoMetaDesc("");
               setSeoTags([]);
+              // Persist to Supabase immediately (don't wait for debounce) — sets currentStep:2
+              const _cardId = activeCardId;
+              const _art = parsed.article;
+              fetch(`/api/builder-sessions/${_cardId}/save-article`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ article: _art }),
+              }).then(r => { if (r.ok) setIsSaved(true); }).catch(() => {});
             }
           } catch { /* partial chunk, keep buffering */ }
         }
       }
+      // Stream closed without delivering an article — surface an error so the user
+      // is not left staring at a frozen 99% loader
+      if (!articleReceived) {
+        setArticleError("Generation timed out or returned an incomplete response. Please try again.");
+        setArticleLoaderVisible(false);
+        setEditorStep("plan");
+      }
     } catch (e) {
       setArticleError(e instanceof Error ? e.message : "Failed to generate article");
+      setArticleLoaderVisible(false);
       setEditorStep("plan");
     } finally {
       setArticleLoading(false);
@@ -2807,22 +4350,98 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   // ── Card grid ──────────────────────────────────────────────────────────────
   const showCardGrid = (draftCards?.length ?? 0) > 0 && !activeCardId;
 
+  // While cards are still loading from the server and no card is selected,
+  // show nothing so we don't flash a blank plan view before the card grid appears
+  if (!activeCardId && cardsLoading) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: 420, gap: 16 }}>
+        <div style={{ position: "relative", width: 90, height: 90 }}>
+          <div style={{ position: "absolute", inset: 0, border: "2.5px solid rgba(22,61,38,.12)", borderTop: "2.5px solid rgba(22,61,38,.7)", borderRadius: "50%", animation: "spin 1.1s linear infinite" }} />
+          <div style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <svg viewBox="0 0 91 59" width="46" height="30" xmlns="http://www.w3.org/2000/svg" style={{ color: "#163D26" }}>
+              <path d="M26.66 0V13.32C36.72 13.32 45.24 19.96 48.08 29.1H26.66V13.32H13.34V35.76V58.2H26.66V42.42H49.1V58.2H62.42V35.76C62.42 16.04 46.38 0 26.66 0Z" fill="currentColor"/>
+              <path d="M13.32 0H0V13.32H13.32V0Z" fill="currentColor"/>
+              <path d="M90.26 35.76C90.26 16.04 74.22 0 54.48 0V13.32C66.86 13.32 76.92 23.38 76.92 35.76V58.2H90.24V35.76H90.26Z" fill="currentColor"/>
+            </svg>
+          </div>
+        </div>
+        <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.4)", letterSpacing: ".12em", textTransform: "uppercase" }}>Loading</span>
+      </div>
+    );
+  }
+
   if (showCardGrid) {
+    // Pre-compute category counts for tab badges
+    const _isSent      = (id: string) => sentToSanityIds.has(id) || !!readCardCache(id)?.draftSentAt;
+    const _hasArticle  = (id: string) => withArticleIds.has(id) || (!_isSent(id) && !!readCardCache(id)?.articleData);
+    const _hasPlan     = (id: string) => savedPlans.some(p => p.opportunityId === id);
+    const _sentCards   = (draftCards ?? []).filter(c => _isSent(c.opportunityId));
+    const _articleCards = (draftCards ?? []).filter(c => !_isSent(c.opportunityId) && _hasArticle(c.opportunityId));
+    const _buildCards  = (draftCards ?? []).filter(c => !_isSent(c.opportunityId) && !_hasArticle(c.opportunityId) && !_hasPlan(c.opportunityId));
+    // Plans that have NOT yet had an article generated — graduated plans move to Articles section
+    const _planCards = savedPlans.filter(p => !_hasArticle(p.opportunityId) && !_isSent(p.opportunityId));
+    const tabCounts = {
+      all: _planCards.length + _articleCards.length + _buildCards.length + _sentCards.length,
+      plans: _planCards.length,
+      article: _articleCards.length,
+      build: _buildCards.length,
+      sanity: _sentCards.length,
+    };
+    const tabs: { key: typeof dashFilter; label: string }[] = [
+      { key: "all",     label: "All" },
+      { key: "plans",   label: "Plans" },
+      { key: "article", label: "Article" },
+      { key: "build",   label: "Build" },
+      { key: "sanity",  label: "Sanity" },
+    ];
+
     return (
       <div>
+        {/* ── Filter tabs ── */}
+        <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 32, flexWrap: "wrap" }}>
+          {tabs.map(t => {
+            const active = dashFilter === t.key;
+            const count = tabCounts[t.key];
+            return (
+              <button
+                key={t.key}
+                onClick={() => setDashFilter(t.key)}
+                style={{
+                  display: "flex", alignItems: "center", gap: 7,
+                  padding: "8px 16px", borderRadius: 20,
+                  fontSize: 12, fontWeight: 600, cursor: "pointer",
+                  border: active ? `1.5px solid ${C.dark}` : `1.5px solid ${C.border}`,
+                  background: active ? C.dark : C.white,
+                  color: active ? C.white : "rgba(22,61,38,.65)",
+                  transition: "all .15s",
+                }}
+              >
+                {t.label}
+                <span style={{
+                  fontSize: 10, fontWeight: 700, minWidth: 18, height: 18,
+                  borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center",
+                  padding: "0 5px",
+                  background: active ? "rgba(255,255,255,.2)" : "rgba(22,61,38,.08)",
+                  color: active ? "rgba(255,255,255,.9)" : "rgba(22,61,38,.55)",
+                }}>{count}</span>
+              </button>
+            );
+          })}
+        </div>
+
         {/* ── Saved plans section ── */}
-        {savedPlans.length > 0 && (
+        {_planCards.length > 0 && (dashFilter === "all" || dashFilter === "plans") && (
           <div style={{ marginBottom: 48 }}>
             <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 20 }}>
               <div>
                 <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 8 }}>SAVED PLANS</div>
                 <h2 style={{ margin: 0, fontSize: 22, fontWeight: 700, letterSpacing: "-.3px" }}>
-                  {savedPlans.length} plan{savedPlans.length !== 1 ? "s" : ""} in progress
+                  {_planCards.length} plan{_planCards.length !== 1 ? "s" : ""} in progress
                 </h2>
               </div>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
-              {savedPlans.map(plan => (
+              {_planCards.map(plan => (
                 <div key={plan.opportunityId} style={{ padding: 24, border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, display: "flex", flexDirection: "column", height: 260, position: "relative" }}>
                   {/* Remove button */}
                   <button
@@ -2886,10 +4505,14 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         Queue
                       </button>
                     ) : batchQueuedIds?.includes(plan.opportunityId) ? (
-                      <div style={{ padding: "11px 13px", borderRadius: 8, background: "rgba(24,95,0,.07)", border: `1px solid rgba(22,61,38,.18)`, display: "flex", alignItems: "center", gap: 5, color: C.mid, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>
+                      <button
+                        onClick={() => onRemoveFromBatchQueue?.(plan.opportunityId)}
+                        title="Click to remove from batch queue"
+                        style={{ padding: "11px 13px", borderRadius: 8, background: "rgba(24,95,0,.07)", border: `1px solid rgba(22,61,38,.18)`, display: "flex", alignItems: "center", gap: 5, color: C.mid, fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", cursor: "pointer" }}
+                      >
                         <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>
                         Queued
-                      </div>
+                      </button>
                     ) : null}
                   </div>
                 </div>
@@ -2898,18 +4521,15 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
           </div>
         )}
 
-        {/* ── Sent to Sanity + All opportunities ── */}
+        {/* ── Articles / Build / Sanity sections ── */}
         {(() => {
-          const isSent      = (id: string) => sentToSanityIds.has(id) || !!readCardCache(id)?.draftSentAt;
-          const hasArticleSaved = (id: string) => withArticleIds.has(id) || (!isSent(id) && !!readCardCache(id)?.articleData);
-          const hasPlan     = (id: string) => savedPlans.some(p => p.opportunityId === id);
-          const sentCards    = draftCards!.filter(card => isSent(card.opportunityId));
-          const articleCards = draftCards!.filter(card => !isSent(card.opportunityId) && hasArticleSaved(card.opportunityId));
-          const pendingCards = draftCards!.filter(card => !isSent(card.opportunityId) && !hasArticleSaved(card.opportunityId) && !hasPlan(card.opportunityId));
+          const sentCards    = _sentCards;
+          const articleCards = _articleCards;
+          const pendingCards = _buildCards;
           return (
             <>
               {/* ── Articles with saved drafts ── */}
-              {articleCards.length > 0 && (
+              {articleCards.length > 0 && (dashFilter === "all" || dashFilter === "article") && (
                 <div style={{ marginBottom: 48 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
                     <div>
@@ -2936,6 +4556,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                           isNew={card.opportunityId === newCardId}
                           batchQueued={batchQueuedIds?.includes(card.opportunityId)}
                           onSendToBatchQueue={onSendToBatchQueue ? () => onSendToBatchQueue(card.opportunityId, plan?.articleTitle ?? card.brief.prompt ?? "Untitled", plan?.outline ?? []) : undefined}
+                          onRemoveFromBatchQueue={() => onRemoveFromBatchQueue?.(card.opportunityId)}
                         />
                       );
                     })}
@@ -2944,7 +4565,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               )}
 
               {/* ── Ready to build ── */}
-              {pendingCards.length > 0 && (
+              {pendingCards.length > 0 && (dashFilter === "all" || dashFilter === "build") && (
                 <div style={{ marginBottom: 48 }}>
                   <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 28 }}>
                     <div>
@@ -2970,6 +4591,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                           isNew={card.opportunityId === newCardId}
                           batchQueued={batchQueuedIds?.includes(card.opportunityId)}
                           onSendToBatchQueue={onSendToBatchQueue ? () => onSendToBatchQueue(card.opportunityId, plan?.articleTitle ?? card.brief.prompt ?? "Untitled", plan?.outline ?? []) : undefined}
+                          onRemoveFromBatchQueue={() => onRemoveFromBatchQueue?.(card.opportunityId)}
                         />
                       );
                     })}
@@ -2978,7 +4600,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               )}
 
               {/* ── Sent to Sanity — least actionable, shown last ── */}
-              {sentCards.length > 0 && (
+              {sentCards.length > 0 && (dashFilter === "all" || dashFilter === "sanity") && (
                 <div style={{ marginBottom: 48 }}>
                   <div style={{ display: "flex", alignItems: "baseline", gap: 16, marginBottom: 20 }}>
                     <div>
@@ -3078,7 +4700,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         <div style={{ marginBottom: 32 }}>
           <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 10 }}>ARTICLE PLAN</div>
           <h2 style={{ margin: 0, fontSize: 24, fontWeight: 700, lineHeight: 1.2, letterSpacing: "-.4px" }}>
-            {outlineLoading ? "Generating outline…" : (articleTitle || activeCard?.brief?.prompt || "Article plan")}
+            {outlineLoaderVisible ? "Generating outline…" : (articleTitle || activeCard?.brief?.prompt || "Article plan")}
           </h2>
           {activeCard?.brief?.client && (
             <div style={{ marginTop: 8, fontSize: 12, color: "rgba(22,61,38,.6)", fontWeight: 500 }}>
@@ -3089,15 +4711,16 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         </div>
 
         {/* Loading — full ComboLoader only on first generation, not retry */}
-        {outlineLoading && !outlineRetrying && (
+        {outlineLoaderVisible && !outlineRetrying && (
           <ComboLoader
             stages={["Research", "Structure", "Keywords", "Validate"]}
             phases={[
               { label: "Researching topic", text: "Scanning top-ranking content for this topic...\nIdentifying audience pain points and search intent...\nMapping the competitive keyword landscape..." },
               { label: "Structuring outline", text: "Introduction → Market Context → Strategy Deep-Dive → Case Study → FAQ → Key Takeaways" },
               { label: "Mapping keywords", text: "Embedding primary and secondary keywords into each section...\nAligning section types: introduction, section, comparison, faq, conclusion..." },
-              { label: "Validating plan", text: "✓  GEO section coverage — complete\n✓  Keyword density — balanced\n✓  Conclusion bullets — ready\n✓  FAQ fan-out — structured" },
+              { label: "Validating plan", text: "✓  GEO section coverage — complete\n✓  Keyword density — balanced\n✓  Conclusion bullets — ready\n✓  FAQ fan-out — structured\n✓  Eyebrow labels — confirmed\n✓  Section order — enforced\n✓  Stats section — present\n✓  Introduction angle — scenario-driven\n✓  Keyword alignment — verified\n✓  Outline finalising…" },
             ]}
+            progress={outlineProgress}
           />
         )}
 
@@ -3118,8 +4741,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         )}
 
         {/* Outline sections */}
-        {!outlineLoading && outline.length > 0 && (
-          <>
+        {outline.length > 0 && (
+          <div style={{ filter: outlineLoaderVisible ? "blur(8px)" : "none", transition: "filter .5s ease", pointerEvents: outlineLoaderVisible ? "none" : "auto", userSelect: outlineLoaderVisible ? "none" : "auto" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {outline.map((section, idx) => {
                 const typeStyle = sectionTypeStyle(section.type);
@@ -3173,15 +4796,18 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         {String(idx + 1).padStart(2, "0")}
                       </div>
 
-                      {/* Title */}
+                      {/* Title — fixed basis (not flex-grow) so its right edge, and everything
+                          after it (type badge, action buttons), lines up at the same x in every
+                          row regardless of how many action buttons a given row happens to show
+                          (the image-toggle button only appears for some section types) */}
                       <div
-                        style={{ flex: 1, minWidth: 0, cursor: "pointer" }}
+                        style={{ flex: "0 1 440px", minWidth: 0, cursor: "pointer" }}
                         onClick={() => !isExpanded && setExpandedSection(idx)}
                       >
                         {isExpanded ? (
                           <input
                             value={editedTitle}
-                            onChange={e => setEditingTitles(prev => ({ ...prev, [idx]: e.target.value }))}
+                            onChange={e => { setIsPlanSaved(false); setEditingTitles(prev => ({ ...prev, [idx]: e.target.value })); }}
                             onClick={e => e.stopPropagation()}
                             style={{ width: "100%", fontSize: 14, fontWeight: 600, color: C.dark, border: "none", background: "transparent", outline: "none", padding: 0 }}
                           />
@@ -3197,8 +4823,31 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         {section.type}
                       </span>
 
-                      {/* Section action buttons — visible on hover */}
-                      <div style={{ display: "flex", gap: 3, flexShrink: 0, opacity: isHovered ? 1 : 0, transition: "opacity .15s", pointerEvents: isHovered ? "auto" : "none" }}>
+                      {/* Section action buttons — visible on hover, pushed to the far right */}
+                      <div style={{ display: "flex", gap: 3, flexShrink: 0, marginLeft: "auto", opacity: isHovered ? 1 : 0, transition: "opacity .15s", pointerEvents: isHovered ? "auto" : "none" }}>
+                        {/* Toggle image generation for this section — only shown for section types that would otherwise get one */}
+                        {!/^(introduction|stats|conclusion|faq)$/i.test(section.type) && (
+                          <button
+                            title={section.noImage ? "Image disabled for this section — click to enable" : "Click to disable the image for this section"}
+                            onClick={e => {
+                              e.stopPropagation();
+                              setIsPlanSaved(false);
+                              setOutline(prev => prev.map((s, i) => i === idx ? { ...s, noImage: !s.noImage } : s));
+                            }}
+                            onMouseEnter={() => setHoveredBtn(`${idx}-img`)}
+                            onMouseLeave={() => setHoveredBtn(null)}
+                            style={{ width: 32, height: 32, borderRadius: 7, border: `1px solid ${hoveredBtn === `${idx}-img` ? "rgba(22,61,38,.35)" : "rgba(22,61,38,.2)"}`, background: hoveredBtn === `${idx}-img` ? "rgba(22,61,38,.1)" : "rgba(22,61,38,.06)", color: section.noImage ? "rgba(22,61,38,.32)" : C.dark, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0, transition: "all .12s", position: "relative" }}
+                          >
+                            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                              <rect x="2" y="3" width="12" height="10" rx="1.5"/><circle cx="5.5" cy="6.5" r="1"/><path d="M14 10.5l-3.5-3.5L6 11.5"/>
+                            </svg>
+                            {section.noImage && (
+                              <svg viewBox="0 0 16 16" width="16" height="16" style={{ position: "absolute", inset: 0 }}>
+                                <line x1="2.5" y1="13.5" x2="13.5" y2="2.5" stroke={C.red} strokeWidth="1.5" strokeLinecap="round" />
+                              </svg>
+                            )}
+                          </button>
+                        )}
                         {/* Regenerate */}
                         <button
                           title="Regenerate section"
@@ -3261,6 +4910,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                                 value={line}
                                 onChange={e => {
                                   const val = e.target.value;
+                                  setIsPlanSaved(false);
                                   setOutline(prev => prev.map((s, i) => i !== idx ? s : ({ ...s, description: s.description.map((d, di) => di === li ? val : d) })));
                                 }}
                                 rows={Math.max(1, Math.ceil(line.length / 72))}
@@ -3285,13 +4935,18 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
 
             {/* Actions */}
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 32, paddingTop: 24, borderTop: "1px solid rgba(22,61,38,.1)" }}>
-              {/* Resume article from cache (fastest) */}
-              {activeCardId && readCardCache(activeCardId)?.articleData && (
+              {/* Resume article — state takes priority over cache (covers the "Back to plan" case where state is still set) */}
+              {activeCardId && (articleData ?? readCardCache(activeCardId)?.articleData) && (
                 <button
                   onClick={() => {
                     if (!activeCardId) return;
+                    // If articleData is already in state (user clicked "Back to plan"), just switch step
+                    if (articleData) { skipAutoImagesRef.current = true; setEditorStep("article"); return; }
+                    // Otherwise restore from cache
                     const cached = readCardCache(activeCardId);
                     if (!cached?.articleData) return;
+                    skipAutoImagesRef.current = true;
+                    setArticleGenerationId(id => id + 1);
                     setArticleData(cached.articleData);
                     setGeoScore(cached.geoScore ?? null);
                     setQualityFlags(cached.qualityFlags ?? []);
@@ -3304,6 +4959,11 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                     setArticleFinalised(cached.articleFinalised ?? false);
                     setSeoExcerpt(cached.seoExcerpt ?? "");
                     setSeoFocusKeyword(cached.seoFocusKeyword ?? "");
+                    if (cached.seoCategory) setSeoCategory(cached.seoCategory);
+                    setTitleVariants(cached.titleVariants && cached.titleVariants.length > 0
+                      ? cached.titleVariants
+                      : [cached.articleData.title ?? ""]);
+                    setActiveTitleIdx(cached.activeTitleIdx ?? 0);
                     setEditorStep("article");
                   }}
                   style={{ padding: "13px 24px", borderRadius: 8, background: C.mid, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
@@ -3314,8 +4974,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   </svg>
                 </button>
               )}
-              {/* Load from server — shown when card has a saved article on server (sent to Sanity or article-in-progress) */}
-              {activeCardId && !readCardCache(activeCardId)?.articleData && (sentToSanityIds.has(activeCardId) || withArticleIds.has(activeCardId)) && (
+              {/* Load from server — shown when card has a saved article on server but nothing in state or cache */}
+              {activeCardId && !articleData && !readCardCache(activeCardId)?.articleData && (sentToSanityIds.has(activeCardId) || withArticleIds.has(activeCardId) || batchBuiltIds?.has(activeCardId)) && (
                 <button
                   disabled={restoring}
                   onClick={async () => {
@@ -3330,6 +4990,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         error?: string;
                       };
                       if (res.ok && data.article) {
+                        skipAutoImagesRef.current = true;
+                        setArticleGenerationId(id => id + 1);
                         setArticleData(data.article);
                         setGeoScore(data.geoScore ?? null);
                         setQualityFlags(data.qualityFlags ?? []);
@@ -3343,6 +5005,8 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                           description: [],
                           keywords: [],
                         })));
+                        setTitleVariants([data.article.title ?? ""]);
+                        setActiveTitleIdx(0);
                         setEditorStep("article");
                       }
                     } catch { /* non-fatal */ }
@@ -3360,22 +5024,28 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                 onClick={() => void generateArticle()}
                 style={{ padding: "13px 24px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 13, fontWeight: 600, border: "none", cursor: "pointer", display: "flex", alignItems: "center", gap: 8 }}
               >
-                {activeCardId && readCardCache(activeCardId)?.articleData ? "Regenerate article" : "Generate article"}
+                {"Generate article"}
                 <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M4 8h8M9 4l4 4-4 4" />
                 </svg>
               </button>
               <button
-                onClick={handleSavePlan}
-                style={{ padding: "13px 18px", border: `1.5px solid ${savePulse ? C.mid : "rgba(22,61,38,.28)"}`, borderRadius: 8, fontSize: 13, fontWeight: 600, background: savePulse ? "rgba(24,95,0,.07)" : "none", cursor: "pointer", color: savePulse ? C.mid : C.dark, display: "flex", alignItems: "center", gap: 7, transition: "all .2s" }}
+                onClick={() => void handleSavePlan()}
+                style={{ padding: "13px 18px", border: `1.5px solid ${isPlanSaved ? C.mid : "rgba(22,61,38,.28)"}`, borderRadius: 8, fontSize: 13, fontWeight: 600, background: isPlanSaved ? "rgba(24,95,0,.07)" : "none", cursor: "pointer", color: isPlanSaved ? C.mid : C.dark, display: "flex", alignItems: "center", gap: 7, transition: "all .2s" }}
               >
-                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M13 2H4L2 4v10h12V4l-1-2z" /><path d="M5 2v4h6V2" /><rect x="4" y="10" width="8" height="4" />
-                </svg>
-                {savePulse ? "Saved!" : "Save"}
+                {isPlanSaved ? (
+                  <svg viewBox="0 0 12 9" width="13" height="10" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="1,4.5 4.5,8 11,1" />
+                  </svg>
+                ) : (
+                  <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M13 2H4L2 4v10h12V4l-1-2z" /><path d="M5 2v4h6V2" /><rect x="4" y="10" width="8" height="4" />
+                  </svg>
+                )}
+                {isPlanSaved ? "Saved" : "Save"}
               </button>
               <button
-                onClick={() => { prevCardIdRef.current = null; setOutlineLoading(true); setOutline([]); }}
+                onClick={() => { prevCardIdRef.current = null; setOutlineLoading(true); setOutline([]); setIsPlanSaved(false); }}
                 style={{ padding: "13px 18px", border: "1px solid rgba(22,61,38,.28)", borderRadius: 8, fontSize: 13, fontWeight: 600, background: "none", cursor: "pointer", color: C.dark }}
               >
                 Regenerate outline
@@ -3384,7 +5054,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                 {outline.length} sections · click any row to expand
               </div>
             </div>
-          </>
+          </div>
         )}
       </div>
     );
@@ -3398,20 +5068,27 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       <StepBar current={2} />
 
       {/* Loading — Option D combo */}
-      {articleLoading && (
+      {articleLoaderVisible && (
         <ComboLoader
-          stages={["Intro", "Sections", "FAQ", "GEO"]}
+          stages={["Drafting", "Reviewing", "Citing", "Scoring"]}
           phases={[
-            { label: "Writing introduction", text: "Crafting the opening hook and framing the reader's challenge...\nEmbedding market context with named sources and statistics..." },
-            { label: "Writing body sections", text: "Expanding each outline section into full paragraphs...\nAdding concrete examples, named tools, and source attribution..." },
-            { label: "Writing FAQ + conclusion", text: "Generating Q&A pairs for AI fan-out coverage...\nCrafting key takeaways as specific, actionable bullets..." },
-            { label: "Running GEO checks", text: "✓  Named sources — scanning\n✓  Statistics with attribution — scanning\n✓  AI-tell density — scanning\n⟳  Finalising GEO score..." },
+            {
+              label: outline[articleSectionIdx]
+                ? `Writing: ${outline[articleSectionIdx].title}${outline.length > 1 ? ` (${articleSectionIdx + 1}/${outline.length})` : ""}`
+                : "Writing article",
+              text: "Generating introduction and body sections...\nEmbedding named sources and GEO-ready structure...\nExpanding outline bullets into full paragraphs...",
+            },
+            { label: "Reviewing brand voice", text: "Scanning for AI-tell phrases: 'leveraging', 'cutting-edge', 'revolutionize'...\nFlagged terms found — rewriting in direct, specific language...\nReplacing vague qualifiers with concrete claims and named examples...\nVerifying tone consistency across all sections...\nFinalising brand voice corrections..." },
+            { label: "Adding citations", text: "Searching live web for verifiable B2B statistics...\nQuerying Gartner, McKinsey, Forrester and similar publishers...\nFound relevant report — validating URL and publication date...\nConfirmed: real, indexed source from 2023 or later...\nRewriting paragraph to embed citation naturally...\nHyperlink attached — readers can click through to verify..." },
+            { label: "Scoring GEO quality", text: "✓  Named sources — verified\n✓  Statistics with attribution — checked\n✓  AI-tell density — assessed\n✓  FAQ fan-out coverage — structured\n⟳  Computing final GEO score..." },
           ]}
+          progress={articleProgress}
+          phaseOverride={articlePhase}
         />
       )}
 
       {/* Error state */}
-      {articleError && !articleLoading && (
+      {articleError && !articleLoaderVisible && (
         <div style={{ padding: "20px 24px", border: "1px solid rgba(249,57,67,.3)", borderRadius: 10, background: "rgba(249,57,67,.04)", color: C.red, fontSize: 13, maxWidth: 720 }}>
           <div style={{ fontWeight: 700, marginBottom: 4 }}>Could not generate article</div>
           <div style={{ fontWeight: 400, opacity: .8 }}>{articleError}</div>
@@ -3423,7 +5100,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
       )}
 
       {/* Newsletter + right sidebar */}
-      {articleData && !articleLoading && (() => {
+      {articleData && (() => {
         const score = geoScore?.score ?? 0;
         const scoreColor = score >= 80 ? C.mid : score >= 60 ? "#F5A623" : C.red;
         const checks = geoScore?.checks ?? [];
@@ -3433,7 +5110,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
         const seoSlugDisplay = seoSlug || seoPageTitle.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80);
 
         return (
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 272px", gap: 24, alignItems: "start" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 272px", gap: 24, alignItems: "start", filter: articleLoaderVisible ? "blur(8px)" : "none", transition: "filter .5s ease", pointerEvents: articleLoaderVisible ? "none" : "auto", userSelect: articleLoaderVisible ? "none" : "auto" }}>
             {/* Left: newsletter */}
             <NewsletterArticle
               article={articleData}
@@ -3442,6 +5119,18 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
               onPublish={onPublish}
               highlightedSectionId={highlightedSectionId}
               sidebarCollapsed={sidebarCollapsed}
+              previewMode={previewMode}
+              onExitPreview={() => setPreviewMode(false)}
+              skipAutoImagesRef={skipAutoImagesRef}
+              articleGenerationId={articleGenerationId}
+              onImagesChange={setSectionThumbnails}
+              removedImageOrders={removedImageOrders}
+              onRemoveImage={order => setRemovedImageOrders(prev => new Set([...prev, order]))}
+              onRestoreImage={order => setRemovedImageOrders(prev => { const n = new Set(prev); n.delete(order); return n; })}
+              pullQuoteOverride={pullQuoteOverride}
+              pullQuoteRemoved={pullQuoteRemoved}
+              onPullQuoteEdit={setPullQuoteOverride}
+              onPullQuoteRemove={() => setPullQuoteRemoved(true)}
               brandVoiceMatches={
                 brandVoiceStatus?.status === "partial"
                   ? (brandVoiceStatus.residuals?.flatMap(r => r.violations.map(v => v.match)) ?? [])
@@ -3492,6 +5181,18 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                     return { ...s, content: { ...s.content, bullets } };
                   }),
                 }));
+              }}
+              titleVariants={titleVariants}
+              activeTitleIdx={activeTitleIdx}
+              onTitleIdxChange={idx => {
+                setActiveTitleIdx(idx);
+                const chosen = titleVariants[idx];
+                if (chosen) setArticleData(prev => prev ? { ...prev, title: chosen } : prev);
+              }}
+              onTitleEdit={newTitle => {
+                setTitleVariants(prev => { const n = [...prev]; n[activeTitleIdx] = newTitle; return n; });
+                setArticleData(prev => prev ? { ...prev, title: newTitle } : prev);
+                setIsSaved(false);
               }}
             />
 
@@ -3627,6 +5328,19 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                     )}
                   </div>
 
+                  {/* Auto fix all failing GEO checks */}
+                  {checks.filter(ch => !ch.pass).length > 0 && (
+                    <button
+                      onClick={() => void autoFixAllGeo()}
+                      disabled={fixingAllGeo || fixingCheckIdx !== null}
+                      style={{ width: "100%", marginTop: 12, padding: "9px 12px", border: "none", borderRadius: 8, fontSize: 11, fontWeight: 700, background: fixingAllGeo ? "rgba(22,61,38,.55)" : C.dark, color: C.white, cursor: (fixingAllGeo || fixingCheckIdx !== null) ? "default" : "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6, opacity: fixingCheckIdx !== null && !fixingAllGeo ? 0.5 : 1 }}
+                    >
+                      {fixingAllGeo
+                        ? <><span style={{ display: "inline-block", animation: "spin .8s linear infinite" }}>↻</span>{fixAllGeoProgress ?? "Fixing…"}</>
+                        : <><span>⚡</span> Auto fix all failing ({checks.filter(ch => !ch.pass).length})</>}
+                    </button>
+                  )}
+
                   {/* Word count + quality flags */}
                   {wordCount > 0 && (
                     <div style={{ marginTop: 12, fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.5)" }}>{wordCount.toLocaleString()} words</div>
@@ -3734,7 +5448,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                       <div style={{ fontSize: 11, color: "rgba(22,61,38,.4)", lineHeight: 1.5, maxWidth: "22ch", margin: "0 auto" }}>Complete your edits, then finalise to unlock SEO metadata.</div>
                     </div>
                     <button
-                      onClick={() => setArticleFinalised(true)}
+                      onClick={() => { setArticleFinalised(true); void generateMetadata(); }}
                       style={{ marginTop: 4, display: "flex", alignItems: "center", gap: 6, padding: "9px 16px", borderRadius: 8, background: C.dark, color: C.white, fontSize: 11, fontWeight: 700, border: "none", cursor: "pointer" }}
                     >
                       <svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6l3 3 5-5"/></svg>
@@ -3808,6 +5522,17 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                       </div>
                     </div>
 
+                    {/* Category */}
+                    <div>
+                      <label style={{ display: "block", fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)", marginBottom: 5 }}>Category</label>
+                      <input
+                        value={seoCategory}
+                        onChange={e => setSeoCategory(e.target.value.slice(0, 40))}
+                        placeholder="e.g. Deep Dive, Case Study, AI Strategy…"
+                        style={{ width: "100%", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 7, fontSize: 11, background: C.bg, color: C.dark, outline: "none" }}
+                      />
+                    </div>
+
                     {/* SEO title */}
                     <div>
                       <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 5 }}>
@@ -3838,6 +5563,105 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                       />
                     </div>
 
+                    {/* ── IMAGE SEO ── */}
+                    {(() => {
+                      // Only sections that actually get images — same filter as the auto-image
+                      // loader, minus any whose image the user removed with the × in the article.
+                      const imgSlots = [
+                        { order: 0, label: "Hero", type: "hero", heading: articleData?.title ?? "Hero" },
+                        ...(articleData?.sections ?? [])
+                          .filter(s =>
+                            !/^(introduction|stats|conclusion|faq)$/i.test(s.type) &&
+                            !/frequently.asked/i.test(s.type) &&
+                            !/frequently asked/i.test(s.heading)
+                          )
+                          .map(s => ({ order: s.order, label: s.type.toUpperCase(), type: s.type, heading: s.heading })),
+                      ].filter(slot => !removedImageOrders.has(slot.order));
+                      return (
+                        <div>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10, marginTop: 4 }}>
+                            <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".09em", color: "rgba(22,61,38,.5)" }}>IMAGE SEO</span>
+                            <span style={{ fontSize: 10, color: "rgba(22,61,38,.35)" }}>{imgSlots.length} slots</span>
+                          </div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                            {imgSlots.map(slot => {
+                              const activeSvg = sectionThumbnails[slot.order] ?? null;
+                              const meta = imageSeoMeta[slot.order] ?? { altText: "", caption: "", fileName: "" };
+
+                              return (
+                                <div key={slot.order} style={{ border: "1px solid rgba(22,61,38,.1)", borderRadius: 9, overflow: "hidden" }}>
+                                  {/* Slot header: thumbnail + label */}
+                                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px", background: "rgba(22,61,38,.03)", borderBottom: "1px solid rgba(22,61,38,.08)" }}>
+                                    {/* Thumbnail */}
+                                    <div style={{ width: 52, height: 36, borderRadius: 5, overflow: "hidden", background: "rgba(22,61,38,.06)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                                      {activeSvg ? (
+                                        <img
+                                          src={
+                                            activeSvg.startsWith("data:") || activeSvg.startsWith("http")
+                                              ? activeSvg
+                                              : `data:image/svg+xml;charset=utf-8,${encodeURIComponent(activeSvg)}`
+                                          }
+                                          style={{ width: 52, height: 36, objectFit: "cover", display: "block", pointerEvents: "none" }}
+                                        />
+                                      ) : (
+                                        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="rgba(22,61,38,.25)" strokeWidth="1.5" strokeLinecap="round"><rect x="2" y="2" width="20" height="20" rx="2"/><circle cx="8" cy="9" r="2"/><path d="M22 14l-5-5-9 9"/></svg>
+                                      )}
+                                    </div>
+                                    <div style={{ minWidth: 0 }}>
+                                      <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".1em", color: "rgba(22,61,38,.45)", textTransform: "uppercase" }}>{slot.label}</div>
+                                      <div style={{ fontSize: 11, fontWeight: 600, color: "#163D26", lineHeight: 1.3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{slot.heading}</div>
+                                    </div>
+                                  </div>
+
+                                  {/* Editable fields */}
+                                  <div style={{ padding: "9px 10px", display: "flex", flexDirection: "column", gap: 8 }}>
+                                    {/* Alt text */}
+                                    <div>
+                                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 3 }}>
+                                        <label style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".08em", color: "rgba(22,61,38,.45)", textTransform: "uppercase" }}>Alt text</label>
+                                        <span style={{ fontSize: 9, color: meta.altText.length > 125 ? "#F93943" : "rgba(22,61,38,.35)" }}>{meta.altText.length}/125</span>
+                                      </div>
+                                      <input
+                                        value={meta.altText}
+                                        onChange={e => setImageSeoMeta(prev => ({ ...prev, [slot.order]: { ...meta, altText: e.target.value } }))}
+                                        placeholder="Describe this image for search engines…"
+                                        maxLength={150}
+                                        style={{ width: "100%", padding: "6px 8px", border: `1px solid ${meta.altText.length > 125 ? "#F93943" : "rgba(22,61,38,.15)"}`, borderRadius: 6, fontSize: 11, background: "rgba(22,61,38,.02)", color: "#163D26", outline: "none", boxSizing: "border-box" }}
+                                      />
+                                    </div>
+                                    {/* Caption */}
+                                    <div>
+                                      <label style={{ display: "block", fontSize: 9, fontWeight: 700, letterSpacing: ".08em", color: "rgba(22,61,38,.45)", textTransform: "uppercase", marginBottom: 3 }}>Caption</label>
+                                      <textarea
+                                        value={meta.caption}
+                                        onChange={e => setImageSeoMeta(prev => ({ ...prev, [slot.order]: { ...meta, caption: e.target.value } }))}
+                                        placeholder="1-2 sentence caption shown below the image…"
+                                        rows={2}
+                                        style={{ width: "100%", padding: "6px 8px", border: "1px solid rgba(22,61,38,.15)", borderRadius: 6, fontSize: 11, lineHeight: 1.45, background: "rgba(22,61,38,.02)", color: "#163D26", outline: "none", resize: "vertical", boxSizing: "border-box" }}
+                                      />
+                                    </div>
+                                    {/* File name */}
+                                    <div>
+                                      <label style={{ display: "block", fontSize: 9, fontWeight: 700, letterSpacing: ".08em", color: "rgba(22,61,38,.45)", textTransform: "uppercase", marginBottom: 3 }}>File name</label>
+                                      <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                                        <input
+                                          value={meta.fileName}
+                                          onChange={e => setImageSeoMeta(prev => ({ ...prev, [slot.order]: { ...meta, fileName: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, "-") } }))}
+                                          placeholder="seo-friendly-name"
+                                          style={{ flex: 1, padding: "6px 8px", border: "1px solid rgba(22,61,38,.15)", borderRadius: 6, fontSize: 11, fontFamily: "monospace", background: "rgba(22,61,38,.02)", color: "#163D26", outline: "none" }}
+                                        />
+                                        <span style={{ fontSize: 10, color: "rgba(22,61,38,.35)", whiteSpace: "nowrap" }}>.jpg</span>
+                                      </div>
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     {/* Un-finalise link */}
                     <button
                       onClick={() => setArticleFinalised(false)}
@@ -3855,6 +5679,15 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                   <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".12em", color: C.mid }}>PUBLISH</div>
                 </div>
                 <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 10 }}>
+                  {/* Preview button */}
+                  <button
+                    onClick={() => setPreviewMode(true)}
+                    disabled={!articleData}
+                    style={{ width: "100%", padding: "10px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, border: `1px solid ${C.border}`, background: "none", color: C.dark, cursor: !articleData ? "default" : "pointer", opacity: !articleData ? 0.45 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 7 }}
+                  >
+                    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M1 8s2.8-5 7-5 7 5 7 5-2.8 5-7 5-7-5-7-5z"/><circle cx="8" cy="8" r="2"/></svg>
+                    Preview
+                  </button>
                   {/* Draft status */}
                   {draftState === "success" && (
                     <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", borderRadius: 8, background: "rgba(24,95,0,.07)", border: "1px solid rgba(24,95,0,.18)" }}>
@@ -3873,7 +5706,12 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         editorStep, outline, articleTitle, articleData,
                         geoScore, qualityFlags, brandVoiceStatus,
                         seoPageTitle, seoTitle, seoSlug, seoMetaDesc, seoTags,
-                        articleFinalised, seoExcerpt, seoFocusKeyword,
+                        articleFinalised, seoExcerpt, seoFocusKeyword, imageSeoMeta,
+                        titleVariants, activeTitleIdx,
+                        removedImageOrders: [...removedImageOrders],
+                        pullQuoteOverride: pullQuoteOverride ?? undefined,
+                        pullQuoteRemoved,
+                        draftSentAt: draftSentAt ?? undefined,
                         savedAt: new Date().toISOString(),
                       });
                       // Also persist to Supabase so restore-article always returns the latest version
@@ -4315,10 +6153,11 @@ interface BrandVoiceData {
   word_count_targets: Record<string, number>;
 }
 
-function EditableList({ items, onChange, placeholder }: {
+function EditableList({ items, onChange, placeholder, readOnly }: {
   items: string[];
   onChange: (items: string[]) => void;
   placeholder: string;
+  readOnly?: boolean;
 }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
@@ -4346,7 +6185,7 @@ function EditableList({ items, onChange, placeholder }: {
           {/* Number badge */}
           <div style={{ flexShrink: 0, width: 22, height: 22, borderRadius: "50%", background: "rgba(22,61,38,.07)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 10, fontWeight: 700, color: C.mid, marginTop: 1 }}>{i + 1}</div>
 
-          {editIdx === i ? (
+          {editIdx === i && !readOnly ? (
             <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
               <textarea rows={2} value={editVal} onChange={e => setEditVal(e.target.value)} style={{ ...ta }} autoFocus />
               <div style={{ display: "flex", gap: 7 }}>
@@ -4357,20 +6196,22 @@ function EditableList({ items, onChange, placeholder }: {
           ) : (
             <>
               <div style={{ flex: 1, fontSize: 13, lineHeight: 1.6, color: "#1a1a1a", fontWeight: 400, paddingTop: 2 }}>{item}</div>
-              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                <button onClick={() => { setEditIdx(i); setEditVal(item); }} title="Edit" style={{ width: 28, height: 28, borderRadius: 6, background: "transparent", border: `1px solid ${C.border}`, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.muted }}>
-                  <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M11.5 2.5a1.414 1.414 0 0 1 2 2L5 13H3v-2L11.5 2.5z"/></svg>
-                </button>
-                <button onClick={() => remove(i)} title="Remove" style={{ width: 28, height: 28, borderRadius: 6, background: "transparent", border: "1px solid rgba(249,57,67,.25)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.red }}>
-                  <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>
-                </button>
-              </div>
+              {!readOnly && (
+                <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                  <button onClick={() => { setEditIdx(i); setEditVal(item); }} title="Edit" style={{ width: 28, height: 28, borderRadius: 6, background: "transparent", border: `1px solid ${C.border}`, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.muted }}>
+                    <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M11.5 2.5a1.414 1.414 0 0 1 2 2L5 13H3v-2L11.5 2.5z"/></svg>
+                  </button>
+                  <button onClick={() => remove(i)} title="Remove" style={{ width: 28, height: 28, borderRadius: 6, background: "transparent", border: "1px solid rgba(249,57,67,.25)", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", color: C.red }}>
+                    <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>
+                  </button>
+                </div>
+              )}
             </>
           )}
         </div>
       ))}
 
-      {adding ? (
+      {!readOnly && (adding ? (
         <div style={{ padding: "14px 16px", display: "flex", flexDirection: "column", gap: 8, background: "rgba(22,61,38,.02)" }}>
           <textarea rows={2} value={draft} onChange={e => setDraft(e.target.value)} placeholder={placeholder} style={{ ...ta }} autoFocus />
           <div style={{ display: "flex", gap: 7 }}>
@@ -4383,7 +6224,7 @@ function EditableList({ items, onChange, placeholder }: {
           <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M8 2v12M2 8h12"/></svg>
           Add rule
         </button>
-      )}
+      ))}
     </div>
   );
 }
@@ -4860,6 +6701,7 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
   const [loadAnimDone, setLoadAnimDone] = useState(false);
   const [saveAnimDone, setSaveAnimDone] = useState(true); // true = not saving
 
+  const isReadOnly = userRole !== "admin";
   const isDirty = bv !== null && savedBv !== null && JSON.stringify(bv) !== JSON.stringify(savedBv);
 
   useEffect(() => {
@@ -4947,8 +6789,9 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
               <div style={{ fontSize: 11, color: "rgba(22,61,38,.55)", marginBottom: 5 }}>Company name</div>
               <input
                 value={bv.company_name}
-                onChange={e => setBv({ ...bv, company_name: e.target.value })}
-                style={{ ...ta, resize: undefined, padding: "10px 12px" }}
+                onChange={e => !isReadOnly && setBv({ ...bv, company_name: e.target.value })}
+                readOnly={isReadOnly}
+                style={{ ...ta, resize: undefined, padding: "10px 12px", background: isReadOnly ? "rgba(22,61,38,.03)" : C.white, cursor: isReadOnly ? "default" : "text" }}
                 placeholder="AI To Market"
               />
             </div>
@@ -4956,8 +6799,9 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
               <div style={{ fontSize: 11, color: "rgba(22,61,38,.55)", marginBottom: 5 }}>Website</div>
               <input
                 value={bv.website}
-                onChange={e => setBv({ ...bv, website: e.target.value })}
-                style={{ ...ta, resize: undefined, padding: "10px 12px" }}
+                onChange={e => !isReadOnly && setBv({ ...bv, website: e.target.value })}
+                readOnly={isReadOnly}
+                style={{ ...ta, resize: undefined, padding: "10px 12px", background: isReadOnly ? "rgba(22,61,38,.03)" : C.white, cursor: isReadOnly ? "default" : "text" }}
                 placeholder="https://aitomarketgroup.com/"
               />
             </div>
@@ -4970,25 +6814,25 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
         {/* Brand description */}
         <div>
           {fieldLabel("BRAND DESCRIPTION")}
-          <textarea rows={3} value={bv.brand_description} onChange={e => setBv({ ...bv, brand_description: e.target.value })} style={ta} />
+          <textarea rows={3} value={bv.brand_description} onChange={e => !isReadOnly && setBv({ ...bv, brand_description: e.target.value })} readOnly={isReadOnly} style={{ ...ta, background: isReadOnly ? "rgba(22,61,38,.03)" : C.white, cursor: isReadOnly ? "default" : "text" }} />
         </div>
 
         {/* Audience */}
         <div>
           {fieldLabel("AUDIENCE")}
-          <textarea rows={3} value={bv.audience} onChange={e => setBv({ ...bv, audience: e.target.value })} style={ta} />
+          <textarea rows={3} value={bv.audience} onChange={e => !isReadOnly && setBv({ ...bv, audience: e.target.value })} readOnly={isReadOnly} style={{ ...ta, background: isReadOnly ? "rgba(22,61,38,.03)" : C.white, cursor: isReadOnly ? "default" : "text" }} />
         </div>
 
         {/* Tone */}
         <div>
           {fieldLabel("TONE")}
-          <EditableList items={bv.tone} onChange={tone => setBv({ ...bv, tone })} placeholder="Add a tone rule…" />
+          <EditableList items={bv.tone} onChange={tone => setBv({ ...bv, tone })} placeholder="Add a tone rule…" readOnly={isReadOnly} />
         </div>
 
         {/* Style preferences */}
         <div>
           {fieldLabel("STYLE PREFERENCES")}
-          <EditableList items={bv.preferred_style} onChange={preferred_style => setBv({ ...bv, preferred_style })} placeholder="Add a style preference…" />
+          <EditableList items={bv.preferred_style} onChange={preferred_style => setBv({ ...bv, preferred_style })} placeholder="Add a style preference…" readOnly={isReadOnly} />
         </div>
 
         {/* Content Quality — min word counts per section type */}
@@ -5057,14 +6901,16 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
             {bv.forbidden_phrases.map(w => (
               <span key={w} style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 10px", borderRadius: 20, border: "1px solid rgba(22,61,38,.2)", fontSize: 12, fontWeight: 600, color: "#1a1a1a", background: C.bg }}>
                 {w}
-                <button onClick={() => setBv({ ...bv, forbidden_phrases: bv.forbidden_phrases.filter(p => p !== w) })} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.45)", fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>
+                {!isReadOnly && <button onClick={() => setBv({ ...bv, forbidden_phrases: bv.forbidden_phrases.filter(p => p !== w) })} style={{ background: "none", border: "none", cursor: "pointer", color: "rgba(22,61,38,.45)", fontSize: 14, lineHeight: 1, padding: 0 }}>×</button>}
               </span>
             ))}
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input value={newPhrase} onChange={e => setNewPhrase(e.target.value)} onKeyDown={e => e.key === "Enter" && addPhrase()} placeholder="Add phrase…" style={{ flex: 1, padding: "7px 10px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 7, fontSize: 12, outline: "none", background: C.white, color: "#1a1a1a", fontFamily: "inherit" }} />
-            <button onClick={addPhrase} style={{ padding: "7px 14px", borderRadius: 7, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
-          </div>
+          {!isReadOnly && (
+            <div style={{ display: "flex", gap: 8 }}>
+              <input value={newPhrase} onChange={e => setNewPhrase(e.target.value)} onKeyDown={e => e.key === "Enter" && addPhrase()} placeholder="Add phrase…" style={{ flex: 1, padding: "7px 10px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 7, fontSize: 12, outline: "none", background: C.white, color: "#1a1a1a", fontFamily: "inherit" }} />
+              <button onClick={addPhrase} style={{ padding: "7px 14px", borderRadius: 7, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
+            </div>
+          )}
         </div>
 
         {/* Guardrails */}
@@ -5073,16 +6919,18 @@ function SettingsScreen({ userRole }: { userRole: "admin" | "editor" | null }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 14 }}>
             {bv.guardrails.map((g, i) => (
               <div key={i} style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <input type="checkbox" checked={g.active} onChange={e => setBv({ ...bv, guardrails: bv.guardrails.map((gr, idx) => idx === i ? { ...gr, active: e.target.checked } : gr) })} style={{ width: 16, height: 16, accentColor: C.dark, cursor: "pointer", flexShrink: 0 }} />
+                <input type="checkbox" checked={g.active} disabled={isReadOnly} onChange={e => !isReadOnly && setBv({ ...bv, guardrails: bv.guardrails.map((gr, idx) => idx === i ? { ...gr, active: e.target.checked } : gr) })} style={{ width: 16, height: 16, accentColor: C.dark, cursor: isReadOnly ? "default" : "pointer", flexShrink: 0 }} />
                 <span style={{ flex: 1, fontSize: 12, lineHeight: 1.5, color: "#1a1a1a" }}>{g.label}</span>
-                <button onClick={() => setBv({ ...bv, guardrails: bv.guardrails.filter((_, idx) => idx !== i) })} style={{ background: "none", border: "none", cursor: "pointer", color: C.red, fontSize: 16, lineHeight: 1, padding: "0 4px" }}>×</button>
+                {!isReadOnly && <button onClick={() => setBv({ ...bv, guardrails: bv.guardrails.filter((_, idx) => idx !== i) })} style={{ background: "none", border: "none", cursor: "pointer", color: C.red, fontSize: 16, lineHeight: 1, padding: "0 4px" }}>×</button>}
               </div>
             ))}
           </div>
-          <div style={{ display: "flex", gap: 8 }}>
-            <input value={newGuardrail} onChange={e => setNewGuardrail(e.target.value)} onKeyDown={e => e.key === "Enter" && addGuardrail()} placeholder="Add guardrail…" style={{ flex: 1, padding: "7px 10px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 7, fontSize: 12, outline: "none", background: C.white, color: "#1a1a1a", fontFamily: "inherit" }} />
-            <button onClick={addGuardrail} style={{ padding: "7px 14px", borderRadius: 7, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
-          </div>
+          {!isReadOnly && (
+            <div style={{ display: "flex", gap: 8 }}>
+              <input value={newGuardrail} onChange={e => setNewGuardrail(e.target.value)} onKeyDown={e => e.key === "Enter" && addGuardrail()} placeholder="Add guardrail…" style={{ flex: 1, padding: "7px 10px", border: "1px solid rgba(22,61,38,.24)", borderRadius: 7, fontSize: 12, outline: "none", background: C.white, color: "#1a1a1a", fontFamily: "inherit" }} />
+              <button onClick={addGuardrail} style={{ padding: "7px 14px", borderRadius: 7, background: C.dark, color: C.white, fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer" }}>Add</button>
+            </div>
+          )}
         </div>
       </div>
     </>}
@@ -5128,7 +6976,7 @@ function fmtTok(n: number) {
   return String(n);
 }
 
-function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChange: (n: number) => void }) {
+function UsageScreen({ budget, onBudgetChange, userRole }: { budget: number; onBudgetChange: (n: number) => void; userRole: "admin" | "editor" | null }) {
   const [data, setData] = useState<V2UsageSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -5216,10 +7064,48 @@ function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChang
         </div>
       )}
 
-      {/* Loading */}
-      {loading && !data && (
-        <div style={{ padding: "60px 0", textAlign: "center", color: C.muted, fontSize: 13 }}>Loading…</div>
-      )}
+      {/* Loading skeleton */}
+      {loading && !data && (() => {
+        const shimmer: React.CSSProperties = { background: "linear-gradient(90deg, rgba(22,61,38,.06) 25%, rgba(22,61,38,.11) 50%, rgba(22,61,38,.06) 75%)", backgroundSize: "400% 100%", animation: "v2-shimmer 1.4s ease infinite", borderRadius: 6 };
+        const skBlock = (w: string | number, h: number, extra?: React.CSSProperties) => <div style={{ width: w, height: h, ...shimmer, ...extra }} />;
+        return (
+          <>
+            <style>{`@keyframes v2-shimmer { 0%{background-position:100% 0} 100%{background-position:-100% 0} }`}</style>
+            {/* Stat tiles */}
+            <div style={{ display: "flex", gap: 16, marginBottom: 24 }}>
+              {[0,1,2].map(i => (
+                <div key={i} style={{ flex: 1, padding: "20px 24px", background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, display: "flex", flexDirection: "column", gap: 10 }}>
+                  {skBlock("55%", 10)}
+                  {skBlock("70%", 28)}
+                  {skBlock("45%", 9)}
+                </div>
+              ))}
+            </div>
+            {/* Chart skeleton */}
+            <div style={{ padding: "20px 24px", background: C.white, borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 24 }}>
+              {skBlock("30%", 10, { marginBottom: 16 })}
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 4, height: 80 }}>
+                {Array.from({ length: 20 }).map((_, i) => {
+                  const h = [40,55,30,70,45,80,35,60,25,75,50,65,20,85,40,55,30,70,45,60][i];
+                  return <div key={i} style={{ flex: 1, height: `${h}%`, ...shimmer }} />;
+                })}
+              </div>
+            </div>
+            {/* Table skeleton */}
+            <div style={{ padding: "20px 24px", background: C.white, borderRadius: 12, border: `1px solid ${C.border}` }}>
+              {skBlock("25%", 10, { marginBottom: 18 })}
+              {[80,65,55,70,45,60].map((w, i) => (
+                <div key={i} style={{ display: "flex", gap: 16, alignItems: "center", paddingBottom: 14, marginBottom: 14, borderBottom: i < 5 ? `1px solid ${C.border}` : "none" }}>
+                  {skBlock(`${w}%`, 10)}
+                  {skBlock(32, 10)}
+                  {skBlock(40, 10)}
+                  {skBlock(36, 10)}
+                </div>
+              ))}
+            </div>
+          </>
+        );
+      })()}
 
       {data && (
         <>
@@ -5457,19 +7343,26 @@ function UsageScreen({ budget, onBudgetChange }: { budget: number; onBudgetChang
                   min={1}
                   value={budgetInput}
                   onChange={e => setBudgetInput(e.target.value)}
-                  style={{ width: 96, padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 14, fontWeight: 600, fontFamily: "Montserrat, Arial, sans-serif", color: C.dark, background: C.bg, outline: "none" }}
+                  disabled={userRole !== "admin"}
+                  style={{ width: 96, padding: "8px 12px", borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 14, fontWeight: 600, fontFamily: "Montserrat, Arial, sans-serif", color: C.dark, background: userRole === "admin" ? C.bg : "rgba(22,61,38,.03)", outline: "none" }}
                 />
                 <button
                   onClick={() => {
                     const n = parseInt(budgetInput, 10);
                     if (n > 0) onBudgetChange(n);
                   }}
-                  style={{ padding: "8px 18px", borderRadius: 8, background: C.dark, color: C.white, border: "none", fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "Montserrat, Arial, sans-serif" }}
+                  disabled={userRole !== "admin"}
+                  style={{ padding: "8px 18px", borderRadius: 8, background: userRole === "admin" ? C.dark : "rgba(22,61,38,.2)", color: C.white, border: "none", fontSize: 13, fontWeight: 600, cursor: userRole === "admin" ? "pointer" : "not-allowed", fontFamily: "Montserrat, Arial, sans-serif" }}
                 >
                   Save
                 </button>
               </div>
             </div>
+            {userRole !== "admin" && (
+              <div style={{ marginTop: 10, fontSize: 12, color: C.muted }}>
+                Only admins can change the monthly budget.
+              </div>
+            )}
             {/* Live preview of the bar */}
             <div style={{ marginTop: 16, display: "flex", alignItems: "center", gap: 10 }}>
               <div style={{ flex: 1, height: 6, borderRadius: 4, background: "rgba(22,61,38,.1)", overflow: "hidden" }}>
@@ -5546,7 +7439,7 @@ function TrashScreen({ trashedCards, onRestore, onDeletePermanently, onEmptyTras
             )}
             <div style={{ flex: 1 }} />
             <div style={{ fontSize: 11, color: "rgba(22,61,38,.38)", marginBottom: 16, paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.07)" }}>
-              {timeAgo(card.createdAt)}
+              {timeAgo(card.updatedAt || card.createdAt)}
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button
@@ -5660,73 +7553,61 @@ function BrandVoiceScanLoader({ onComplete, phrases: phrasesProp, phraseMs = 200
   );
 }
 
-// ── Option-D loading animation: stage pills + live typewriter stream ──────────
-function ComboLoader({ stages, phases }: {
+// ── Loading animation: stage pills + typewriter + real-progress bar ──────────
+// progress (0-100) drives the bar continuously from parent data.
+// phaseOverride drives the pill highlight when the server emits real stage events.
+// When phaseOverride is absent, active pill is derived linearly from progress.
+function ComboLoader({ stages, phases, progress, phaseOverride }: {
   stages: string[];
   phases: { label: string; text: string }[];
+  progress: number;
+  phaseOverride?: number;
 }) {
-  const [phaseIdx, setPhaseIdx] = useState(0);
-  const [displayed, setDisplayed] = useState("");
-  const phaseIdxRef = useRef(0);
-  const displayedRef = useRef("");
-  const erasingRef   = useRef(false);
-  const timerRef     = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activePhase = phaseOverride !== undefined
+    ? Math.min(phaseOverride, stages.length - 1)
+    : Math.min(Math.floor((progress / 100) * stages.length), stages.length - 1);
 
+  const [displayed, setDisplayed] = useState("");
+  const displayedRef = useRef("");
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const phasesRef = useRef(phases);
+  phasesRef.current = phases;
+
+  // Restart typewriter whenever the active phase changes
   useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    displayedRef.current = "";
+    setDisplayed("");
+
     function tick() {
-      const ph = phases[phaseIdxRef.current];
+      const ph = phasesRef.current[activePhase];
       if (!ph) return;
-      if (erasingRef.current) {
-        if (displayedRef.current.length > 0) {
-          displayedRef.current = displayedRef.current.slice(0, Math.max(0, displayedRef.current.length - 5));
-          setDisplayed(displayedRef.current);
-          timerRef.current = setTimeout(tick, 10);
-        } else {
-          erasingRef.current = false;
-          const nextIdx = phaseIdxRef.current + 1;
-          if (nextIdx >= phases.length) return; // reached end — stop, no loop
-          phaseIdxRef.current = nextIdx;
-          setPhaseIdx(phaseIdxRef.current);
-          timerRef.current = setTimeout(tick, 280);
-        }
-      } else {
-        if (displayedRef.current.length < ph.text.length) {
-          const ch = ph.text[displayedRef.current.length];
-          displayedRef.current += ch;
-          setDisplayed(displayedRef.current);
-          timerRef.current = setTimeout(tick, ch === "\n" ? 75 : 25);
-        } else {
-          const isLast = phaseIdxRef.current === phases.length - 1;
-          if (isLast) return; // last phase fully typed — stay here, don't erase
-          timerRef.current = setTimeout(() => { erasingRef.current = true; tick(); }, 900);
-        }
+      if (displayedRef.current.length < ph.text.length) {
+        const ch = ph.text[displayedRef.current.length];
+        displayedRef.current += ch;
+        setDisplayed(displayedRef.current);
+        timerRef.current = setTimeout(tick, ch === "\n" ? 75 : 22);
       }
     }
-    tick();
+    timerRef.current = setTimeout(tick, 60);
     return () => { if (timerRef.current) clearTimeout(timerRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activePhase]);
 
-  const phaseProgress = phases[phaseIdx] ? displayed.length / Math.max(1, phases[phaseIdx].text.length) : 0;
-  const progressPct = Math.min(100, Math.round(((phaseIdx + phaseProgress) / stages.length) * 100));
-
+  const pct = Math.min(100, Math.max(0, progress));
+  const pctDisplay = Math.round(pct);
   return (
     <div style={{ position: "fixed", inset: 0, zIndex: 999, display: "flex", alignItems: "center", justifyContent: "center", background: "rgba(247,245,242,.82)", backdropFilter: "blur(4px)" }}>
     <div style={{ width: "100%", maxWidth: 540, padding: "0 24px" }}>
       {/* Stage pills */}
       <div style={{ display: "flex", borderRadius: 10, border: "1.5px solid rgba(22,61,38,.15)", overflow: "hidden", marginBottom: 16 }}>
         {stages.map((s, i) => {
-          const isDone   = i < phaseIdx;
-          const isActive = i === phaseIdx;
+          const isDone   = i < activePhase;
+          const isActive = i === activePhase;
           return (
             <div key={i} style={{
-              flex: 1,
-              padding: "9px 4px",
-              textAlign: "center",
-              fontSize: 10,
-              fontWeight: 600,
-              letterSpacing: ".04em",
-              lineHeight: 1.3,
+              flex: 1, padding: "9px 4px", textAlign: "center", fontSize: 10,
+              fontWeight: 600, letterSpacing: ".04em", lineHeight: 1.3,
               borderRight: i < stages.length - 1 ? "1px solid rgba(22,61,38,.15)" : "none",
               background: isActive ? "#185F00" : isDone ? "rgba(24,95,0,.1)" : "transparent",
               color: isActive ? "#FFFFFF" : isDone ? "#185F00" : "rgba(22,61,38,.38)",
@@ -5741,7 +7622,7 @@ function ComboLoader({ stages, phases }: {
         <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 10 }}>
           <div style={{ width: 6, height: 6, borderRadius: "50%", background: "#185F00", animation: "pulse 1.1s ease-in-out infinite" }} />
           <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".09em", textTransform: "uppercase" as const, color: "#185F00" }}>
-            {phases[phaseIdx]?.label ?? ""}
+            {phases[activePhase]?.label ?? ""}
           </span>
         </div>
         <div style={{ fontFamily: "'JetBrains Mono', 'Fira Code', 'Courier New', monospace", fontSize: 12.5, lineHeight: 1.75, color: "#163D26", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
@@ -5750,28 +7631,66 @@ function ComboLoader({ stages, phases }: {
         </div>
       </div>
 
-      {/* Progress bar + percentage */}
+      {/* Progress bar — GPU-accelerated scaleX, no layout reflow */}
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 14 }}>
-        <div style={{ flex: 1, height: 3, background: "rgba(22,61,38,.1)", borderRadius: 99, overflow: "hidden" }}>
-          <div style={{ height: "100%", width: `${progressPct}%`, background: "linear-gradient(90deg,#185F00,#50C878)", borderRadius: 99, transition: "width .25s ease" }} />
+        <div style={{ flex: 1, height: 4, background: "rgba(22,61,38,.08)", borderRadius: 99, overflow: "hidden", position: "relative" }}>
+          {/* Fill: scaleX driven by rAF at 60fps — no CSS transition needed */}
+          <div style={{
+            position: "absolute", inset: 0,
+            background: "linear-gradient(90deg,#185F00 0%,#2d8a3e 50%,#50C878 100%)",
+            transformOrigin: "left center",
+            transform: `scaleX(${pct / 100})`,
+            willChange: "transform",
+          }} />
+          {/* Shimmer sweep — always moving, makes bar feel alive */}
+          <div style={{
+            position: "absolute", inset: 0,
+            background: "linear-gradient(90deg,transparent 0%,rgba(255,255,255,.28) 50%,transparent 100%)",
+            animation: "shimmer-sweep 1.8s linear infinite",
+            pointerEvents: "none",
+          }} />
         </div>
-        <span style={{ fontSize: 12, fontWeight: 700, color: "#185F00", fontVariantNumeric: "tabular-nums", minWidth: 34, textAlign: "right" as const }}>
-          {progressPct}%
+        <span style={{ fontSize: 12, fontWeight: 700, color: "#185F00", fontVariantNumeric: "tabular-nums", minWidth: 36, textAlign: "right" as const }}>
+          {pctDisplay}%
         </span>
       </div>
+      <style>{`
+        @keyframes shimmer-sweep {
+          from { transform: translateX(-100%); }
+          to   { transform: translateX(400%); }
+        }
+        @keyframes blink {
+          0%, 100% { opacity: 1; }
+          50%       { opacity: 0; }
+        }
+      `}</style>
     </div>
     </div>
   );
 }
 
-export default function AtelierV2Page() {
-  const [screen, setScreen] = useState<Screen>("dashboard");
+function readInitialUrlState() {
+  if (typeof window === "undefined") return { screen: "dashboard" as Screen, cardId: null as string | null, flow: "single" as FlowMode };
+  const params = new URLSearchParams(window.location.search);
+  const cardId = params.get("card");
+  const rawScreen = params.get("screen") as Screen | null;
+  const rawFlow = params.get("flow") as FlowMode | null;
+  const validScreens: Screen[] = ["dashboard", "generate", "editor", "queue", "settings", "keywords", "publish", "analytics", "usage", "trash", "team"];
+  const validFlows: FlowMode[] = ["single", "chat", "keywords"];
+  const screen: Screen = cardId ? "editor" : (rawScreen && validScreens.includes(rawScreen) ? rawScreen : "dashboard");
+  const flow: FlowMode = (rawFlow && validFlows.includes(rawFlow)) ? rawFlow : "single";
+  return { screen, cardId, flow };
+}
+
+function AtelierV2Page() {
+  const [screen, setScreen] = useState<Screen>(() => readInitialUrlState().screen);
   const [collapsed, setCollapsed] = useState(false);
   const [dataState] = useState<DataState>("normal");
   const [currentOpportunityId, setCurrentOpportunityId] = useState<string | null>(null);
   const [draftCards, setDraftCards] = useState<DraftCard[]>([]);
+  const [cardsLoading, setCardsLoading] = useState(true);
   const [trashedCards, setTrashedCards] = useState<DraftCard[]>([]);
-  const [activeCardId, setActiveCardId] = useState<string | null>(null);
+  const [activeCardId, setActiveCardId] = useState<string | null>(() => readInitialUrlState().cardId);
   const [newCardId, setNewCardId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -5779,9 +7698,18 @@ export default function AtelierV2Page() {
     const t = setTimeout(() => setNewCardId(null), 4000);
     return () => clearTimeout(t);
   }, [newCardId]);
-  const [generateDefaultFlow, setGenerateDefaultFlow] = useState<FlowMode>("wizard");
+  const [generateDefaultFlow, setGenerateDefaultFlow] = useState<FlowMode>(() => readInitialUrlState().flow);
   const [presenceData, setPresenceData] = useState<PresenceUser[]>([]);
   const { data: settings } = useSettings();
+
+  // ── Scope localStorage cache to the logged-in user ───────────────────────
+  useEffect(() => {
+    import("@/lib/supabase/client").then(({ createClient }) => {
+      createClient().auth.getUser().then(({ data }) => {
+        if (data.user?.id) initCacheUser(data.user.id);
+      }).catch(() => {});
+    }).catch(() => {});
+  }, []);
 
   // ── Presence: write own state, poll others ────────────────────────────────
   const writePresence = (cardId: string | null) => {
@@ -5816,29 +7744,15 @@ export default function AtelierV2Page() {
     return () => clearInterval(t);
   }, []);
 
-  // ── URL persistence: restore screen + active card on refresh ─────────────────
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const savedCard = params.get("card");
-    const savedScreen = params.get("screen") as Screen | null;
-    const validScreens: Screen[] = ["dashboard", "generate", "editor", "queue", "settings"];
-    if (savedCard) {
-      // Card takes priority — always opens editor
-      setActiveCardId(savedCard);
-      setScreen("editor");
-    } else if (savedScreen && validScreens.includes(savedScreen)) {
-      setScreen(savedScreen);
-    }
-  }, []);
-
-  // Keep URL in sync with current screen + card
+  // Keep URL in sync with current screen + card + generate tab
   useEffect(() => {
     const params = new URLSearchParams();
     if (screen !== "dashboard") params.set("screen", screen);
     if (activeCardId) params.set("card", activeCardId);
+    if (screen === "generate" && generateDefaultFlow !== "single") params.set("flow", generateDefaultFlow);
     const query = params.toString();
     window.history.replaceState(null, "", window.location.pathname + (query ? `?${query}` : ""));
-  }, [screen, activeCardId]);
+  }, [screen, activeCardId, generateDefaultFlow]);
 
   // ── Current user role ─────────────────────────────────────────────────────────
   const [userRole, setUserRole] = useState<"admin" | "editor" | null>(null);
@@ -5865,46 +7779,71 @@ export default function AtelierV2Page() {
 
   // ── Batch queue ───────────────────────────────────────────────────────────────
   const [batchQueueEntries, setBatchQueueEntries] = useState<BatchQueueEntry[]>([]);
-  useEffect(() => { setBatchQueueEntries(readBatchQueue()); }, []);
+  // Lives at this top level (not inside EditorScreen) because EditorScreen fully
+  // unmounts whenever the user leaves the editor screen — its own withArticleIds
+  // resets to empty on every fresh mount and only repopulates via an async
+  // fetch. A card built through the batch queue is built while EditorScreen
+  // isn't even mounted, so without this, clicking "Open" right after a batch
+  // build could lose the race against that fetch and fall through to
+  // generating a brand new outline instead of showing the finished article.
+  const [batchBuiltIds, setBatchBuiltIds] = useState<Set<string>>(new Set());
 
   function handleSendToBatchQueue(id: string, title: string, outline: V2OutlineSection[]) {
     setBatchQueueEntries(prev => {
       if (prev.some(e => e.id === id)) return prev;
-      const next = [...prev, { id, title, outline, addedAt: new Date().toISOString() }];
-      saveBatchQueue(next);
-      return next;
+      return [...prev, { id, title, outline, addedAt: new Date().toISOString() }];
     });
+    fetch(`/api/builder-sessions/${id}/batch-queue`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ queued: true }),
+    }).catch(() => {});
     logEvent("article.batch_queue_add", "article", id, title);
   }
   function handleRemoveFromBatchQueue(id: string) {
-    setBatchQueueEntries(prev => {
-      const next = prev.filter(e => e.id !== id);
-      saveBatchQueue(next);
-      return next;
-    });
+    setBatchQueueEntries(prev => prev.filter(e => e.id !== id));
+    fetch(`/api/builder-sessions/${id}/batch-queue`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ queued: false }),
+    }).catch(() => {});
   }
 
   // Load existing active sessions from DB on mount (trashed excluded server-side)
   useEffect(() => {
     fetch("/api/builder-sessions")
-      .then(r => r.ok ? r.json() as Promise<Array<{ opportunityId: string; topicTitle: string; createdAt: string; creatorEmail?: string }>> : null)
+      .then(r => r.ok ? r.json() as Promise<Array<{ opportunityId: string; topicTitle: string; createdAt: string; updatedAt?: string; creatorEmail?: string; batchQueuedAt?: string | null; outline?: V2OutlineSection[] }>> : null)
       .then(sessions => {
-        if (!sessions?.length) return;
-        const sorted = [...sessions].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-        setDraftCards(prev => {
-          const existingIds = new Set(prev.map(c => c.opportunityId));
-          const toAdd = sorted
-            .filter(s => !existingIds.has(s.opportunityId))
-            .map(s => ({
-              opportunityId: s.opportunityId,
-              brief: { prompt: s.topicTitle } as BriefFields,
-              createdAt: s.createdAt,
-              creatorEmail: s.creatorEmail,
-            }));
-          return [...prev, ...toAdd];
-        });
+        if (sessions?.length) {
+          const sorted = [...sessions].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+          setDraftCards(prev => {
+            const existingIds = new Set(prev.map(c => c.opportunityId));
+            const toAdd = sorted
+              .filter(s => !existingIds.has(s.opportunityId))
+              .map(s => ({
+                opportunityId: s.opportunityId,
+                brief: { prompt: s.topicTitle } as BriefFields,
+                createdAt: s.createdAt,
+                updatedAt: s.updatedAt,
+                creatorEmail: s.creatorEmail,
+              }));
+            return [...prev, ...toAdd];
+          });
+          // Seed batch queue from server (source of truth across all tabs/sessions)
+          const queued = sorted.filter(s => s.batchQueuedAt);
+          if (queued.length) {
+            setBatchQueueEntries(prev => {
+              const existingIds = new Set(prev.map(e => e.id));
+              const toAdd = queued
+                .filter(s => !existingIds.has(s.opportunityId))
+                .map(s => ({ id: s.opportunityId, title: s.topicTitle, outline: s.outline ?? [], addedAt: s.batchQueuedAt! }));
+              return toAdd.length ? [...prev, ...toAdd] : prev;
+            });
+          }
+        }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setCardsLoading(false));
     // Load trashed sessions from DB (org-wide)
     fetch("/api/builder-sessions?trashed=true")
       .then(r => r.ok ? r.json() as Promise<Array<{ opportunityId: string; topicTitle: string; createdAt: string; creatorEmail?: string }>> : null)
@@ -6025,6 +7964,10 @@ export default function AtelierV2Page() {
         ::-webkit-scrollbar-thumb { background: rgba(22,61,38,.28); border-radius: 8px; }
         mark[data-bv-violation] { background:#fef3c7;color:#92400e;border-radius:2px;padding:0 2px;outline:1px solid #f59e0b; }
         .v2-masthead mark[data-bv-violation] { background:#f59e0b;color:#1c1917;outline:1px solid #d97706; }
+        /* Citation hyperlinks — keep verified sources visibly clickable */
+        .v2-article a, .v2-rich a { color: #1a56db; text-decoration: underline; text-underline-offset: 2px; text-decoration-thickness: 1px; cursor: pointer; }
+        .v2-article a:hover, .v2-rich a:hover { color: #163D26; }
+        .v2-rich--inv a, .v2-article .v2-rich--inv a { color: #F88379; }
         .v2-rich ol, .v2-rich ul { margin: 10px 0 10px 22px; padding: 0; }
         .v2-rich li { margin-bottom: 5px; font-size: inherit; line-height: 1.65; color: inherit; }
         .v2-rich strong, .v2-rich b { font-weight: 600; }
@@ -6106,19 +8049,28 @@ export default function AtelierV2Page() {
       />
 
       <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-        {screen !== "editor" && <PageHeader screen={screen} onGenerate={go("generate")} onKeywords={go("keywords")} />}
+        {screen !== "editor" && screen !== "generate" && (
+          <PageHeader
+            screen={screen}
+            onGenerate={go("generate")}
+            onKeywords={go("keywords")}
+            subtitleOverride={screen === "queue"
+              ? `${batchQueueEntries.length} prompt${batchQueueEntries.length !== 1 ? "s" : ""} drafting, scoring and staging in parallel.`
+              : undefined}
+          />
+        )}
 
         <div style={{ flex: 1, padding: "32px 40px 64px" }}>
           {screen === "dashboard"  && <DashboardScreen dataState={dataState} onGenerate={go("generate")} onQueue={go("queue")} onEditor={go("editor")} onAnalytics={go("analytics")} />}
-          {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} />}
-          {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} batchQueueEntries={batchQueueEntries} onRemoveFromBatchQueue={handleRemoveFromBatchQueue} onActivateCard={handleActivateCard} />}
-          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} newCardId={newCardId} batchQueuedIds={batchQueueEntries.map(e => e.id)} onSendToBatchQueue={handleSendToBatchQueue} />}
+          {screen === "generate"   && <GenerateScreen onSettings={go("settings")} onQueue={go("queue")} onSessionCreated={handleSessionCreated} seedKeywords={settings?.seed_keywords ?? []} defaultFlow={generateDefaultFlow} onFlowChange={setGenerateDefaultFlow} />}
+          {screen === "queue"      && <QueueScreen onEditor={go("editor")} onGenerate={go("generate")} batchQueueEntries={batchQueueEntries} onRemoveFromBatchQueue={handleRemoveFromBatchQueue} onActivateCard={handleActivateCard} onArticleBuilt={id => setBatchBuiltIds(prev => new Set([...prev, id]))} />}
+          {screen === "editor"     && <EditorScreen onScore={go("score")} onPublish={go("publish")} draftCards={draftCards} activeCardId={activeCardId} onActivateCard={handleActivateCard} onBackToCards={handleBackToCards} onResumeChat={handleResumeChat} onTrashCard={handleTrashCard} presenceData={presenceData} sidebarCollapsed={collapsed} newCardId={newCardId} batchQueuedIds={batchQueueEntries.map(e => e.id)} onSendToBatchQueue={handleSendToBatchQueue} onRemoveFromBatchQueue={handleRemoveFromBatchQueue} cardsLoading={cardsLoading} batchBuiltIds={batchBuiltIds} />}
           {/* {screen === "score" && <ScoreScreen onEditor={go("editor")} />} — score lives inside the article editor */}
           {screen === "keywords"   && <KeywordsScreen />}
           {screen === "publish"    && <PublishScreen />}
           {screen === "analytics"  && <AnalyticsScreen />}
           {screen === "settings"   && <SettingsScreen userRole={userRole} />}
-          {screen === "usage"      && <UsageScreen budget={budget} onBudgetChange={handleBudgetChange} />}
+          {screen === "usage"      && <UsageScreen budget={budget} onBudgetChange={handleBudgetChange} userRole={userRole} />}
           {screen === "trash"      && <TrashScreen trashedCards={trashedCards} onRestore={handleRestoreCard} onDeletePermanently={handleDeletePermanently} onEmptyTrash={handleEmptyTrash} />}
           {screen === "team"       && <TeamScreen userRole={userRole} />}
         </div>
@@ -6126,3 +8078,5 @@ export default function AtelierV2Page() {
     </div>
   );
 }
+
+export default dynamic(() => Promise.resolve({ default: AtelierV2Page }), { ssr: false });

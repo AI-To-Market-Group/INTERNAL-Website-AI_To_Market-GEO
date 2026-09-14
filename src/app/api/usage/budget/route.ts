@@ -1,5 +1,5 @@
 import { ok, err } from "@/lib/api-response";
-import { requireUser } from "@/lib/api-auth";
+import { requireUser, requireAdmin } from "@/lib/api-auth";
 import { getBudget, setBudget } from "@/lib/budget-guard";
 import type { NextRequest } from "next/server";
 
@@ -15,7 +15,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  const { user, error } = await requireUser();
+  const { user, error } = await requireAdmin();
   if (error) return error;
   try {
     const { budget } = (await req.json()) as { budget?: unknown };
