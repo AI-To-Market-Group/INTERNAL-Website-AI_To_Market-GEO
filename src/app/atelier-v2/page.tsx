@@ -59,10 +59,35 @@ interface SavedPlan {
 // ─── Per-card autosave cache ──────────────────────────────────────────────────
 
 const CARD_CACHE_PREFIX = "v2_card_";
+const BATCH_HISTORY_PREFIX = "v2_batch_history_";
 // User-scoped prefix — set once on mount so two accounts on the same browser
 // (e.g. localhost dev with two tabs) never share or overwrite each other's cache.
 let _cacheUserId = "anon";
 function initCacheUser(uid: string) { _cacheUserId = uid; }
+
+/** One finished batch build. Kept in localStorage so the history survives
+ *  navigating away from the queue screen, which unmounts its progress state. */
+interface BatchHistoryEntry {
+  id: string;
+  title: string;
+  builtAt: string;
+}
+
+function batchHistoryKey() { return `${BATCH_HISTORY_PREFIX}${_cacheUserId}`; }
+function readBatchHistory(): BatchHistoryEntry[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(batchHistoryKey()) ?? "[]") as BatchHistoryEntry[];
+    return Array.isArray(raw) ? raw : [];
+  } catch { return []; }
+}
+function appendBatchHistory(entry: BatchHistoryEntry) {
+  try {
+    // Newest first, one row per article — rebuilding replaces the older entry
+    // rather than stacking duplicates. Capped so it can't grow forever.
+    const next = [entry, ...readBatchHistory().filter(e => e.id !== entry.id)].slice(0, 50);
+    localStorage.setItem(batchHistoryKey(), JSON.stringify(next));
+  } catch {}
+}
 
 type ImageSeoMeta = { altText: string; caption: string; fileName: string };
 
@@ -1158,9 +1183,19 @@ function QueueScreen({
   const [selected, setSelected] = useState<string[]>([]);
   const [buildProgress, setBuildProgress] = useState<Map<string, { pct: number; stage: string; error?: string }>>(new Map());
   const [building, setBuilding] = useState(false);
+  const [history, setHistory] = useState<BatchHistoryEntry[]>([]);
+
+  // Read on mount rather than in the initial state so it isn't evaluated during
+  // SSR, where localStorage doesn't exist.
+  useEffect(() => { setHistory(readBatchHistory()); }, []);
 
   const toggleSelect = (id: string) => setSelected(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
-  const toggleAll = () => setSelected(selected.length === batchQueueEntries.length ? [] : batchQueueEntries.map(e => e.id));
+  // Built articles move down into History. Keeping them in the table would show
+  // them as "Outline Validated / 0%" again after any navigation, since
+  // buildProgress is in-memory only — History is the durable record.
+  const builtIds = new Set(history.map(h => h.id));
+  const pendingEntries = batchQueueEntries.filter(e => !builtIds.has(e.id));
+  const toggleAll = () => setSelected(selected.length === pendingEntries.length ? [] : pendingEntries.map(e => e.id));
   const selectedSet = new Set(selected);
 
   async function buildArticle(entry: BatchQueueEntry) {
@@ -1255,6 +1290,14 @@ function QueueScreen({
         }
       }
       setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 100, stage: "Done" }); return m; });
+      const historyEntry: BatchHistoryEntry = { id, title, builtAt: new Date().toISOString() };
+      appendBatchHistory(historyEntry);
+      setHistory(prev => [historyEntry, ...prev.filter(e => e.id !== id)].slice(0, 50));
+      // The queue is outstanding work — a built article has left it, so drop it
+      // from the queue (server included) now that History is its durable record.
+      // Only on success: a failed build stays put so it can be retried.
+      onRemoveFromBatchQueue(id);
+      setSelected(prev => prev.filter(x => x !== id));
       fetch("/api/activity", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "article.batch_build", entityType: "article", entityId: id, entityTitle: title }) }).catch(() => {});
     } catch (e) {
       setBuildProgress(prev => { const m = new Map(prev); m.set(id, { pct: 100, stage: "Failed", error: e instanceof Error ? e.message : String(e) }); return m; });
@@ -1282,7 +1325,10 @@ function QueueScreen({
     return { bg: "rgba(22,61,38,.03)", color: "rgba(22,61,38,.45)", border: "rgba(22,61,38,.14)" };
   }
 
-  if (batchQueueEntries.length === 0) {
+  // Only take over the whole screen when there's nothing to show at all —
+  // once articles have been built, History still belongs on the page even
+  // though the queue itself has drained.
+  if (pendingEntries.length === 0 && history.length === 0) {
     return (
       <div style={{ textAlign: "center", padding: "80px 24px" }}>
         <div style={{ width: 52, height: 52, borderRadius: 14, background: "rgba(22,61,38,.07)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
@@ -1303,6 +1349,13 @@ function QueueScreen({
 
   return (
     <div>
+      {pendingEntries.length === 0 ? (
+        // Queue drained but History below still has entries
+        <div style={{ padding: "18px 20px", marginBottom: 24, border: "1px solid rgba(22,61,38,.16)", borderRadius: 10, background: C.white, fontSize: 13, color: "rgba(22,61,38,.55)" }}>
+          Nothing queued right now — everything staged has been built.
+        </div>
+      ) : (
+      <>
       {/* Bulk action bar */}
       <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "14px 20px", marginBottom: 24, border: "1px solid rgba(22,61,38,.16)", borderRadius: 10, background: C.white }}>
         <div style={{ whiteSpace: "nowrap", flexShrink: 0, fontSize: 12, fontWeight: 600 }}>{selected.length} selected</div>
@@ -1321,7 +1374,7 @@ function QueueScreen({
           }
         </button>
         <div style={{ marginLeft: "auto", whiteSpace: "nowrap", flexShrink: 0, fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.55)" }}>
-          {batchQueueEntries.length} article{batchQueueEntries.length !== 1 ? "s" : ""} in queue
+          {pendingEntries.length} article{pendingEntries.length !== 1 ? "s" : ""} in queue
         </div>
       </div>
 
@@ -1329,8 +1382,8 @@ function QueueScreen({
       <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, overflow: "hidden" }}>
         {/* Header row */}
         <div style={{ display: "grid", gridTemplateColumns: "28px 2.8fr 1fr 1.5fr 80px", gap: 16, padding: "14px 20px", background: "rgba(22,61,38,.04)", alignItems: "center" }}>
-          <button onClick={toggleAll} style={{ width: 18, height: 18, borderRadius: 5, border: selected.length === batchQueueEntries.length ? "none" : "1.5px solid rgba(22,61,38,.3)", background: selected.length === batchQueueEntries.length ? C.dark : "transparent", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            {selected.length === batchQueueEntries.length && <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>}
+          <button onClick={toggleAll} style={{ width: 18, height: 18, borderRadius: 5, border: selected.length === pendingEntries.length ? "none" : "1.5px solid rgba(22,61,38,.3)", background: selected.length === pendingEntries.length ? C.dark : "transparent", cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {selected.length === pendingEntries.length && <svg viewBox="0 0 12 9" width="10" height="8" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1,4.5 4.5,8 11,1"/></svg>}
           </button>
           {(["TITLE", "STAGE", "PROGRESS"] as const).map(h => (
             <div key={h} style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".12em", color: C.mid }}>{h}</div>
@@ -1338,7 +1391,7 @@ function QueueScreen({
           <div />
         </div>
 
-        {batchQueueEntries.map(entry => {
+        {pendingEntries.map(entry => {
           const prog = buildProgress.get(entry.id);
           const stage = prog?.stage ?? "Outline Validated";
           const pct = prog?.pct ?? 0;
@@ -1398,6 +1451,45 @@ function QueueScreen({
           );
         })}
       </div>
+      </>
+      )}
+
+      {/* ── History — articles this queue has finished building ── */}
+      {history.length > 0 && (
+        <div style={{ marginTop: 40 }}>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 16, marginBottom: 14 }}>
+            <div>
+              <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".13em", color: C.mid, marginBottom: 6 }}>HISTORY</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: C.dark }}>
+                {history.length} article{history.length !== 1 ? "s" : ""} built
+              </div>
+            </div>
+          </div>
+
+          <div style={{ border: `1px solid ${C.border}`, borderRadius: 12, background: C.white, overflow: "hidden" }}>
+            {history.map((h, i) => (
+              <div
+                key={h.id}
+                style={{ display: "grid", gridTemplateColumns: "2.8fr 1.4fr 80px", gap: 16, alignItems: "center", padding: "13px 20px", borderTop: i === 0 ? "none" : "1px solid rgba(22,61,38,.08)" }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 500, lineHeight: 1.4, color: "#1a1a1a" }}>{h.title || h.id.slice(0, 16)}</div>
+                <div
+                  style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.55)" }}
+                  title={new Date(h.builtAt).toLocaleString()}
+                >
+                  Built {timeAgo(h.builtAt)}
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <button
+                    onClick={() => { onActivateCard(h.id); onEditor(); }}
+                    style={{ fontSize: 11, fontWeight: 700, color: C.dark, background: "none", border: "none", cursor: "pointer" }}
+                  >Open</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
