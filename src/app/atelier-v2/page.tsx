@@ -2318,9 +2318,12 @@ const hlStyle = (heading: string): React.CSSProperties =>
                         <span style={{ fontSize: 9, fontWeight: 700, color: "rgba(249,57,67,.6)", letterSpacing: ".08em" }}>RETRY</span>
                       </div>
                     ) : (
-                      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(22,61,38,.22)" strokeWidth="1.5" strokeLinecap="round">
-                        <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
-                      </svg>
+                      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                        <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="rgba(22,61,38,.22)" strokeWidth="1.5" strokeLinecap="round">
+                          <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/>
+                        </svg>
+                        <span style={{ fontSize: 10, fontWeight: 700, color: "rgba(22,61,38,.35)", letterSpacing: ".1em", textTransform: "uppercase" }}>Add image</span>
+                      </div>
                     )}
                     {/* Hover overlay */}
                     {isHovered && (
