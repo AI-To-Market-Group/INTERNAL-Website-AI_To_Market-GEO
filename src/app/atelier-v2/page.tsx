@@ -4373,7 +4373,14 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
   if (showCardGrid) {
     // Pre-compute category counts for tab badges
     const _isSent      = (id: string) => sentToSanityIds.has(id) || !!readCardCache(id)?.draftSentAt;
-    const _hasArticle  = (id: string) => withArticleIds.has(id) || (!_isSent(id) && !!readCardCache(id)?.articleData);
+    // batchBuiltIds is the only one of these three available synchronously on a
+    // fresh mount: withArticleIds waits on a background fetch, and the cache read
+    // depends on the per-user cache key having resolved. Without it, an article
+    // that just finished building in the batch queue could sit under "Ready to
+    // build" until that fetch landed, rather than moving straight into
+    // "Articles in progress".
+    const _hasArticle  = (id: string) =>
+      withArticleIds.has(id) || batchBuiltIds?.has(id) || (!_isSent(id) && !!readCardCache(id)?.articleData);
     const _hasPlan     = (id: string) => savedPlans.some(p => p.opportunityId === id);
     const _sentCards   = (draftCards ?? []).filter(c => _isSent(c.opportunityId));
     const _articleCards = (draftCards ?? []).filter(c => !_isSent(c.opportunityId) && _hasArticle(c.opportunityId));
