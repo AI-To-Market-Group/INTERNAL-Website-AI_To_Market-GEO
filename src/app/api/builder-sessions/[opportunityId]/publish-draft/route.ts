@@ -48,7 +48,11 @@ async function uploadHeroToSanity(
       {
         method: "POST",
         headers: { "Content-Type": contentType, Authorization: `Bearer ${token}` },
-        body,
+        // Node's Buffer is a Uint8Array at runtime, but @types/node types it as
+        // Buffer<ArrayBufferLike> — and ArrayBufferLike admits SharedArrayBuffer,
+        // which fetch's BodyInit does not accept. Re-wrapping gives a
+        // Uint8Array backed by a plain ArrayBuffer, which it does.
+        body: new Uint8Array(body),
       }
     );
 
