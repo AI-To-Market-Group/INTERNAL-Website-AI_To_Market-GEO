@@ -1524,7 +1524,7 @@ function UserAvatar({ email, size = 24 }: { email: string; size?: number }) {
   );
 }
 
-function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity, hasArticle, isNew, batchQueued, onSendToBatchQueue, onRemoveFromBatchQueue }: {
+function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeUsers, hasSavedPlan, sentToSanity, hasArticle, isNew, batchQueued, onSendToBatchQueue, onRemoveFromBatchQueue, lastModified }: {
   card: DraftCard;
   onCreateArticle: () => void;
   onResume?: () => void;
@@ -1537,6 +1537,8 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
   batchQueued?: boolean;
   onSendToBatchQueue?: () => void;
   onRemoveFromBatchQueue?: () => void;
+  /** Effective last-modified time, computed by the grid so the displayed time matches the sort order. */
+  lastModified?: string;
 }) {
   const rawScore = card.brief.predictedScore ? parseInt(card.brief.predictedScore) : NaN;
   const scoreNum = isNaN(rawScore) ? null : rawScore;
@@ -1626,7 +1628,7 @@ function DraftCardComponent({ card, onCreateArticle, onResume, onRemove, activeU
       <div style={{ paddingTop: 12, borderTop: "1px solid rgba(22,61,38,.08)", marginBottom: 16 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-            <span style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.42)" }}>{timeAgo(card.updatedAt || card.createdAt)}</span>
+            <span style={{ fontSize: 11, fontWeight: 400, color: "rgba(22,61,38,.42)" }}>{timeAgo(lastModified ?? card.updatedAt ?? card.createdAt)}</span>
             {card.creatorEmail && (
               <span style={{ fontSize: 10, fontWeight: 500, color: "rgba(22,61,38,.38)" }}>{card.creatorEmail.split("@")[0]}</span>
             )}
@@ -4474,11 +4476,23 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
     const _hasArticle  = (id: string) =>
       withArticleIds.has(id) || batchBuiltIds?.has(id) || (!_isSent(id) && !!readCardCache(id)?.articleData);
     const _hasPlan     = (id: string) => savedPlans.some(p => p.opportunityId === id);
-    const _sentCards   = (draftCards ?? []).filter(c => _isSent(c.opportunityId));
-    const _articleCards = (draftCards ?? []).filter(c => !_isSent(c.opportunityId) && _hasArticle(c.opportunityId));
-    const _buildCards  = (draftCards ?? []).filter(c => !_isSent(c.opportunityId) && !_hasArticle(c.opportunityId) && !_hasPlan(c.opportunityId));
+    // Most recently touched first. Sorted on the same value each card puts on its
+    // face, so the order always reads in step with the times shown.
+    const _byRecent = <T,>(rows: T[], stamp: (row: T) => string) =>
+      [...rows].sort((a, b) => stamp(b).localeCompare(stamp(a)));
+    // The server's updatedAt is a snapshot from page load, so edits made since
+    // then wouldn't reorder anything. The local cache's savedAt is rewritten on
+    // every keystroke-level autosave, so take whichever is newer.
+    const _cardStamp = (c: DraftCard) => {
+      const cachedAt = readCardCache(c.opportunityId)?.savedAt;
+      const serverAt = c.updatedAt || c.createdAt;
+      return cachedAt && cachedAt > serverAt ? cachedAt : serverAt;
+    };
+    const _sentCards   = _byRecent((draftCards ?? []).filter(c => _isSent(c.opportunityId)), _cardStamp);
+    const _articleCards = _byRecent((draftCards ?? []).filter(c => !_isSent(c.opportunityId) && _hasArticle(c.opportunityId)), _cardStamp);
+    const _buildCards  = _byRecent((draftCards ?? []).filter(c => !_isSent(c.opportunityId) && !_hasArticle(c.opportunityId) && !_hasPlan(c.opportunityId)), _cardStamp);
     // Plans that have NOT yet had an article generated — graduated plans move to Articles section
-    const _planCards = savedPlans.filter(p => !_hasArticle(p.opportunityId) && !_isSent(p.opportunityId));
+    const _planCards = _byRecent(savedPlans.filter(p => !_hasArticle(p.opportunityId) && !_isSent(p.opportunityId)), p => p.savedAt);
     const tabCounts = {
       all: _planCards.length + _articleCards.length + _buildCards.length + _sentCards.length,
       plans: _planCards.length,
@@ -4646,6 +4660,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         <DraftCardComponent
                           key={card.opportunityId}
                           card={card}
+                          lastModified={_cardStamp(card)}
                           onCreateArticle={() => onActivateCard(card.opportunityId)}
                           onResume={onResumeChat}
                           onRemove={() => onTrashCard?.(card.opportunityId)}
@@ -4682,6 +4697,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         <DraftCardComponent
                           key={card.opportunityId}
                           card={card}
+                          lastModified={_cardStamp(card)}
                           onCreateArticle={() => onActivateCard(card.opportunityId)}
                           onResume={onResumeChat}
                           onRemove={() => onTrashCard?.(card.opportunityId)}
@@ -4716,6 +4732,7 @@ function EditorScreen({ onScore, onPublish, draftCards, activeCardId, onActivate
                         <DraftCardComponent
                           key={card.opportunityId}
                           card={card}
+                          lastModified={_cardStamp(card)}
                           onCreateArticle={() => onActivateCard(card.opportunityId)}
                           onResume={onResumeChat}
                           onRemove={() => onTrashCard?.(card.opportunityId)}
@@ -7524,7 +7541,9 @@ function TrashScreen({ trashedCards, onRestore, onDeletePermanently, onEmptyTras
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 20 }}>
-        {trashedCards.map(card => (
+        {[...trashedCards]
+          .sort((a, b) => (b.updatedAt || b.createdAt).localeCompare(a.updatedAt || a.createdAt))
+          .map(card => (
           <div key={card.opportunityId} style={{ padding: 24, border: "1px solid rgba(22,61,38,.09)", borderRadius: 12, background: C.white, opacity: 0.82, display: "flex", flexDirection: "column", height: 260 }}>
             <div style={{ fontSize: 10, fontWeight: 700, letterSpacing: ".1em", color: "rgba(22,61,38,.4)", marginBottom: 12 }}>DELETED</div>
             <div style={{ fontSize: 14, fontWeight: 700, lineHeight: 1.4, color: C.dark, marginBottom: 10, display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
